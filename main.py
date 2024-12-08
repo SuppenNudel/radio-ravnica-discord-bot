@@ -2,20 +2,30 @@ import os
 import discord
 import ezcord
 from dotenv import load_dotenv
+import logging
 
+ezcord.set_log(
+    log_level=logging.DEBUG,
+    discord_log_level=logging.INFO,
+    webhook_url=os.getenv("LOG_WEBHOOK"),
+)
 
-class Bot(ezcord.Bot):
-    def __init__(self):
-        intents = discord.Intents.default()
-        super().__init__(intents=intents)
+bot = ezcord.Bot(
+    intents=discord.Intents.default(),
+    error_webhook_url=os.getenv("ERROR_WEBHOOK"),
+    language="de",
+    ready_event=None,
+)
+bot.add_help_command()
 
-        self.load_cogs()
-
-    async def on_ready(self):
-        print(f"{self.user} ist online")
-
+@bot.event
+async def on_ready():
+    infos = {
+        "Emojis": len(bot.emojis)
+    }
+    bot.ready(new_info=infos)
 
 if __name__ == "__main__":
     load_dotenv()
-    bot = Bot()
+    bot.load_cogs()
     bot.run(os.getenv("TOKEN"))
