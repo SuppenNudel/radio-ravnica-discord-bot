@@ -8,6 +8,15 @@ ezcord.set_log(
     log_level=logging.DEBUG,
     discord_log_level=logging.INFO,
     webhook_url=os.getenv("LOG_WEBHOOK"),
+    dc_codeblocks=True
+)
+
+ezcord.set_log(
+    "link_logger",
+    log_level=logging.DEBUG,
+    discord_log_level=logging.INFO,
+    webhook_url=os.getenv("LOG_WEBHOOK"),
+    dc_codeblocks=False
 )
 
 bot = ezcord.Bot(

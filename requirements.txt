@@ -1,2 +1,5 @@
 py-cord
 ezcord
+scrapetube
+notion_client
+googlemaps
