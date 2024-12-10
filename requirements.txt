@@ -3,3 +3,4 @@ ezcord
 scrapetube
 notion_client
 googlemaps
+beautifulsoup4

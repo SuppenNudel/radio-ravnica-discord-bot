@@ -23,7 +23,7 @@ class Youtube(commands.Cog):
     async def on_ready(self):
         self.check.start()
 
-    @tasks.loop(seconds=60)
+    @tasks.loop(seconds=60*5)
     async def check(self):
         discord_channel = self.bot.get_channel(self.channel_id)
 
