@@ -3,6 +3,7 @@ import discord
 import ezcord
 from dotenv import load_dotenv
 import logging
+from ezcord import log
 
 ezcord.set_log(
     log_level=logging.DEBUG,
@@ -36,6 +37,7 @@ async def on_ready():
         "Emojis": len(bot.emojis)
     }
     bot.ready(new_info=infos)
+    log.info("Starting from github")
 
 if __name__ == "__main__":
     load_dotenv()
