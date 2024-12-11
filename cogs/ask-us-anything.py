@@ -55,9 +55,10 @@ class AskUsAnything(commands.Cog):
             return
         
         if message.channel.id != self.channel_id_aua:
-            log.debug(f"Ignore message in #{message.channel.name}")
             return
-    
+        
+        log.debug(f"Received member message in #{message.channel.name}")
+
         message_text = message.clean_content
         author = message.author
         date = message.created_at
@@ -80,7 +81,6 @@ class AskUsAnything(commands.Cog):
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent):
         if payload.channel_id != self.channel_id_aua:
-            log.debug(f"Ignore reaction in <#{payload.channel_id}>")
             return
 
         # Get the guild, channel, and message where the reaction was added
@@ -95,6 +95,8 @@ class AskUsAnything(commands.Cog):
         
         if not user.id in self.aua_managers: # Only act on robins reactions
             return
+        
+        log.debug(f"Received reaction from aua_manager")
         
         if not str(payload.emoji) in ["🗒️", "👍"]:
             log.info(f"Reaction with {payload.emoji} ignored")
