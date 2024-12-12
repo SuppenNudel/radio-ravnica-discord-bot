@@ -1,5 +1,6 @@
 from notion_client import Client
 import os
+from ezcord import log
 
 notion = Client(auth=os.getenv("NOTION_TOKEN"))
 

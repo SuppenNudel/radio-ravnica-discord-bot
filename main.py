@@ -20,6 +20,8 @@ ezcord.set_log(
     dc_codeblocks=False
 )
 
+load_dotenv()
+
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
@@ -29,18 +31,19 @@ bot = ezcord.Bot(
     error_webhook_url=os.getenv("ERROR_WEBHOOK"),
     language="de",
     ready_event=None,
+    debug_guilds=[os.getenv("GUILD")]
 )
 bot.add_help_command()
 
 @bot.event
 async def on_ready():
     infos = {
-        "Emojis": len(bot.emojis)
+        "Emojis": len(bot.emojis),
+        "Guild": [os.getenv("GUILD")]
     }
     bot.ready(new_info=infos)
     log.info("Starting from github")
 
 if __name__ == "__main__":
-    load_dotenv()
     bot.load_cogs()
     bot.run(os.getenv("TOKEN"))
