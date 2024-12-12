@@ -33,7 +33,7 @@ bot = ezcord.Bot(
     ready_event=None,
     debug_guilds=[os.getenv("GUILD")]
 )
-bot.add_help_command()
+# bot.add_help_command()
 
 @bot.event
 async def on_ready():

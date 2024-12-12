@@ -116,7 +116,8 @@ class AskUsAnything(commands.Cog):
     @discord.default_permissions(manage_guild=True)
     @commands.has_role("Moderator")
     @option(name="limit", input_type=int)
-    async def grab_aua_posts(self, ctx:discord.commands.ApplicationContext, limit:int=100):
+    @option(name="starting_message_id", input_type=str)
+    async def grab_aua_posts(self, ctx:discord.commands.ApplicationContext, limit:int=100, starting_message_id:str|None=None):
         if ctx.author.id not in self.aua_managers:
             await ctx.respond("Lass das mal lieber Cedric oder Robin machen :)", ephemeral=True)
             return
@@ -124,27 +125,35 @@ class AskUsAnything(commands.Cog):
         if ctx.channel_id != self.channel_id_aua:
             await ctx.respond("Nur im ask-us-anything Kanal bitte", ephemeral=True)
             return
+        
 
         initial_response = await ctx.respond(f"Werde die letzten {limit} Nachrichten analysieren...", ephemeral=True)
 
         channel = ctx.channel
 
-        counter = 0
-        async for message in channel.history(limit=limit):
-            author = message.author
-            counter += 1
-            current_message = f"Analysiere Nachricht {counter} von {limit}"
-            if author.bot:
-                await initial_response.edit_original_response(content=f"{current_message}: Nachricht ist von einem Bot")
-            else:
-                message_url = message.jump_url
-                message_text = message.clean_content
-                message_created_at:datetime = message.created_at
-                status = await analyse_reactions(message.reactions, self.aua_managers)
+        start_message = None
+        if starting_message_id:
+            start_message = await ctx.channel.fetch_message(int(starting_message_id))
 
-                await self.write_or_update_notion(
-                    status=status, author=author, date=message_created_at, message_text=message_text, url=message_url, initial_response=initial_response, current_message=current_message
-                )
+        counter = 0
+        async for message in channel.history(limit=limit, before=start_message):
+            try:
+                author = message.author
+                counter += 1
+                current_message = f"Analysiere Nachricht {counter} von {limit}"
+                if author.bot:
+                    await initial_response.edit_original_response(content=f"{current_message}: Nachricht ist von einem Bot")
+                else:
+                    message_url = message.jump_url
+                    message_text = message.clean_content
+                    message_created_at:datetime = message.created_at
+                    status = await analyse_reactions(message.reactions, self.aua_managers)
+
+                    await self.write_or_update_notion(
+                        status=status, author=author, date=message_created_at, message_text=message_text, url=message_url, initial_response=initial_response, current_message=current_message
+                    )
+            except Exception as e:
+                log.error(e)
 
         log.debug(f"Found {counter} messages")
         await initial_response.edit_original_response(content=f"{counter} Nachrichten wurden analysiert")
