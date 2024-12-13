@@ -13,7 +13,7 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 
-state_tags = json.loads(os.getenv("STATE_TAGS", "{}"))
+state_tags = json.loads(os.getenv("STATE_TAGS", "{}")) # {} is the default
 
 # Retrieve the boolean value
 def get_bool_from_env(key: str, default: bool = False) -> bool:
@@ -80,8 +80,11 @@ class Event():
         if properties['Freitext']['rich_text']:
             freitext = properties['Freitext']['rich_text'][0]['plain_text']
 
+        formate = []
+        formate_joined = ""
         if properties['Format(e)']['multi_select']:
-            formate = ', '.join([entry['name'] for entry in properties['Format(e)']['multi_select']])
+            formate = [entry['name'] for entry in properties['Format(e)']['multi_select']]
+            formate_joined = ', '.join(formate)
 
         if properties['Start (und Ende)']['date']:
             start = properties['Start (und Ende)']['date']['start']
@@ -142,7 +145,10 @@ class Event():
         if area_response_results:
             self.area_page_id = area_response_results[0]['id']
         
-        self.title = f"{start_datetime.strftime("%d.%m.%Y")} - {f"{formate} {event_type}" if event_type else f"{formate} {title}"} @ {store} in {city}"
+        if len(formate) == 1:
+            self.title = f"{start_datetime.strftime("%d.%m.%Y")} - {f"{formate[0]} {event_type}" if event_type else f"{formate[0]} {title}"} @ {store} in {city}"
+        else:
+            self.title = f"{start_datetime.strftime("%d.%m.%Y")} - {f"{title} + {event_type}" if event_type else title} @ {store} in {city}"
 
         self.content = ""
         if freitext:
@@ -156,7 +162,7 @@ class Event():
             fields.append(discord.EmbedField(name="Ende", value=format_dt(end_datetime, style=get_timestamp_style(start_datetime, end_datetime)), inline=True))
         if entry_fee:
             fields.append(discord.EmbedField(name="Startgebühr", value=f"{entry_fee} €", inline=True))
-        fields.append(discord.EmbedField(name="Format(e)", value=formate, inline=False))
+        fields.append(discord.EmbedField(name="Format(e)", value=formate_joined, inline=False))
         if event_type:
             fields.append(discord.EmbedField(name="Event Typ", value=event_type, inline=False))
 
@@ -226,10 +232,7 @@ class NotionMonitor(commands.Cog):
             properties = entry['properties']
             discord_url = properties['Discord Link']
             debug = get_bool_from_env('DEBUG')
-            if discord_url['url'] and not (properties['For Test']['checkbox'] and debug):
-                # already posted
-                continue
-            else:
+            if (debug and properties['For Test']['checkbox']) or ((not debug) and (not discord_url['url'])):
                 public_url = entry['public_url']
                 event = Event(self, properties, public_url)
 
@@ -252,6 +255,7 @@ class NotionMonitor(commands.Cog):
 
                 tag = discord.utils.get(paper_event_channel.available_tags, name=event.tag_name)
 
+                log.debug(f"Going to create post in paper_event_channe: {[event.title, event.content, event.embeds, [tag], event.files]}")
                 forum_post = await paper_event_channel.create_thread(name=event.title, content=event.content, embeds=event.embeds, applied_tags=[tag], files=event.files)
                 discord_link = forum_post.jump_url
                 logging.getLogger("link_logger").info(f"Created forum post: {discord_link}")

@@ -2,39 +2,24 @@ from discord.ext import commands, tasks
 from discord.commands import option, slash_command
 from ezcord import Bot, log
 import discord
-from modules.notion import add_to_database, check_entry, update_entry
+import modules.notion as notion
 from datetime import datetime
 import os
+from typing import Literal
+import traceback
 
-def create_notion_payload(message_text, author, date:datetime, url, status=None):
-    properties = {
-        "Text": {  # Title property
-            "title": [{"text": {"content": message_text}}]
-        },
-        "Author": {  # Text property
-            "rich_text": [{"text": {"content": author.display_name}}]
-        },
-        "Author ID": {  # Number property
-            "number": author.id
-        },
-        "Date": {  # Date property
-            "date": {"start": date.isoformat()}
-        },
-        "Discord Link": {  # URL property
-            "url": url
-        }
-    }
+
+# aua stands for ask us anything
+def create_aua_payload(message_text, author:discord.User, date:datetime, url, status:None|Literal["Aufgenommen", "Gesehen"]=None):
+    builder = notion.NotionPayloadBuilder().add_title("Text", message_text).add_text("Author", author.display_name).add_number("Author ID", author.id).add_date("Date", date).add_url("Discord Link", url)
     if status:
-        properties["Status"] = {  # Status property
-            "type": "status",
-            "status": {"name": status}
-        }
-    return properties
+        builder.add_status("Status", status)
+    return builder.build()
 
 async def analyse_reactions(reactions, aua_managers):
     emoji_to_status = {
-        "👍": "Aufgenommen",
-        "🗒️": "Gesehen"
+        notion.EMOJI_THUMBS_UP: notion.STATUS_RECORDED,
+        notion.EMOJI_NOTEPAD: notion.STATUS_SEEN
     }
 
     for emoji, status in emoji_to_status.items():
@@ -51,7 +36,9 @@ class AskUsAnything(commands.Cog):
     def __init__(self, bot:Bot):
         self.bot:Bot = bot
         self.database_id = os.getenv("DATABASE_ID_AUA")
-        self.channel_id_aua = int(os.getenv("CHANNEL_AUA"))
+        channel_aua = os.getenv("CHANNEL_AUA")
+        if channel_aua:
+            self.channel_id_aua = int(channel_aua)
         aua_managers_raw = os.getenv("AUA_MANAGERS")
 
         self.aua_managers = []
@@ -63,11 +50,9 @@ class AskUsAnything(commands.Cog):
     async def on_ready(self):
         log.info("ask-us-anything started")
 
-    async def write_or_update_notion(self, message_text, author, date:datetime, url, status=None, initial_response=None, current_message=None):
-        if not status:
-            status = "Not started"
+    async def write_or_update_notion(self, message_text, author, date:datetime, url, status:str|None=notion.STATUS_NOT_STARTED, initial_response=None, current_message=None):
         # check entry
-        query_response = check_entry(self.database_id, filter=
+        query_response = notion.check_entry(self.database_id, filter=
             {
                 "property": "Discord Link",  # Replace with the name of your unique identifier property
                 "url": {
@@ -79,38 +64,35 @@ class AskUsAnything(commands.Cog):
 
         if entry_exists:
             log.debug("Entry exits already")
-            await initial_response.edit_original_response(content=f"{current_message}: Eintrag existiert")
+            if initial_response:
+                await initial_response.edit_original_response(content=f"{current_message}: Eintrag existiert")
 
             entry = entry_exists[0]
 
             existing_status = entry['properties']['Status']['status']['name']
             if existing_status == status:
                 log.debug("No need to update, status already same")
-                await initial_response.edit_original_response(content=f"{current_message}: No need to update, status already same")
+                if initial_response:
+                    await initial_response.edit_original_response(content=f"{current_message}: No need to update, status already same")
                 return
             # write if not exists
             entry_id = entry['id']
-            update_properties = {
-                "Status": {
-                    "type": "status",
-                    "status": {
-                        "name": status
-                    }
-                }
-            }
+            update_properties = notion.NotionPayloadBuilder().add_status("Status", status).build()
             # update status
-            update_response = update_entry(entry_id, update_properties=update_properties)
+            update_response = notion.update_entry(entry_id, update_properties=update_properties)
             log.debug(f"Update response: {update_response["url"]}")
-            await initial_response.edit_original_response(content=f"{current_message}: Updated Entry to {status}")
+            if initial_response:
+                await initial_response.edit_original_response(content=f"{current_message}: Updated Entry to {status}")
         else:
             log.debug("Creating database entry...")
-            
-            await initial_response.edit_original_response(content=f"{current_message}: Creating database entry...")
-            payload = create_notion_payload(message_text=message_text, author=author, date=date, url=url, status=status)
+            if initial_response:
+                await initial_response.edit_original_response(content=f"{current_message}: Creating database entry...")
+            payload = create_aua_payload(message_text=message_text, author=author, date=date, url=url, status=status)
 
-            response = add_to_database(self.database_id, payload)
+            response = notion.add_to_database(self.database_id, payload)
             log.debug(f"Created database entry on message for '{message_text}': {response["url"]}")
-            await initial_response.edit_original_response(content=f"{current_message}: Created database entry with status {status}")
+            if initial_response:
+                await initial_response.edit_original_response(content=f"{current_message}: Created database entry with status {status}")
 
     @slash_command()
     @discord.default_permissions(manage_guild=True)
@@ -142,7 +124,11 @@ class AskUsAnything(commands.Cog):
                 counter += 1
                 current_message = f"Analysiere Nachricht {counter} von {limit}"
                 if author.bot:
-                    await initial_response.edit_original_response(content=f"{current_message}: Nachricht ist von einem Bot")
+                    if initial_response:
+                        if type(initial_response) == discord.Interaction:
+                            await initial_response.edit_original_response(content=f"{current_message}: Nachricht ist von einem Bot")
+                        else:
+                            log.debug(f"Can't edit_original_response of {initial_response}")
                 else:
                     message_url = message.jump_url
                     message_text = message.clean_content
@@ -153,10 +139,18 @@ class AskUsAnything(commands.Cog):
                         status=status, author=author, date=message_created_at, message_text=message_text, url=message_url, initial_response=initial_response, current_message=current_message
                     )
             except Exception as e:
-                log.error(e)
+                log.error(traceback.format_exc())
+                try:
+                    log.error(f"An error occured while trying to Analyse message: {str(e)}")
+                except:
+                    log.error(f"An error occured while trying to Analyse message: {type(e)}")
 
         log.debug(f"Found {counter} messages")
-        await initial_response.edit_original_response(content=f"{counter} Nachrichten wurden analysiert")
+        if initial_response:
+            if type(initial_response) == discord.Interaction:
+                await initial_response.edit_original_response(content=f"{counter} Nachrichten wurden analysiert")
+            else:
+                log.debug(f"Can't edit_original_response of {initial_response}")
 
     # when user posts message in #ask-us-anything
     # write to notion
@@ -168,18 +162,21 @@ class AskUsAnything(commands.Cog):
         if message.channel.id != self.channel_id_aua:
             return
         
-        log.debug(f"Received member message in {message.channel.mention} ({message.channel.name})")
+        if message.channel:
+            log.debug(f"Received member message in {message.channel.mention} ({message.channel.name})")
+        else:
+            log.debug(f"Received member message in a {type(message.channel)} channel -> {message.channel}")
 
         message_text = message.clean_content
         author = message.author
         date = message.created_at
         url = message.jump_url
         
-        response =  self.write_or_update_notion(message_text=message_text,
+        await self.write_or_update_notion(message_text=message_text,
             author=author,
             date=date,
             url=url)
-
+        
     # when robin reacts with 🗒️
     # update notion with "seen"
 
@@ -205,7 +202,7 @@ class AskUsAnything(commands.Cog):
         
         log.debug(f"Received reaction from aua_manager")
         
-        if not str(payload.emoji) in ["🗒️", "👍"]:
+        if not str(payload.emoji) in [notion.EMOJI_NOTEPAD, notion.EMOJI_THUMBS_UP]:
             log.info(f"Reaction with {payload.emoji} ignored")
             return
         
@@ -213,13 +210,13 @@ class AskUsAnything(commands.Cog):
 
         url = message.jump_url
         status = None
-        if str(payload.emoji) == "🗒️":
+        if str(payload.emoji) == notion.EMOJI_NOTEPAD:
             # update to "Seen"
-            status = "Gesehen"
+            status = notion.STATUS_SEEN
 
-        if str(payload.emoji) == "👍":
+        if str(payload.emoji) == notion.EMOJI_THUMBS_UP:
             # update to "Aufgenommen"
-            status = "Aufgenommen"
+            status = notion.STATUS_RECORDED
 
         message_text = message.clean_content
         author = message.author

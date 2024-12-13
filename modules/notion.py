@@ -1,8 +1,63 @@
 from notion_client import Client
 import os
 from ezcord import log
+from datetime import datetime
+
+STATUS_RECORDED = "Aufgenommen"
+STATUS_SEEN = "Gesehen"
+STATUS_NOT_STARTED = "Not started"
+
+EMOJI_THUMBS_UP = "👍"
+EMOJI_NOTEPAD = "🗒️"
 
 notion = Client(auth=os.getenv("NOTION_TOKEN"))
+
+class NotionPayloadBuilder():
+
+    def __init__(self):
+        self.payload = {}
+    
+    def add_title(self, title_name:str, title_value:str):
+        self.payload[title_name] = { "title": [{"text": { "content": title_value }}]}
+        return self
+
+    def add_text(self, name:str, text:str):
+        self.payload[name] = {
+            "rich_text": [{"text": {"content": text}}]
+        }
+        return self
+
+    def add_date(self, name:str, start:datetime, end:datetime|None=None):
+        self.payload[name] = {
+            "date": {
+                "start": start.isoformat(),
+                "end": end.isoformat() if end else None
+
+            }
+        }
+        return self
+    
+    def add_number(self, name:str, number:int):
+        self.payload[name] = {
+            "number": number
+        }
+        return self
+
+    def add_url(self, name:str, url:str):
+        self.payload[name] = {
+            "url": url
+        }
+        return self
+    
+    def add_status(self, name:str, status:str):
+        self.payload[name] = {
+            "type": "status",
+            "status": { "name": status}
+        }
+        return self
+
+    def build(self):
+        return self.payload
 
 def add_to_database(database_id, payload):
     response = notion.pages.create(
@@ -38,6 +93,8 @@ def fetch_database_entries(database_id):
                 "database_id": database_id,
                 "start_cursor": next_cursor,
             }
+            # database_id=database_id,
+            # start_cursor=next_cursor
         )
         results.extend(response["results"])
         next_cursor = response.get("next_cursor")
