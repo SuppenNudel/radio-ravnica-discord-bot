@@ -1,4 +1,5 @@
 from notion_client import Client
+from notion_client.api_endpoints import DatabasesEndpoint
 import os
 from ezcord import log
 from datetime import datetime
@@ -55,9 +56,21 @@ class NotionPayloadBuilder():
             "status": { "name": status}
         }
         return self
+    
+    def add_relation(self, name:str, releated_page_id:int):
+        self.payload[name] = {
+            "relation": [{"id": releated_page_id}]
+        }
 
     def build(self):
         return self.payload
+    
+def add_or_ignore(database_id, filter, payload):
+    query_response = get_entries(database_id=database_id, filter=filter)
+    if query_response['results']:
+        pass
+    else:
+        add_to_database(database_id=database_id, payload=payload)
 
 def add_to_database(database_id, payload):
     response = notion.pages.create(
@@ -73,7 +86,9 @@ def update_entry(page_id, update_properties):
     )
     return update_response
 
-def check_entry(database_id, filter):
+def get_entries(database_id, filter):
+    response = DatabasesEndpoint(notion).query(database_id=database_id, filter=filter)
+    return response
     query_response = notion.databases.query(
         database_id=database_id,
         filter=filter
@@ -127,11 +142,14 @@ def remove_duplicates(entries):
         notion.blocks.delete(block_id=entry_id)
         print(f"Deleted entry with ID: {entry_id}")
 
+def parse_func(str):
+    return 
 
 if __name__ == "__main__":
-    database_id = "159f020626c2807d839eec8dc4bfb0a0"
+    database_id = "15ef020626c28097acc4ec8a14c1fcca"
     # Fetch entries
     database_entries = fetch_database_entries(database_id)
-
-    # Remove duplicates
-    remove_duplicates(database_entries)
+    for entry in database_entries:
+        comment_text = entry['properties']['Formula']['formula']['string']
+        print(comment_text)
+        print("---")

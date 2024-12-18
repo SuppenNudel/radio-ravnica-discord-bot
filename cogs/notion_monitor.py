@@ -12,6 +12,9 @@ from typing import Literal
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
+from PIL import Image
+from io import BytesIO
+import modules.notion as notion
 
 state_tags = json.loads(os.getenv("STATE_TAGS", "{}")) # {} is the default
 
@@ -31,6 +34,18 @@ def get_timestamp_style(timestamp1: datetime, timestamp2: datetime) -> Literal["
     else:
         return "D"  # DiDferent dates: long date and time
     
+def convert_ico_to_png(ico_url, output_path="icon.png"):
+    # Download the ICO file
+    response = requests.get(ico_url)
+    response.raise_for_status()  # Ensure the request was successful
+    
+    # Open the ICO file as an image
+    ico_image = Image.open(BytesIO(response.content))
+    
+    # Save the image as PNG
+    ico_image.save(output_path, format="PNG")
+    print(f"Converted ICO file to PNG: {output_path}")
+    
 def get_favicon_url(url):
     try:
         # Make an HTTP request to get the webpage content
@@ -41,7 +56,7 @@ def get_favicon_url(url):
         soup = BeautifulSoup(response.text, 'html.parser')
 
         # Look for <link> tag with rel="icon" or rel="shortcut icon"
-        favicon_link = soup.find('link', rel=lambda rel: rel and 'icon' in rel)
+        favicon_link = soup.find('link', rel=lambda rel: rel and 'icon' in rel.lower())
 
         if favicon_link and 'href' in favicon_link.attrs:
             # Get the href attribute (favicon URL)
@@ -61,9 +76,7 @@ class Event():
         if properties['Author']['rich_text']:
             author_value = properties['Author']['rich_text'][0]['plain_text']
             log.info(f"Author Value: {author_value}")
-            guild_id = int(os.getenv("GUILD"))
-            log.info(f"Guild ID: {guild_id}")
-            guild:discord.Guild | None = cog.bot.get_guild(guild_id)
+            guild:discord.Guild | None = cog.bot.get_guild(cog.guild_id)
             log.info(f"Guild : {guild}")
             if guild:
                 self.author = guild.get_member_named(author_value)
@@ -167,9 +180,17 @@ class Event():
             fields.append(discord.EmbedField(name="Event Typ", value=event_type, inline=False))
 
         event_embed = discord.Embed(title=title, fields=fields)
+        file_thumb = None
         if url:
             event_embed.url = url
-            event_embed.thumbnail=get_favicon_url(url)
+            thumbnail_url = get_favicon_url(url)
+            if thumbnail_url:
+                convert_ico_to_png(thumbnail_url)
+                file_thumb = discord.File("icon.png", filename="icon.png")
+                event_embed.set_thumbnail(url=f"attachment://icon.png")
+            else:
+                thumbnail_url = "https://cards.scryfall.io/art_crop/front/e/c/ec8e4142-7c46-4d2f-aaa6-6410f323d9f0.jpg"
+                event_embed.set_thumbnail(url=thumbnail_url)
         self.embeds.append(event_embed)
         # self.embeds.append(discord.Embed(title=title, image="https://upload.wikimedia.org/wikipedia/commons/4/45/Notion_app_logo.png", url=public_url))
 
@@ -182,13 +203,15 @@ class Event():
     
         # Save the file locally
         file_path = "google_map.png"
-        with open(file_path, "wb") as file:
-            file.write(response.content)
+        with open(file_path, "wb") as file_maps:
+            file_maps.write(response.content)
         
         # Create a discord.File object from the downloaded file
-        file = discord.File(file_path, filename=file_path)
+        file_maps = discord.File(file_path, filename=file_path)
 
-        self.files = [file]
+        self.files = [file_maps]
+        if file_thumb:
+            self.files.append(file_thumb)
         google_embed = discord.Embed(
                 title="Google Maps",
                 url=f"https://www.google.com/maps/search/{location.replace(' ', '%20')}",
@@ -205,6 +228,7 @@ class Event():
 class NotionMonitor(commands.Cog):
     def __init__(self, bot: discord.Bot):
         self.bot = bot
+        self.guild_id = int(os.getenv("GUILD"))
         self.notion = Client(auth=os.getenv("NOTION_TOKEN"))
         self.event_database_id = os.getenv("EVENT_DATABASE_ID")
         self.area_database_id = os.getenv("AREA_DATABASE_ID")
@@ -221,18 +245,29 @@ class NotionMonitor(commands.Cog):
         today = datetime.now().strftime("%Y-%m-%d")
         response = self.notion.databases.query(
             database_id=self.event_database_id,
-            filter={
-                "property": "Start (und Ende)",
-                "date": {
-                    "on_or_after": today,
-                },
+            filter = {
+                "and": [
+                    
+                    {
+                        "property": "Start (und Ende)",
+                        "date": {
+                            "on_or_after": today
+                        }
+                    },
+                    {
+                        "property": "Link",
+                        "url": {
+                            "is_empty": True
+                        }
+                    }
+                ]
             }
         )
         for entry in response['results']:
             properties = entry['properties']
-            discord_url = properties['Discord Link']
             debug = get_bool_from_env('DEBUG')
-            if (debug and properties['For Test']['checkbox']) or ((not debug) and (not discord_url['url'])):
+            is_test_entry = properties['For Test']['checkbox']
+            if (debug and is_test_entry) or ((not debug) and (not is_test_entry)):
                 public_url = entry['public_url']
                 event = Event(self, properties, public_url)
 
@@ -257,27 +292,20 @@ class NotionMonitor(commands.Cog):
 
                 log.debug(f"Going to create post in paper_event_channe: {[event.title, event.content, event.embeds, [tag], event.files]}")
                 forum_post = await paper_event_channel.create_thread(name=event.title, content=event.content, embeds=event.embeds, applied_tags=[tag], files=event.files)
+                channel_id = forum_post.id
                 discord_link = forum_post.jump_url
                 logging.getLogger("link_logger").info(f"Created forum post: {discord_link}")
-
-                update_properties = {
-                    "Discord Link": {
-                        "url": discord_link,
-                    },
-                    "Status": {
-                        "type": "status",
-                        "status": {
-                            "name": "on Discord"
-                        }
-                    }
-                }
+                update_properties = (
+                    notion.NotionPayloadBuilder()
+                    .add_text("Thread ID", str(channel_id))
+                    .add_text("Server ID", str(self.guild_id))
+                    .add_status("Status", "on Discord")
+                )
                 if event.area_page_id:
-                    update_properties['(Bundes)land'] = {
-                        "relation": [{"id": event.area_page_id}]
-                    }
+                    update_properties.add_relation("(Bundes)land", event.area_page_id)
                 update_response = self.notion.pages.update(
                     page_id=entry['id'],
-                    properties=update_properties
+                    properties=update_properties.build()
                 )
                 logging.getLogger("link_logger").info(f"Updated Notion page: {update_response['url']}")
 

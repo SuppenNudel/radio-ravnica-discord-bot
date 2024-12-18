@@ -11,7 +11,14 @@ import traceback
 
 # aua stands for ask us anything
 def create_aua_payload(message_text, author:discord.User, date:datetime, url, status:None|Literal["Aufgenommen", "Gesehen"]=None):
-    builder = notion.NotionPayloadBuilder().add_title("Text", message_text).add_text("Author", author.display_name).add_number("Author ID", author.id).add_date("Date", date).add_url("Discord Link", url)
+    builder = (
+        notion.NotionPayloadBuilder()
+        .add_title("Text", message_text)
+        .add_text("Author", author.display_name)
+        .add_number("Author ID", author.id)
+        .add_date("Date", date)
+        .add_url("Discord Link", url)
+    )
     if status:
         builder.add_status("Status", status)
     return builder.build()
@@ -52,7 +59,7 @@ class AskUsAnything(commands.Cog):
 
     async def write_or_update_notion(self, message_text, author, date:datetime, url, status:str|None=notion.STATUS_NOT_STARTED, initial_response=None, current_message=None):
         # check entry
-        query_response = notion.check_entry(self.database_id, filter=
+        query_response = notion.get_entries(self.database_id, filter=
             {
                 "property": "Discord Link",  # Replace with the name of your unique identifier property
                 "url": {
