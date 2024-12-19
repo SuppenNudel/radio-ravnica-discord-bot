@@ -1,16 +1,26 @@
-from discord.ext import commands, tasks
+from discord.ext import commands
 from discord.commands import option, slash_command
-from ezcord import Bot, log
+from ezcord import log
+from discord import Bot
 import discord
 import modules.notion as notion
 from datetime import datetime
 import os
-from typing import Literal
 import traceback
+from enum import Enum
 
+EMOJI_THUMBS_UP = "👍"
+EMOJI_NOTEPAD = "🗒️"
+EMOJI_CANCEL = "❌"
+
+class AuaStatus(Enum):
+    SEEN = "Gesehen"
+    RECORDED = "Aufgenommen"
+    NOT_STARTED = "Not started"
+    REJECTED = "Abgelehnt"
 
 # aua stands for ask us anything
-def create_aua_payload(message_text, author:discord.User, date:datetime, url, status:None|Literal["Aufgenommen", "Gesehen"]=None):
+def create_aua_payload(message_text, author:discord.User, date:datetime, url, status:None|AuaStatus=None):
     builder = (
         notion.NotionPayloadBuilder()
         .add_title("Text", message_text)
@@ -20,15 +30,16 @@ def create_aua_payload(message_text, author:discord.User, date:datetime, url, st
         .add_url("Discord Link", url)
     )
     if status:
-        builder.add_status("Status", status)
+        builder.add_status("Status", status.value)
     return builder.build()
 
-async def analyse_reactions(reactions, aua_managers):
-    emoji_to_status = {
-        notion.EMOJI_THUMBS_UP: notion.STATUS_RECORDED,
-        notion.EMOJI_NOTEPAD: notion.STATUS_SEEN
-    }
+emoji_to_status = {
+    EMOJI_THUMBS_UP: AuaStatus.RECORDED,
+    EMOJI_NOTEPAD: AuaStatus.SEEN,
+    EMOJI_CANCEL: AuaStatus.REJECTED
+}
 
+async def analyse_reactions(reactions:list[discord.Reaction], aua_managers):
     for emoji, status in emoji_to_status.items():
         for reaction in reactions:
             if str(reaction.emoji) == emoji:
@@ -41,11 +52,13 @@ async def analyse_reactions(reactions, aua_managers):
 
 class AskUsAnything(commands.Cog):
     def __init__(self, bot:Bot):
-        self.bot:Bot = bot
-        self.database_id = os.getenv("DATABASE_ID_AUA")
+        self.bot = bot
+        self.db_id_aua = os.getenv("DATABASE_ID_AUA")
         channel_aua = os.getenv("CHANNEL_AUA")
         if channel_aua:
             self.channel_id_aua = int(channel_aua)
+        else:
+            raise Exception(".env/CHANNEL_AUA not defined")
         aua_managers_raw = os.getenv("AUA_MANAGERS")
 
         self.aua_managers = []
@@ -57,26 +70,23 @@ class AskUsAnything(commands.Cog):
     async def on_ready(self):
         log.info("ask-us-anything started")
 
-    async def write_or_update_notion(self, message_text, author, date:datetime, url, status:str|None=notion.STATUS_NOT_STARTED, initial_response=None, current_message=None):
-        # check entry
-        query_response = notion.get_entries(self.database_id, filter=
-            {
-                "property": "Discord Link",  # Replace with the name of your unique identifier property
-                "url": {
-                    "equals": url
-                }
-            }
-        )
-        entry_exists = query_response['results']
+    async def write_or_update_notion(self, message_text, author, date:datetime, url, status:AuaStatus|None=None, initial_response:discord.Interaction|None=None, current_message=None):
+        if status == None:
+            status = AuaStatus.NOT_STARTED
 
-        if entry_exists:
+        filter = notion.NotionFilterBuilder().add_url_filter("Discord Link", notion.URLCondition.EQUALS, url).build()
+        # check entry
+        aua_entries = notion.get_all_entries(self.db_id_aua, filter=filter)
+
+        if aua_entries:
             log.debug("Entry exits already")
             if initial_response:
                 await initial_response.edit_original_response(content=f"{current_message}: Eintrag existiert")
 
-            entry = entry_exists[0]
+            entry = aua_entries[0]
+            my_entry = notion.Entry(entry)
 
-            existing_status = entry['properties']['Status']['status']['name']
+            existing_status = my_entry.get_status_property('Status', AuaStatus)
             if existing_status == status:
                 log.debug("No need to update, status already same")
                 if initial_response:
@@ -96,7 +106,7 @@ class AskUsAnything(commands.Cog):
                 await initial_response.edit_original_response(content=f"{current_message}: Creating database entry...")
             payload = create_aua_payload(message_text=message_text, author=author, date=date, url=url, status=status)
 
-            response = notion.add_to_database(self.database_id, payload)
+            response = notion.add_to_database(self.db_id_aua, payload)
             log.debug(f"Created database entry on message for '{message_text}': {response["url"]}")
             if initial_response:
                 await initial_response.edit_original_response(content=f"{current_message}: Created database entry with status {status}")
@@ -117,12 +127,20 @@ class AskUsAnything(commands.Cog):
         
 
         initial_response = await ctx.respond(f"Werde die letzten {limit} Nachrichten analysieren...", ephemeral=True)
+        if not initial_response:
+            raise Exception("Unable to send response")
+                    
+        if not type(initial_response) == discord.Interaction:
+            raise Exception("initial_response is not discord.Interaction")
 
         channel = ctx.channel
 
+        if not type(channel) == discord.TextChannel:
+            raise Exception(f"Not a text channel but {type(channel)}")
+
         start_message = None
         if starting_message_id:
-            start_message = await ctx.channel.fetch_message(int(starting_message_id))
+            start_message = await channel.fetch_message(int(starting_message_id))
 
         counter = 0
         async for message in channel.history(limit=limit, before=start_message):
@@ -131,11 +149,7 @@ class AskUsAnything(commands.Cog):
                 counter += 1
                 current_message = f"Analysiere Nachricht {counter} von {limit}"
                 if author.bot:
-                    if initial_response:
-                        if type(initial_response) == discord.Interaction:
-                            await initial_response.edit_original_response(content=f"{current_message}: Nachricht ist von einem Bot")
-                        else:
-                            log.debug(f"Can't edit_original_response of {initial_response}")
+                    await initial_response.edit_original_response(content=f"{current_message}: Nachricht ist von einem Bot")
                 else:
                     message_url = message.jump_url
                     message_text = message.clean_content
@@ -143,7 +157,13 @@ class AskUsAnything(commands.Cog):
                     status = await analyse_reactions(message.reactions, self.aua_managers)
 
                     await self.write_or_update_notion(
-                        status=status, author=author, date=message_created_at, message_text=message_text, url=message_url, initial_response=initial_response, current_message=current_message
+                        status=status,
+                        author=author,
+                        date=message_created_at,
+                        message_text=message_text,
+                        url=message_url,
+                        initial_response=initial_response,
+                        current_message=current_message
                     )
             except Exception as e:
                 log.error(traceback.format_exc())
@@ -167,6 +187,9 @@ class AskUsAnything(commands.Cog):
             return
         
         if message.channel.id != self.channel_id_aua:
+            return
+        
+        if not type(message.channel) == discord.TextChannel:
             return
         
         if message.channel:
@@ -194,36 +217,48 @@ class AskUsAnything(commands.Cog):
         if payload.channel_id != self.channel_id_aua:
             return
 
+        if str(payload.emoji) not in emoji_to_status:
+            # ignore reaction
+            return
+        
+        if not payload.guild_id:
+            raise Exception("Reaction payload does not have guild_id")
+        
+        if not payload.channel_id:
+            raise Exception("Reaction payload does not have channel_id")
+        
+        # if not payload.message_id:
+        #     raise Exception("Reaction payload does not have channel_id")
+
         # Get the guild, channel, and message where the reaction was added
         guild = self.bot.get_guild(payload.guild_id)
+        if not guild:
+            raise Exception("Guild not found")
+        
         channel = guild.get_channel(payload.channel_id)
-        message = await channel.fetch_message(payload.message_id)
-
+        if not type(channel) == discord.TextChannel:
+            raise Exception("Channel is not a Text Channel")
+        
         # Get the user who added the reaction
         user = guild.get_member(payload.user_id)
+        if not user:
+            log.error(f"User with id {payload.user_id} not found")
+            return
+        
         if user.bot: # Ignore bot reactions
             return
         
         if not user.id in self.aua_managers: # Only act on robins reactions
             return
         
+        message = await channel.fetch_message(payload.message_id)
+
         log.debug(f"Received reaction from aua_manager")
-        
-        if not str(payload.emoji) in [notion.EMOJI_NOTEPAD, notion.EMOJI_THUMBS_UP]:
-            log.info(f"Reaction with {payload.emoji} ignored")
-            return
         
         log.debug("Will act on reaction...")
 
         url = message.jump_url
-        status = None
-        if str(payload.emoji) == notion.EMOJI_NOTEPAD:
-            # update to "Seen"
-            status = notion.STATUS_SEEN
-
-        if str(payload.emoji) == notion.EMOJI_THUMBS_UP:
-            # update to "Aufgenommen"
-            status = notion.STATUS_RECORDED
+        status = emoji_to_status[str(payload.emoji)]
 
         message_text = message.clean_content
         author = message.author
@@ -236,5 +271,5 @@ class AskUsAnything(commands.Cog):
             url=url,
             status=status)
 
-def setup(bot):
+def setup(bot:Bot):
     bot.add_cog(AskUsAnything(bot))
