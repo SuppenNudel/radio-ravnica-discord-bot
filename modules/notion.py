@@ -116,9 +116,12 @@ class Entry():
         value = property[p_type]
         return value
     
-    def get_text_property(self, name) -> str:
+    def get_text_property(self, name) -> str | None:
         prop = self.get_property(name)
-        return prop[0]['plain_text']
+        if prop:
+            return prop[0]['plain_text']
+        else:
+            return None
     
     def get_checkbox_property(self, name) -> bool:
         prop = self.get_property(name)
@@ -132,8 +135,10 @@ class Entry():
             'tz': prop['time_zone']
         }
     
-    def get_status_property(self, name, enum_class: Type[Enum]|None=None) -> Enum|str:
+    def get_status_property(self, name, enum_class: Type[Enum]|None=None) -> Enum|str|None:
         prop = self.get_property(name)
+        if not prop:
+            return None
         value = prop['name']
         if enum_class:
             try:

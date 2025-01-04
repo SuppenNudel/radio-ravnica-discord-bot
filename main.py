@@ -5,10 +5,13 @@ from dotenv import load_dotenv
 import logging
 from ezcord import log
 
+load_dotenv()
+LOG_WEBHOOK = os.getenv("LOG_WEBHOOK")
+
 ezcord.set_log(
     log_level=logging.DEBUG,
     discord_log_level=logging.INFO,
-    webhook_url=os.getenv("LOG_WEBHOOK"),
+    webhook_url=LOG_WEBHOOK,
     dc_codeblocks=True
 )
 
@@ -16,11 +19,9 @@ ezcord.set_log(
     "link_logger",
     log_level=logging.DEBUG,
     discord_log_level=logging.INFO,
-    webhook_url=os.getenv("LOG_WEBHOOK"),
+    webhook_url=LOG_WEBHOOK,
     dc_codeblocks=False
 )
-
-load_dotenv()
 
 intents = discord.Intents.default()
 intents.members = True
@@ -38,8 +39,8 @@ bot = ezcord.Bot(
 @bot.event
 async def on_ready():
     infos = {
-        "Emojis": len(bot.emojis),
-        "Guild": [os.getenv("GUILD")]
+        # "Emojis": len(bot.emojis),
+        # "Guild": [os.getenv("GUILD")]
     }
     bot.ready(new_info=infos)
     log.info("Starting from github")
