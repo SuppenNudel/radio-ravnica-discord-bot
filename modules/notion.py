@@ -222,6 +222,7 @@ class NotionPayloadBuilder():
         return self.payload
     
 async def add_or_ignore(database_id, filter, payload):
+    # creates a page if no filter matches
     query_response = get_all_entries(database_id=database_id, filter=filter)
     if query_response:
         pass
@@ -229,6 +230,7 @@ async def add_or_ignore(database_id, filter, payload):
         add_to_database(database_id=database_id, payload=payload)
 
 def add_to_database(database_id, payload) -> dict:
+    # creates a page
     response = notion.pages.create(
         parent={"database_id": database_id},
         properties=payload
@@ -259,6 +261,11 @@ def get_all_entries(database_id, filter=None) -> list[dict]:
     else:
         all_entries = collect_paginated_api(notion.databases.query, database_id=database_id)
     return all_entries
+
+def remove_entry(entry:Entry):
+    result = notion.blocks.delete(block_id=entry.id)
+    if not result:
+        raise Exception("Entry not deleted")
 
 def remove_duplicates(entries):
     """

@@ -4,3 +4,6 @@ scrapetube
 notion_client
 googlemaps
 beautifulsoup4
+python-dateutil
+dateparser
+pendulum
