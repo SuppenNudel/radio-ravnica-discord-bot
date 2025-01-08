@@ -9,7 +9,7 @@ import locale
 import modules.notion as notion
 import os
 
-locale.setlocale(locale.LC_TIME, "de_DE.UTF-8")
+# locale.setlocale(locale.LC_TIME, "de")
 
 DB_ID_REMIND_ME = os.getenv("DATABASE_ID_REMIND_ME")
 DB_FIELD_DATE = "Timestamp"
@@ -167,7 +167,7 @@ class RemindMe(commands.Cog):
     def __init__(self, bot:Bot):
         self.bot = bot
 
-    @message_command(name="Remind Me")
+    @message_command(name="Erinnere mich in/am ...")
     async def remind_me(self, ctx:EzContext, message:Message):
         # get message id
         # save user that used the interaction
@@ -181,7 +181,13 @@ class RemindMe(commands.Cog):
             # Fetch the channel
             channel = bot.get_channel(channel_id)
             if channel is None:
+                print("couln't get channel. Fetching channel")
                 channel = await bot.fetch_channel(channel_id)
+            
+            if channel is None:
+                print("Fetching channel also didn't return a channel back")
+            
+            print(f"have channel: {channel.name}")
 
             # Fetch the message by its ID
             message = await channel.fetch_message(message_id)
@@ -200,10 +206,12 @@ class RemindMe(commands.Cog):
             author = message.author
             avatar_url = None
             if hasattr(author, "guild_avatar"):
-                avatar_url = author.guild_avatar.url
-            elif hasattr(author, "avatar"):
-                if author.avatar:
-                    avatar_url = author.avatar.url
+                if author.guild_avatar:
+                    avatar_url = author.guild_avatar.url
+            if not avatar_url:
+                if hasattr(author, "avatar"):
+                    if author.avatar:
+                        avatar_url = author.avatar.url
             
             embed.set_author(name=f"von {message.author.name}", icon_url=avatar_url)#, url=message.author.jump_url)
             guild_icon_url = message.guild.icon.url if message.guild.icon else None
@@ -226,12 +234,15 @@ class RemindMe(commands.Cog):
             # Send the embed to the user via DM
             await user.send(content=content, embed=embed)
             print(f"Message forwarded to {user.name} via DM.")
+            return True
         except discord.NotFound:
             print("Message or channel not found!")
-        except discord.Forbidden:
+        except discord.Forbidden as e:
             print("I don't have permission to access this channel or DM the user!")
+            print(e)
         except discord.HTTPException as e:
             print(f"An error occurred: {e}")
+        return False
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -249,9 +260,10 @@ class RemindMe(commands.Cog):
             message = my_entry.get_text_property(DB_FIELD_MESSAGE)
             channel = my_entry.get_text_property(DB_FIELD_CHANNEL)
             reason = my_entry.get_text_property(DB_FIELD_REASON)
-            await self.send_reminder_message(message, channel, user, reason=reason)
-            # remove from database
-            notion.remove_entry(my_entry)
+            success = await self.send_reminder_message(message, channel, user, reason=reason)
+            if success:
+                # remove from database
+                notion.remove_entry(my_entry)
 
 def setup(bot:Bot):
     bot.add_cog(RemindMe(bot))
