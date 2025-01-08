@@ -85,7 +85,7 @@ class NotionMonitor(commands.Cog):
 
                 if not event.author:
                     # reject
-                    notion.NotionPayloadBuilder().add_status("Status", "Author not found")
+                    update_properties = notion.NotionPayloadBuilder().add_status("Status", "Author not found").build()
                     update_response = notion.update_entry(my_entry.id, update_properties=update_properties)
                     continue
 

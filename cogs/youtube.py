@@ -63,14 +63,12 @@ class Youtube(commands.Cog):
                     continue
                 if video_id in self.streams[channel_name]:
                     continue
-                else:
-                    log.info(f"Posting Stream: {video_id}")
-                    log.info(self.streams[channel_name])
-                    discord_channel = self.bot.get_channel(self.channel_id)
-                    if not type(discord_channel) == discord.TextChannel:
-                        log.error(f"type of discord_channel is not discord.TextChannel, but {type(discord_channel)}")
-                        continue
-                    await discord_channel.send(f"<@&{os.getenv('ROLE_ANNOUNCEMENT')}>\n{channel_name} streamt gleich! Kommt, schaut vorbei!\n\n{f"https://youtu.be/{video_id}"}")
+                log.info(f"Posting Stream with id {video_id}")
+                discord_channel = self.bot.get_channel(self.channel_id)
+                if not type(discord_channel) == discord.TextChannel:
+                    log.error(f"type of discord_channel is not discord.TextChannel, but {type(discord_channel)}")
+                    continue
+                await discord_channel.send(f"<@&{os.getenv('ROLE_ANNOUNCEMENT')}>\n{channel_name} streamt gleich! Kommt, schaut vorbei!\n\n{f"https://youtu.be/{video_id}"}")
 
     @tasks.loop(seconds=60*5)
     async def check(self):

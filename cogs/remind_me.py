@@ -8,7 +8,9 @@ import pendulum
 import locale
 import modules.notion as notion
 import os
+import pytz
 
+timezone = pytz.timezone("Europe/Berlin")
 # locale.setlocale(locale.LC_TIME, "de")
 
 DB_ID_REMIND_ME = os.getenv("DATABASE_ID_REMIND_ME")
@@ -17,6 +19,7 @@ DB_FIELD_USER = "User"
 DB_FIELD_MESSAGE = "Message"
 DB_FIELD_CHANNEL = "Channel"
 DB_FIELD_REASON = "Reason"
+DB_FIELD_GUILD = "Guild"
 
 def parse_time_input(input_str: str, base_date: datetime = None) -> pendulum.DateTime:
     """
@@ -118,7 +121,7 @@ def format_relative_time(target_date: pendulum.DateTime, base_date: pendulum.Dat
     result = ", ".join(parts[:-1]) + (f" und {parts[-1]}" if len(parts) > 1 else parts[0])
     return result
 
-def save_reminder_request(user, referenced_message, channel_id, date, reason):
+def save_reminder_request(user, referenced_message, channel_id, date, reason, guild_id):
     user_id = user.id
     payload = (notion.NotionPayloadBuilder()
         .add_title(DB_FIELD_MESSAGE, str(referenced_message))
@@ -126,11 +129,12 @@ def save_reminder_request(user, referenced_message, channel_id, date, reason):
         .add_text(DB_FIELD_CHANNEL, str(channel_id))
         .add_text(DB_FIELD_USER, str(user_id))
         .add_text(DB_FIELD_REASON, reason)
+        .add_text(DB_FIELD_GUILD, str(guild_id))
     ).build()
     notion.add_to_database(DB_ID_REMIND_ME, payload)
 
 class MyModal(discord.ui.Modal):
-    def __init__(self, user=None, message_id=None, channel_id=None, *args, **kwargs):
+    def __init__(self, user=None, message_id=None, channel_id=None, guild_id=None, *args, **kwargs):
         super().__init__(
             discord.ui.InputText(
                 label="Wann soll ich dich erinnern? In...",
@@ -148,6 +152,7 @@ class MyModal(discord.ui.Modal):
         self.user:discord.Member = user
         self.channel_id = channel_id
         self.message_id = message_id
+        self.guild_id = guild_id
     
     async def callback(self, interaction: discord.Interaction):
         user_input = self.children[0].value
@@ -157,7 +162,7 @@ class MyModal(discord.ui.Modal):
             relative_time = format_relative_time(parsed_date, base_date=now)
 
             reason = self.children[1].value
-            save_reminder_request(self.user, self.message_id, self.channel_id, parsed_date, reason)
+            save_reminder_request(self.user, self.message_id, self.channel_id, parsed_date, reason, self.guild_id)
 
             await interaction.respond(f"{self.user.mention}, ich werde dich in {relative_time} erinnern (am {parsed_date.strftime("%A, %d. %B %Y")} um {parsed_date.strftime("%H:%M:%S")})", ephemeral=True)
         else:
@@ -166,13 +171,16 @@ class MyModal(discord.ui.Modal):
 class RemindMe(commands.Cog):
     def __init__(self, bot:Bot):
         self.bot = bot
+        self.guild = os.getenv("GUILD")
+        if not self.guild:
+            raise Exception("GUILD env var is not defined")
 
     @message_command(name="Erinnere mich in/am ...")
     async def remind_me(self, ctx:EzContext, message:Message):
         # get message id
         # save user that used the interaction
         # save to database
-        modal = MyModal(title = "Erstellung einer Erinnerung", user=ctx.author, message_id=message.id, channel_id=message.channel.id)
+        modal = MyModal(title = "Erstellung einer Erinnerung", user=ctx.author, message_id=message.id, channel_id=message.channel.id, guild_id=self.guild)
         await ctx.send_modal(modal)
 
     async def send_reminder_message(self, message_id, channel_id, user_id, reason=None):
@@ -250,12 +258,18 @@ class RemindMe(commands.Cog):
 
     @tasks.loop(seconds=60)
     async def check_reminders(self):
+        filter_date = datetime.now(tz=timezone)
         filter = (notion.NotionFilterBuilder()
-                  .add_date_filter(property_name=DB_FIELD_DATE, value=datetime.now().strftime("%Y-%m-%d"), condition=notion.DateCondition.ON_OR_BEFORE)
+                  .add_date_filter(property_name=DB_FIELD_DATE, value=filter_date.strftime("%Y-%m-%d %H:%M"), condition=notion.DateCondition.ON_OR_BEFORE)
+                  .add_text_filter(property_name=DB_FIELD_GUILD, value=self.guild, condition=notion.TextCondition.EQUALS)
                   .build())
         entries = notion.get_all_entries(DB_ID_REMIND_ME, filter=filter)
         for entry in entries:
             my_entry = notion.Entry(entry)
+            timestamp = my_entry.get_date_property(DB_FIELD_DATE)
+            if timestamp['start'] > filter_date:
+                # noch zu früh
+                continue
             user = my_entry.get_text_property(DB_FIELD_USER)
             message = my_entry.get_text_property(DB_FIELD_MESSAGE)
             channel = my_entry.get_text_property(DB_FIELD_CHANNEL)
