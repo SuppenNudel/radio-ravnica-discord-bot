@@ -7,6 +7,9 @@ from notion_client.helpers import collect_paginated_api
 from enum import Enum
 from typing import Union, Type
 
+from dotenv import load_dotenv
+load_dotenv()
+notion_token = os.getenv("NOTION_TOKEN")
 notion = Client(auth=os.getenv("NOTION_TOKEN"), logger=logging.getLogger())
 
 # Enums for different property types
@@ -192,7 +195,7 @@ class NotionPayloadBuilder():
         }
         return self
     
-    def add_number(self, name:str, number:int):
+    def add_number(self, name:str, number:int|float):
         self.payload[name] = {
             "number": number
         }
@@ -290,6 +293,32 @@ def remove_duplicates(entries):
     for entry_id in to_delete:
         notion.blocks.delete(block_id=entry_id)
         print(f"Deleted entry with ID: {entry_id}")
+
+def add_or_update_entry(database_id: str, filter: dict, payload: dict):
+    """
+    Updates an entry if it exists or creates a new one if not.
+
+    :param database_id: The ID of the Notion database.
+    :param filter: The filter to search for existing entries.
+    :param payload: The properties of the entry to create or update.
+    :return: The response from Notion API (creation or update).
+    """
+    # Get all matching entries
+    matching_entries = get_all_entries(database_id, filter=filter)
+
+    if matching_entries:
+        if len(matching_entries) > 1:
+            raise Exception("Multiple entries found, not going to update")
+        # Update the first matching entry
+        page_id = matching_entries[0]["id"]
+        # print(f"Updating entry with ID: {page_id}")
+        response = update_entry(page_id, payload)
+    else:
+        # Create a new entry
+        # print("No matching entry found. Creating a new entry.")
+        response = add_to_database(database_id, payload)
+    
+    return response
 
 if __name__ == "__main__":
     # youtube_videos_id = "15ef020626c28097acc4ec8a14c1fcca"
