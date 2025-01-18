@@ -256,7 +256,7 @@ class RemindMe(commands.Cog):
     async def on_ready(self):
         self.check_reminders.start()
 
-    @tasks.loop(seconds=60)
+    @tasks.loop(minutes=5)
     async def check_reminders(self):
         filter_date = datetime.now(tz=timezone)
         filter = (notion.NotionFilterBuilder()

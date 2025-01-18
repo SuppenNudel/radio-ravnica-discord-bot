@@ -1,4 +1,4 @@
-from notion_client import Client
+from notion_client import Client, APIResponseError
 from notion_client.api_endpoints import DatabasesEndpoint
 import os
 from datetime import datetime
@@ -6,6 +6,7 @@ import logging
 from notion_client.helpers import collect_paginated_api
 from enum import Enum
 from typing import Union, Type
+import time, json
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -223,6 +224,34 @@ class NotionPayloadBuilder():
 
     def build(self):
         return self.payload
+
+
+def retry_with_rate_limit(func, *args, **kwargs):
+    """
+    Retries a Notion API call if a rate limit is encountered.
+
+    :param func: The Notion API function to call.
+    :param args: Positional arguments for the function.
+    :param kwargs: Keyword arguments for the function.
+    :return: The result of the API call.
+    """
+    while True:
+        try:
+            return func(*args, **kwargs)
+        except APIResponseError as e:
+            # Check if 'Retry-After' is in the response headers
+            retry_after = e.headers.get("Retry-After", None)
+            
+            if e.status == 429 and retry_after:
+                retry_after = int(retry_after)  # Convert to integer
+                print(f"Rate limit hit. Retrying after {retry_after} seconds.")
+                time.sleep(retry_after)
+            else:
+                # Log or handle the error differently if no retry-after is present
+                print(f"Error: {e}")
+                raise  # Re-raise other exceptions
+        except Exception as e:
+            raise e
     
 async def add_or_ignore(database_id, filter, payload):
     # creates a page if no filter matches
@@ -233,15 +262,15 @@ async def add_or_ignore(database_id, filter, payload):
         add_to_database(database_id=database_id, payload=payload)
 
 def add_to_database(database_id, payload) -> dict:
-    # creates a page
-    response = notion.pages.create(
+    # Creates a page in the database
+    response = retry_with_rate_limit(
+        notion.pages.create,
         parent={"database_id": database_id},
         properties=payload
     )
-    if not type(response) == dict:
+    if not isinstance(response, dict):
         raise Exception("Response is not a dict")
-    else:
-        return response
+    return response
 
 def update_entry(page_id, update_properties) -> dict:
     update_response = notion.pages.update(
@@ -260,9 +289,18 @@ def update_entry(page_id, update_properties) -> dict:
 
 def get_all_entries(database_id, filter=None) -> list[dict]:
     if filter:
-        all_entries = collect_paginated_api(notion.databases.query, database_id=database_id, filter=filter)
+        all_entries = retry_with_rate_limit(
+            collect_paginated_api,
+            notion.databases.query,
+            database_id=database_id,
+            filter=filter
+        )
     else:
-        all_entries = collect_paginated_api(notion.databases.query, database_id=database_id)
+        all_entries = retry_with_rate_limit(
+            collect_paginated_api,
+            notion.databases.query,
+            database_id=database_id
+        )
     return all_entries
 
 def remove_entry(entry:Entry):
@@ -320,17 +358,34 @@ def add_or_update_entry(database_id: str, filter: dict, payload: dict):
     
     return response
 
+def update_database_description(database_id: str, description: str):
+    """
+    Updates the description of a Notion database.
+
+    :param database_id: The ID of the Notion database to update.
+    :param description: The new description text.
+    """
+    try:
+        response = retry_with_rate_limit(
+            notion.databases.update,
+            database_id=database_id,
+            description=[
+                {
+                    "type": "text",
+                    "text": {"content": description}
+                }
+            ]
+        )
+        print(f"Updated description for database: {database_id}")
+        return response
+    except Exception as e:
+        print(f"Error updating database description: {e}")
+        raise
+
 if __name__ == "__main__":
+    db_id_card_score = "179f020626c280599916d453caeb0123"
     # youtube_videos_id = "15ef020626c28097acc4ec8a14c1fcca"
-    db_id_aua_questions = "159f020626c2807d839eec8dc4bfb0a0"
-    # filter = NotionFilterBuilder().add_text_filter("Video ID", TextCondition.EQUALS, "6m1tZPHhr8s").build()
-    filter = NotionFilterBuilder().add_text_filter("Author", TextCondition.CONTAINS, "NudelForce").build()
-    # get_entry(db_id_aua_questions, filter=filter)
-    all_entries = get_all_entries(db_id_aua_questions, filter=filter)
-    for entry in all_entries:
-        entry = Entry(entry)
-    #     comment_text = entry.get_formula_property("Comment Text")
-    #     upload_date = entry.get_date_property("Upload Date")
-    #     print(comment_text)
-    #     print(upload_date)
-    #     print("---")
+    # db_id_aua_questions = "159f020626c2807d839eec8dc4bfb0a0"
+    update_database_description(db_id_card_score, "Test")
+
+# Decks seit 16.07.2024, COMP, MAJOR, PROFESSIONAL -> 4516 decks

@@ -22,8 +22,8 @@ class Youtube(commands.Cog):
 
     @commands.Cog.listener()
     async def on_ready(self):
-        self.check.start()
-        self.check_livestream.start()
+        self.check_yt_video.start()
+        self.check_yt_livestream.start()
 
     def add_unique_with_limit(self, item, target_list:list, limit=5):
         if item not in target_list:
@@ -60,7 +60,7 @@ class Youtube(commands.Cog):
             self.add_unique_with_limit(video_id, video_list)
 
     @tasks.loop(seconds=60)
-    async def check_livestream(self):
+    async def check_yt_livestream(self):
         discord_channel = self.bot.get_channel(self.channel_id)
         if not type(discord_channel) == discord.TextChannel:
             log.error(f"type of discord_channel is not discord.TextChannel, but {type(discord_channel)}")
@@ -71,10 +71,10 @@ class Youtube(commands.Cog):
             stream_list = list(streams)[::-1]
             
             for video in stream_list:
-                await self.handle_video(self.check, discord_channel, channel_name, video, "stream")
+                await self.handle_video(self.check_yt_video, discord_channel, channel_name, video, "stream")
 
     @tasks.loop(seconds=60*5)
-    async def check(self):
+    async def check_yt_video(self):
         discord_channel = self.bot.get_channel(self.channel_id)
         if not type(discord_channel) == discord.TextChannel:
             log.error(f"type of discord_channel is not discord.TextChannel, but {type(discord_channel)}")
@@ -87,7 +87,8 @@ class Youtube(commands.Cog):
             
             # post videos that have not been saved on self.videos yet
             for video in video_list:
-                await self.handle_video(self.check_livestream, discord_channel, channel_name, video, "video")
+                await self.handle_video(self.check_yt_livestream, discord_channel, channel_name, video, "video")
 
 def setup(bot:Bot):
     bot.add_cog(Youtube(bot))
+    
