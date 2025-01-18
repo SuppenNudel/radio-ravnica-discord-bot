@@ -59,9 +59,10 @@ class NotionMonitor(commands.Cog):
         self.paper_event_channel = self.bot.get_channel(self.channel_paper_event_id)
         if not type(self.paper_event_channel) == discord.ForumChannel:
             raise Exception(f"Channel is not of type Forum Channel, but {type(self.paper_event_channel)}")
-        self.check.start()
+        if not self.check.is_running():
+            self.check.start()
 
-    @tasks.loop(seconds=60)
+    @tasks.loop(minutes=5)
     async def check(self): # checks for entries that need to be posted on discord
         if not type(self.paper_event_channel) == discord.ForumChannel:
             raise Exception(f"Channel is not of type Forum Channel, but {type(self.paper_event_channel)}")#
@@ -130,6 +131,9 @@ class Event():
         formate_joined = ', '.join(formate)
 
         url = entry.get_url_property("URL")
+        custom_image = entry.get_file_property("Eigenes Bild Datei")
+        if not custom_image:
+            custom_image = entry.get_url_property("Eigenes Bild URL")
         entry_fee = entry.get_number_property("Gebühr")
         location = entry.get_formula_property("Google Maps")
         store = entry.get_text_property("Name des Ladens")
@@ -190,17 +194,22 @@ class Event():
                 raise Exception(f"handling for event_type as {type(event_type)} not implemented")
 
         event_embed = discord.Embed(title=title, fields=fields)
+        thumbnail_url = custom_image
         file_thumb = None
+
         if url:
             event_embed.url = url
+        if url and not thumbnail_url:
             thumbnail_url = favicon.get_favicon_url(url)
             if thumbnail_url:
                 favicon.convert_ico_to_png(thumbnail_url)
+                thumbnail_url = f"attachment://icon.png"
                 file_thumb = discord.File("icon.png", filename="icon.png")
-                event_embed.set_thumbnail(url=f"attachment://icon.png")
             else:
                 thumbnail_url = "https://cards.scryfall.io/art_crop/front/e/c/ec8e4142-7c46-4d2f-aaa6-6410f323d9f0.jpg"
-                event_embed.set_thumbnail(url=thumbnail_url)
+        if thumbnail_url:
+            event_embed.set_thumbnail(url=thumbnail_url)
+
         self.embeds.append(event_embed)
         # self.embeds.append(discord.Embed(title=title, image="https://upload.wikimedia.org/wikipedia/commons/4/45/Notion_app_logo.png", url=public_url))
 

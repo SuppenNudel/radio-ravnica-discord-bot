@@ -161,6 +161,14 @@ class Entry():
         prop = self.get_property(name)
         return prop
     
+    def get_file_property(self, name):
+        prop = self.get_property(name)
+        if prop:
+            type = prop[0]["type"]
+            file_url = prop[0][type]["url"]
+            return file_url
+        return None
+    
     def get_number_property(self, name):
         prop = self.get_property(name)
         return prop
