@@ -164,7 +164,7 @@ class MyModal(discord.ui.Modal):
             reason = self.children[1].value
             save_reminder_request(self.user, self.message_id, self.channel_id, parsed_date, reason, self.guild_id)
 
-            await interaction.respond(f"{self.user.mention}, ich werde dich in {relative_time} erinnern (am {parsed_date.strftime("%A, %d. %B %Y")} um {parsed_date.strftime("%H:%M:%S")})", ephemeral=True)
+            await interaction.respond(f"{self.user.mention}, ich werde dich in {relative_time} erinnern (am {parsed_date.strftime('%A, %d. %B %Y')} um {parsed_date.strftime('%H:%M:%S')})", ephemeral=True)
         else:
             await interaction.respond(r"Ohne Angaben kann ich nichts machen ¯\_(ツ)_/¯", ephemeral=True)
 
