@@ -4,6 +4,8 @@ import ezcord
 from dotenv import load_dotenv
 import logging
 from ezcord import log
+import sys
+print(sys.version)
 
 load_dotenv()
 LOG_WEBHOOK = os.getenv("LOG_WEBHOOK")
