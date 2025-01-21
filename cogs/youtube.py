@@ -22,8 +22,10 @@ class Youtube(commands.Cog):
 
     @commands.Cog.listener()
     async def on_ready(self):
-        self.check_yt_video.start()
-        self.check_yt_livestream.start()
+        if not self.check_yt_video.is_running():
+            self.check_yt_video.start()
+        if not self.check_yt_livestream.is_running():
+            self.check_yt_livestream.start()
 
     def add_unique_with_limit(self, item, target_list:list, limit=5):
         if item not in target_list:

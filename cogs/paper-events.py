@@ -33,7 +33,8 @@ class PaperEvents(commands.Cog):
         log.info("PaperEvents Cog started")
         self.guild = self.bot.get_guild(GUILD_ID)
         if self.guild:
-            self.check.start()
+            if not self.check.is_running():
+                self.check.start()
         else:
             log.error("Guild not found")
 
