@@ -7,3 +7,4 @@ beautifulsoup4
 python-dateutil
 dateparser
 pendulum
+pillow
