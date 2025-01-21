@@ -180,7 +180,12 @@ class Event():
         self.content = f"{self.content}Danke an {self.author.mention} für's Posten"
         self.embeds = []
         fields = []
-        fields.append(discord.EmbedField(name="Start", value=f"{format_dt(start_datetime, style="F")}\n{format_dt(start_datetime, style="R")}", inline=True))
+        fields.append(discord.EmbedField(
+            name="Start",
+            value=f"{format_dt(start_datetime, style='F')}\n{format_dt(start_datetime, style='R')}",
+            inline=True
+        ))
+
         if end_datetime and end_datetime != start_datetime:
             fields.append(discord.EmbedField(name="Ende", value=format_dt(end_datetime, style=get_timestamp_style(start_datetime, end_datetime)), inline=True))
         if entry_fee:
