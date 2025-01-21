@@ -169,9 +169,9 @@ class Event():
             self.area_page_id = area_response[0]['id']
         
         if len(formate) == 1:
-            self.title = f"{start_datetime.strftime("%d.%m.%Y")} - {f"{formate[0]} {event_type}" if event_type else f"{formate[0]} {title}"} @ {store} in {geo_city_long_name}"
+            self.title = f"{start_datetime.strftime('%d.%m.%Y')} - {f'{formate[0]} {event_type}' if event_type else f'{formate[0]} {title}'} @ {store} in {geo_city_long_name}"
         else:
-            self.title = f"{start_datetime.strftime("%d.%m.%Y")} - {f"{title} + {event_type}" if event_type else title} @ {store} in {geo_city_long_name}"
+            self.title = f"{start_datetime.strftime('%d.%m.%Y')} - {f'{title} + {event_type}' if event_type else title} @ {store} in {geo_city_long_name}"
 
         self.content = ""
         if freitext:
