@@ -97,7 +97,7 @@ class AskUsAnything(commands.Cog):
             update_properties = notion.NotionPayloadBuilder().add_status("Status", status).build()
             # update status
             update_response = notion.update_entry(entry_id, update_properties=update_properties)
-            log.debug(f"Update response: {update_response["url"]}")
+            log.debug(f"Update response: {update_response['url']}")
             if initial_response:
                 await initial_response.edit_original_response(content=f"{current_message}: Updated Entry to {status}")
         else:
@@ -107,7 +107,7 @@ class AskUsAnything(commands.Cog):
             payload = create_aua_payload(message_text=message_text, author=author, date=date, url=url, status=status)
 
             response = notion.add_to_database(self.db_id_aua, payload)
-            log.debug(f"Created database entry on message for '{message_text}': {response["url"]}")
+            log.debug(f"Created database entry on message for '{message_text}': {response['url']}")
             if initial_response:
                 await initial_response.edit_original_response(content=f"{current_message}: Created database entry with status {status}")
 
