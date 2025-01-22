@@ -3,6 +3,7 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 from PIL import Image
 from io import BytesIO
+from ezcord import log
 
 def get_favicon_url(website_url):
     try:
@@ -49,7 +50,7 @@ def get_favicon_url(website_url):
         return favicons[0][0] if favicons else None
 
     except Exception as e:
-        print(f"Error: {e}")
+        log.error(f"Error: {e}")
         return None
     
 def convert_ico_to_png(ico_url, output_path="icon.png"):
@@ -62,7 +63,7 @@ def convert_ico_to_png(ico_url, output_path="icon.png"):
     
     # Save the image as PNG
     ico_image.save(output_path, format="PNG")
-    print(f"Converted ICO file to PNG: {output_path}")
+    log.debug(f"Converted ICO file to PNG: {output_path}")
 
 if __name__ == "__main__":
     urls = {
@@ -78,6 +79,6 @@ if __name__ == "__main__":
         favicon = get_favicon_url(url)
         if favicon:
             new_image = convert_ico_to_png(favicon, f"icons/{store}.png")
-            print(f"Favicon URL: {favicon}")
+            log.debug(f"Favicon URL: {favicon}")
         else:
-            print("Favicon is None")
+            log.debug("Favicon is None")

@@ -192,13 +192,13 @@ class RemindMe(commands.Cog):
             # Fetch the channel
             channel = bot.get_channel(channel_id)
             if channel is None:
-                print("couln't get channel. Fetching channel")
+                log.debug("couln't 'get' channel. Fetching channel")
                 channel = await bot.fetch_channel(channel_id)
             
             if channel is None:
-                print("Fetching channel also didn't return a channel back")
+                log.debug("Fetching channel also didn't return a channel back")
             
-            print(f"have channel: {channel.name}")
+            log.debug(f"got channel: {channel.name}")
 
             # Fetch the message by its ID
             message = await channel.fetch_message(message_id)
@@ -244,15 +244,14 @@ class RemindMe(commands.Cog):
 
             # Send the embed to the user via DM
             await user.send(content=content, embed=embed)
-            print(f"Message forwarded to {user.name} via DM.")
+            log.debug(f"Message forwarded to {user.name} via DM.")
             return True
         except discord.NotFound:
-            print("Message or channel not found!")
+            log.error("Message or channel not found!")
         except discord.Forbidden as e:
-            print("I don't have permission to access this channel or DM the user!")
-            print(e)
+            log.error("I don't have permission to access this channel or DM the user!")
         except discord.HTTPException as e:
-            print(f"An error occurred: {e}")
+            log.error(f"An error occurred: {e}")
         return False
 
     @commands.Cog.listener()
