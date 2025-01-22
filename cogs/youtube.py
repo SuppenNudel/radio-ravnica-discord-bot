@@ -5,6 +5,7 @@ from discord import Bot
 import scrapetube
 from ezcord import log
 from enum import Enum
+import asyncio
 
 KEEP_TRACK_COUNT = 5
 
@@ -27,6 +28,9 @@ class Youtube(commands.Cog):
         self.channels = [
             YoutubeChannel("gamerii", 270288996666441728)
         ]
+
+        self.task_livestream_lock = asyncio.Lock()
+        self.task_video_lock = asyncio.Lock()
 
         channel_id_str = os.getenv("CHANNEL_YOUTUBE")
         if channel_id_str is not None:
@@ -88,14 +92,20 @@ class Youtube(commands.Cog):
             for content in reverse_result:
                 await self.handle_video(self.check_yt_livestream, channel, content, content_type)
 
-    @tasks.loop(seconds=60)
+    @tasks.loop(minutes=1)
     async def check_yt_livestream(self):
-        await self.look_for_new_content(ContentType.STREAMS)
+        if self.task_livestream_lock.locked():
+            return
+        async with self.task_livestream_lock:
+            await self.look_for_new_content(ContentType.STREAMS)
 
-    @tasks.loop(seconds=60*5)
+    @tasks.loop(minutes=5)
     async def check_yt_video(self):
-        await self.look_for_new_content(ContentType.VIDEOS)
-        await self.look_for_new_content(ContentType.SHORTS)
+        if self.task_video_lock.locked():
+            return
+        async with self.task_video_lock:
+            await self.look_for_new_content(ContentType.VIDEOS)
+            await self.look_for_new_content(ContentType.SHORTS)
 
 def setup(bot:Bot):
     bot.add_cog(Youtube(bot))
