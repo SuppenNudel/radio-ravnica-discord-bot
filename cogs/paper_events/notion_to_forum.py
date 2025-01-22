@@ -14,10 +14,46 @@ from typing import Literal
 import requests
 import modules.notion as notion
 import modules.favicon as favicon
+import ics
+import re
 
 link_log = logging.getLogger("link_logger")
 
 state_tags = json.loads(os.getenv("STATE_TAGS", "{}")) # {} is the default
+
+def create_ics_file(file_name, event_name, start_datetime, end_datetime, description=None, location=None):
+    """
+    Creates a fully compliant .ics file with DTSTAMP and consistent CRLF line endings.
+    """
+    # Create a new calendar and event
+    calendar = ics.Calendar()
+    event = ics.Event()
+
+    # Set required event properties
+    event.name = event_name
+    event.begin = start_datetime
+    event.end = end_datetime
+    if end_datetime == start_datetime:
+        event.end = end_datetime.replace(hour=end_datetime.hour + 1)
+
+    # Add DTSTAMP (current UTC time)
+    event.created = datetime.utcnow()
+
+    # Optional properties
+    if description:
+        event.description = description
+    if location:
+        event.location = location
+
+    # Add the event to the calendar
+    calendar.events.add(event)
+
+    # Serialize the calendar
+    ics_content = calendar.serialize()
+
+    # Save to file
+    with open(file_name, "wb") as file:
+        file.write(ics_content.encode("utf-8"))
 
 # Retrieve the boolean value
 def get_bool_from_env(key: str, default: bool = False) -> bool:
@@ -54,7 +90,7 @@ class PaperEventsNotionToForum(commands.Cog):
             raise Exception(".env/CHANNEL_PAPER_EVENTS not defined")
         self.channel_paper_event_id = int(channel_paper_events)
         self.gmaps_token = os.getenv("GMAPS_TOKEN")
-        self.gmaps:googlemaps.client.Client = googlemaps.Client(key=self.gmaps_token)
+        self.gmaps:googlemaps.Client = googlemaps.Client(key=self.gmaps_token)
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -85,7 +121,7 @@ class PaperEventsNotionToForum(commands.Cog):
             debug = get_bool_from_env('DEBUG')
             is_test_entry = my_entry.get_checkbox_property("For Test")
             if (debug and is_test_entry) or ((not debug) and (not is_test_entry)):
-                event = Event(self, my_entry)
+                event = PaperEvent(self, my_entry)
 
                 if not event.author:
                     # reject
@@ -111,21 +147,21 @@ class PaperEventsNotionToForum(commands.Cog):
                 update_response = notion.update_entry(page_id=my_entry.id, update_properties=update_properties.build())
                 link_log.info(f"Updated Notion page: {update_response['url']}")
 
-class Event():
+class PaperEvent():
     def __init__(self, cog:PaperEventsNotionToForum, entry:notion.Entry):
         author = entry.get_text_property("Author")
-        log.info(f"Author Value: {author}")
+        log.info(f"Author Value in Notion: {author}")
         guild:discord.Guild | None = cog.bot.get_guild(cog.guild_id)
-        log.info(f"Guild : {guild}")
-        if guild:
-            self.author = guild.get_member_named(author)
-            log.info(f"Author: {self.author}")
-        else:
-            raise Exception(f"Guild not found {cog.guild_id}")
+        if not author:
+            raise Exception(f"No Author value")
+        if not guild:
+            raise Exception(f"Guild not found: {cog.guild_id}")
         
-        # verify
+        self.author = guild.get_member_named(author)
+        log.info(f"Author: {self.author}")
+        
         if not self.author:
-            return
+            raise Exception(f"Author not found")
         
         title = entry.get_text_property("Event Titel")
         freitext = entry.get_text_property("Freitext")
@@ -170,17 +206,26 @@ class Event():
         self.area_page_id = None
         if area_response:
             self.area_page_id = area_response[0]['id']
+
+        title = None
         
         if len(formate) == 1:
-            self.title = f"{start_datetime.strftime('%d.%m.%Y')} - {f'{formate[0]} {event_type}' if event_type else f'{formate[0]} {title}'} @ {store} in {geo_city_long_name}"
+            title = f"{f'{formate[0]} {event_type}' if event_type else f'{formate[0]} {title}'} @ {store} in {geo_city_long_name}"
         else:
-            self.title = f"{start_datetime.strftime('%d.%m.%Y')} - {f'{title} + {event_type}' if event_type else title} @ {store} in {geo_city_long_name}"
+            title = f"{f'{title} + {event_type}' if event_type else title} @ {store} in {geo_city_long_name}"
+
+        self.title = f"{start_datetime.strftime('%d.%m.%Y')} - {title}"
 
         self.content = ""
         if freitext:
             quoted_freitext = '\n'.join([f"> {line}" for line in freitext.split('\n')])
             self.content = f"{quoted_freitext}\n\n"
-        self.content = f"{self.content}Danke an {self.author.mention} für's Posten"
+
+        self.content += f"Danke an {self.author.mention} für's Posten"
+        
+        ics_file_name = "event.ics"
+        create_ics_file(ics_file_name, title, start_datetime, end_datetime, description=freitext, location=location)
+
         self.embeds = []
         fields = []
         fields.append(discord.EmbedField(
@@ -250,6 +295,7 @@ class Event():
             )
         
         self.embeds.append(google_embed)
+        self.files.append(discord.File(ics_file_name, filename=ics_file_name))
 
 def setup(bot: Bot):
     bot.add_cog(PaperEventsNotionToForum(bot))
