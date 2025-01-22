@@ -1,3 +1,4 @@
+ics
 pillow
 py-cord
 ezcord
