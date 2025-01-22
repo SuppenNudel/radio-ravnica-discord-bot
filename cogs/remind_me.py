@@ -10,6 +10,7 @@ import locale
 import modules.notion as notion
 import os
 import pytz
+from discord.ui import Modal
 
 timezone = pytz.timezone("Europe/Berlin")
 # locale.setlocale(locale.LC_TIME, "de")
@@ -22,7 +23,7 @@ DB_FIELD_CHANNEL = "Channel"
 DB_FIELD_REASON = "Reason"
 DB_FIELD_GUILD = "Guild"
 
-def parse_time_input(input_str: str, base_date: datetime = None) -> pendulum.DateTime:
+def parse_time_input(input_str: str, base_date: datetime = pendulum.now()) -> pendulum.Date | pendulum.Time | pendulum.DateTime:
     """
     Parses a user input string for absolute or relative time and returns a pendulum.DateTime object.
     
@@ -30,8 +31,6 @@ def parse_time_input(input_str: str, base_date: datetime = None) -> pendulum.Dat
     :param base_date: The base datetime to calculate relative times (defaults to now).
     :return: A pendulum.DateTime object for the resulting time.
     """
-    if base_date is None:
-        base_date = pendulum.now()
 
     # Handle absolute date and datetime formats
     try:
@@ -42,12 +41,14 @@ def parse_time_input(input_str: str, base_date: datetime = None) -> pendulum.Dat
 
     # Define relative time units mapping
     units = {
-        "s": "hours",
-        "stunde": "hours",
-        "stunden": "hours",
+        "sekunde": "seconds",
+        "sekunden": "seconds",
         "m": "minutes",
         "minute": "minutes",
         "minuten": "minutes",
+        "s": "hours",
+        "stunde": "hours",
+        "stunden": "hours",
         "t": "days",
         "tag": "days",
         "tage": "days",
@@ -82,7 +83,7 @@ def parse_time_input(input_str: str, base_date: datetime = None) -> pendulum.Dat
     # Add all accumulated time to the base_date
     return base_date.add(**total_time)
 
-def format_relative_time(target_date: pendulum.DateTime, base_date: pendulum.DateTime = None) -> str:
+def format_relative_time(target_date: pendulum.DateTime, base_date: pendulum.DateTime | None = pendulum.now()) -> str:
     """
     Formats the difference between two dates into a detailed relative human-readable string.
     
@@ -134,21 +135,22 @@ def save_reminder_request(user, referenced_message, channel_id, date, reason, gu
     ).build()
     notion.add_to_database(DB_ID_REMIND_ME, payload)
 
-class MyModal(discord.ui.Modal):
-    def __init__(self, user=None, message_id=None, channel_id=None, guild_id=None, *args, **kwargs):
+class MyModal(Modal):
+    def __init__(self, user, message_id=None, channel_id=None, guild_id=None, *args, **kwargs):
         super().__init__(
-            discord.ui.InputText(
-                label="Wann soll ich dich erinnern? In...",
-                placeholder="2 stunden - 1 minute - 5 jahre 2 monate 2 minuten"
-            ),
-            discord.ui.InputText(
-                label="Grund",
-                placeholder="Eine Gedächtnisstütze, warum du erinnert werden wolltest",
-                required=False,
-            ),
             *args,
             **kwargs
         )
+
+        self.add_item(discord.ui.InputText(
+            label="Wann soll ich dich erinnern? In...",
+            placeholder="2 stunden - 1 minute - 5 jahre 2 monate 2 minuten"
+        ))
+        self.add_item(discord.ui.InputText(
+            label="Grund",
+            placeholder="Eine Gedächtnisstütze, warum du erinnert werden wolltest",
+            required=False,
+        ))
 
         self.user:discord.Member = user
         self.channel_id = channel_id
@@ -165,9 +167,9 @@ class MyModal(discord.ui.Modal):
             reason = self.children[1].value
             save_reminder_request(self.user, self.message_id, self.channel_id, parsed_date, reason, self.guild_id)
 
-            await interaction.respond(f"{self.user.mention}, ich werde dich in {relative_time} erinnern (am {parsed_date.strftime('%A, %d. %B %Y')} um {parsed_date.strftime('%H:%M:%S')})", ephemeral=True)
+            await interaction.response.send_message(f"{self.user.mention}, ich werde dich in {relative_time} erinnern (am {parsed_date.strftime('%A, %d. %B %Y')} um {parsed_date.strftime('%H:%M:%S')})", ephemeral=True)
         else:
-            await interaction.respond(r"Ohne Angaben kann ich nichts machen ¯\_(ツ)_/¯", ephemeral=True)
+            await interaction.response.send_message(r"Ohne Angaben kann ich nichts machen ¯\_(ツ)_/¯", ephemeral=True)
 
 class RemindMe(commands.Cog):
     def __init__(self, bot:Bot):
@@ -226,7 +228,7 @@ class RemindMe(commands.Cog):
             guild_icon_url = message.guild.icon.url if message.guild.icon else None
             embed.set_footer(text=message.guild.name, icon_url=guild_icon_url)
 
-            content = f"Hey, du wolltest an diese Nachricht erinnert werden {message.jump_url}\nGrund: {reason}"
+            content = f"Hey, du wolltest an diese Nachricht erinnert werden {message.jump_url}{f'\nGrund: {reason}' if reason else ''}"
             # Attachments
             if message.attachments:
                 for attachment in message.attachments:
