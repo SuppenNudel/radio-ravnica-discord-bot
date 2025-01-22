@@ -15,6 +15,8 @@ import requests
 import modules.notion as notion
 import modules.favicon as favicon
 
+link_log = logging.getLogger("link_logger")
+
 state_tags = json.loads(os.getenv("STATE_TAGS", "{}")) # {} is the default
 
 # Retrieve the boolean value
@@ -33,7 +35,7 @@ def get_timestamp_style(timestamp1: datetime, timestamp2: datetime) -> Literal["
     else:
         return "D"  # DiDferent dates: long date and time
 
-class NotionMonitor(commands.Cog):
+class PaperEventsNotionToForum(commands.Cog):
     def __init__(self, bot:Bot):
         self.bot = bot
         guild_id = os.getenv("GUILD")
@@ -97,7 +99,7 @@ class NotionMonitor(commands.Cog):
                 forum_post = await self.paper_event_channel.create_thread(name=event.title, content=event.content, embeds=event.embeds, applied_tags=[tag], files=event.files)
                 channel_id = forum_post.id
                 discord_link = forum_post.jump_url
-                logging.getLogger("link_logger").info(f"Created forum post: {discord_link}")
+                link_log.info(f"Created forum post: {discord_link}")
                 update_properties = (
                     notion.NotionPayloadBuilder()
                     .add_text("Thread ID", str(channel_id))
@@ -107,10 +109,10 @@ class NotionMonitor(commands.Cog):
                 if event.area_page_id:
                     update_properties.add_relation("(Bundes)land", event.area_page_id)
                 update_response = notion.update_entry(page_id=my_entry.id, update_properties=update_properties.build())
-                logging.getLogger("link_logger").info(f"Updated Notion page: {update_response['url']}")
+                link_log.info(f"Updated Notion page: {update_response['url']}")
 
 class Event():
-    def __init__(self, cog:NotionMonitor, entry:notion.Entry):
+    def __init__(self, cog:PaperEventsNotionToForum, entry:notion.Entry):
         author = entry.get_text_property("Author")
         log.info(f"Author Value: {author}")
         guild:discord.Guild | None = cog.bot.get_guild(cog.guild_id)
@@ -250,4 +252,4 @@ class Event():
         self.embeds.append(google_embed)
 
 def setup(bot: Bot):
-    bot.add_cog(NotionMonitor(bot))
+    bot.add_cog(PaperEventsNotionToForum(bot))

@@ -4,15 +4,30 @@ import discord
 from discord import Bot
 import scrapetube
 from ezcord import log
+from enum import Enum
+
+KEEP_TRACK_COUNT = 5
+
+class ContentType(Enum):
+    VIDEOS = "videos"
+    SHORTS = "shorts"
+    STREAMS = "streams"
+
+class YoutubeChannel():
+    def __init__(self, name:str, dc_user_id:int):
+        self.name = name
+        self.dc_user_id = dc_user_id
+        for content_type in ContentType:
+            setattr(self, content_type.value, [])
 
 class Youtube(commands.Cog):
     def __init__(self, bot:Bot):
         self.bot = bot
-        self.channels = {
-            "<@270288996666441728>": f"https://youtube.com/@gamerii"
-        }
-        self.videos = {"<@270288996666441728>": []}
-        self.streams = {"<@270288996666441728>": []}
+
+        self.channels = [
+            YoutubeChannel("gamerii", 270288996666441728)
+        ]
+
         channel_id_str = os.getenv("CHANNEL_YOUTUBE")
         if channel_id_str is not None:
             try:
@@ -20,31 +35,35 @@ class Youtube(commands.Cog):
             except ValueError:
                 log.error("The environment variable 'CHANNEL_YOUTUBE' is not a valid integer.")
 
+
     @commands.Cog.listener()
     async def on_ready(self):
+        discord_channel = self.bot.get_channel(self.channel_id)
+        if not type(discord_channel) == discord.TextChannel:
+            log.error(f"type of discord_channel is not discord.TextChannel, but {type(discord_channel)}")
+            raise Exception("discord_channel is not a discord.TextChannel")
+        self.discord_channel = discord_channel
+
         if not self.check_yt_video.is_running():
             self.check_yt_video.start()
         if not self.check_yt_livestream.is_running():
             self.check_yt_livestream.start()
+
         log.debug(self.__class__.__name__ + " is ready")
 
-    def add_unique_with_limit(self, item, target_list:list, limit=5):
+    def add_unique_with_limit(self, item, target_list:list, limit=KEEP_TRACK_COUNT):
         if item not in target_list:
             if len(target_list) >= limit:
                 target_list.pop(0)  # Remove the oldest item to make space
             target_list.append(item)
 
     def get_list(self, content_type, channel_name):
-        if content_type == "video":
-            return self.videos[channel_name]
-        if content_type == "stream":
-            return self.streams[channel_name]
-        raise Exception(f"Invalid content type {content_type}")
+        return self.channels[channel_name][content_type]
 
-    async def handle_video(self, loop, discord_channel:discord.TextChannel, channel_name, video, content_type):
+    async def handle_video(self, loop:tasks.Loop, channel:YoutubeChannel, video, content_type:ContentType):
         video_id = video['videoId']
 
-        video_list = self.get_list(content_type, channel_name)
+        video_list = channel.__getattribute__(content_type.value)
 
         if loop.current_loop == 0:
             self.add_unique_with_limit(video_id, video_list)
@@ -56,41 +75,27 @@ class Youtube(commands.Cog):
             return
         if not in_list:
             url = f"https://youtu.be/{video_id}"
-            if content_type == "video":
-                await discord_channel.send(f"<@&{os.getenv('ROLE_ANNOUNCEMENT')}>\nneues Video von **{channel_name}**\n\n{url}")
-            elif content_type == "stream":
-                await discord_channel.send(f"<@&{os.getenv('ROLE_ANNOUNCEMENT')}>\n{channel_name} streamt gleich! Kommt, schaut vorbei!\n\n{url}")
+            if content_type == ContentType.STREAMS:
+                await self.discord_channel.send(f"<@&{os.getenv('ROLE_ANNOUNCEMENT')}>\n<@{channel.dc_user_id}> streamt gleich! Kommt, schaut vorbei!\n\n{url}")
+            else:
+                await self.discord_channel.send(f"<@&{os.getenv('ROLE_ANNOUNCEMENT')}>\nneues Video von **<@{channel.dc_user_id}>**\n\n{url}")
             self.add_unique_with_limit(video_id, video_list)
+
+    async def look_for_new_content(self, content_type:ContentType):
+        for channel in self.channels:
+            result = scrapetube.get_channel(channel_url=f"https://www.youtube.com/@{channel.name}", limit=KEEP_TRACK_COUNT, content_type=content_type.value)
+            reverse_result = list(result)[::-1] # so that the newsest video is at the end
+            for content in reverse_result:
+                await self.handle_video(self.check_yt_livestream, channel, content, content_type)
 
     @tasks.loop(seconds=60)
     async def check_yt_livestream(self):
-        discord_channel = self.bot.get_channel(self.channel_id)
-        if not type(discord_channel) == discord.TextChannel:
-            log.error(f"type of discord_channel is not discord.TextChannel, but {type(discord_channel)}")
-            return
-        
-        for channel_name in self.channels:
-            streams = scrapetube.get_channel(channel_url=self.channels[channel_name], limit=3, content_type="streams")
-            stream_list = list(streams)[::-1]
-            
-            for video in stream_list:
-                await self.handle_video(self.check_yt_video, discord_channel, channel_name, video, "stream")
+        await self.look_for_new_content(ContentType.STREAMS)
 
     @tasks.loop(seconds=60*5)
     async def check_yt_video(self):
-        discord_channel = self.bot.get_channel(self.channel_id)
-        if not type(discord_channel) == discord.TextChannel:
-            log.error(f"type of discord_channel is not discord.TextChannel, but {type(discord_channel)}")
-            return
-        
-        for channel_name in self.channels:
-            videos = scrapetube.get_channel(channel_url=self.channels[channel_name], limit=5)
-
-            video_list = list(videos)[::-1]
-            
-            # post videos that have not been saved on self.videos yet
-            for video in video_list:
-                await self.handle_video(self.check_yt_livestream, discord_channel, channel_name, video, "video")
+        await self.look_for_new_content(ContentType.VIDEOS)
+        await self.look_for_new_content(ContentType.SHORTS)
 
 def setup(bot:Bot):
     bot.add_cog(Youtube(bot))

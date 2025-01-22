@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 import os
 import logging
 
-log_link = logging.getLogger("link_logger")
+link_log = logging.getLogger("link_logger")
 
 def get_bool_from_env(key: str, default: bool = False) -> bool:
     value = os.getenv(key, str(default)).lower()  # Default to 'false' if key is not found
@@ -24,7 +24,7 @@ CHANNEL_PAPER_EVENTS_ID = os.getenv("CHANNEL_PAPER_EVENTS")
 DEBUG = get_bool_from_env("DEBUG")
 DB_PAPER_EVENTS_ID = "f05d532cf91f4f9cbce38e27dc85b522"
 
-class PaperEvents(Cog):
+class PaperEventsStatusMonitor(Cog):
 
     def __init__(self, bot:Bot):
         self.bot = bot
@@ -102,4 +102,4 @@ class PaperEvents(Cog):
                         log.info(f"Failed to edit thread {thread.name}: {e}")
 
 def setup(bot:Bot):
-    bot.add_cog(PaperEvents(bot))
+    bot.add_cog(PaperEventsStatusMonitor(bot))
