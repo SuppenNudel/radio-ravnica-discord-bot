@@ -1,5 +1,6 @@
 from discord.ext import commands, tasks
 import discord
+from ezcord import Cog
 from discord import Bot
 from ezcord import log
 import modules.notion as notion
@@ -23,20 +24,20 @@ CHANNEL_PAPER_EVENTS_ID = os.getenv("CHANNEL_PAPER_EVENTS")
 DEBUG = get_bool_from_env("DEBUG")
 DB_PAPER_EVENTS_ID = "f05d532cf91f4f9cbce38e27dc85b522"
 
-class PaperEvents(commands.Cog):
+class PaperEvents(Cog):
 
     def __init__(self, bot:Bot):
         self.bot = bot
 
-    @commands.Cog.listener()
+    @Cog.listener()
     async def on_ready(self):
-        log.info("PaperEvents Cog started")
         self.guild = self.bot.get_guild(GUILD_ID)
         if self.guild:
             if not self.check.is_running():
                 self.check.start()
         else:
             log.error("Guild not found")
+        log.debug(self.__class__.__name__ + " is ready")
 
     @tasks.loop(minutes=15)
     async def check(self):

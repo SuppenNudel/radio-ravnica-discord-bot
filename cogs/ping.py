@@ -1,17 +1,17 @@
-from discord import Bot
-from discord.ext import commands
-import discord
+from ezcord import Cog, Bot, log
+from discord.ext.commands import slash_command
+from discord import ApplicationContext
 
-class Ping(commands.Cog):
+class Ping(Cog):
     def __init__(self, bot:Bot):
         self.bot = bot
 
-    @commands.Cog.listener()
+    @Cog.listener()
     async def on_ready(self):
-        print("ping is ready")
+        log.debug(self.__class__.__name__ + " is ready")
 
-    @commands.slash_command()
-    async def ping(self, ctx:discord.commands.ApplicationContext):
+    @slash_command(description="Ping the bot")
+    async def ping(self, ctx:ApplicationContext):
         await ctx.send_response("Pong", ephemeral="True")
 
 

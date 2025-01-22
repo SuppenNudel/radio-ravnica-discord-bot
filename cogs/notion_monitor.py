@@ -61,6 +61,7 @@ class NotionMonitor(commands.Cog):
             raise Exception(f"Channel is not of type Forum Channel, but {type(self.paper_event_channel)}")
         if not self.check.is_running():
             self.check.start()
+        log.debug(self.__class__.__name__ + " is ready")
 
     @tasks.loop(minutes=5)
     async def check(self): # checks for entries that need to be posted on discord

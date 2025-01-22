@@ -2,6 +2,7 @@ from discord.ext import commands, tasks
 from discord import Bot, Message
 from discord.commands import message_command
 from ezcord.emb import EzContext
+from ezcord import log
 import discord
 from datetime import datetime
 import pendulum
@@ -255,6 +256,7 @@ class RemindMe(commands.Cog):
     @commands.Cog.listener()
     async def on_ready(self):
         self.check_reminders.start()
+        log.debug(self.__class__.__name__ + " is ready")
 
     @tasks.loop(minutes=5)
     async def check_reminders(self):

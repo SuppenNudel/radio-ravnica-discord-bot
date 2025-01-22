@@ -1,6 +1,6 @@
 from discord.ext import commands
 from discord.commands import option, slash_command
-from ezcord import log
+from ezcord import log, Cog
 from discord import Bot
 import discord
 import modules.notion as notion
@@ -50,7 +50,7 @@ async def analyse_reactions(reactions:list[discord.Reaction], aua_managers):
     return None
 
 
-class AskUsAnything(commands.Cog):
+class AskUsAnything(Cog):
     def __init__(self, bot:Bot):
         self.bot = bot
         self.db_id_aua = os.getenv("DATABASE_ID_AUA")
@@ -66,9 +66,9 @@ class AskUsAnything(commands.Cog):
             self.aua_managers = [int(x) for x in aua_managers_raw.split(",")]
         
 
-    @commands.Cog.listener()
+    @Cog.listener()
     async def on_ready(self):
-        log.info("ask-us-anything started")
+        log.debug(self.__class__.__name__ + " is ready")
 
     async def write_or_update_notion(self, message_text, author, date:datetime, url, status:AuaStatus|None=None, initial_response:discord.Interaction|None=None, current_message=None):
         if status == None:
@@ -181,7 +181,7 @@ class AskUsAnything(commands.Cog):
 
     # when user posts message in #ask-us-anything
     # write to notion
-    @commands.Cog.listener()
+    @Cog.listener()
     async def on_message(self, message:discord.Message):
         if message.author.bot:
             return
@@ -212,7 +212,7 @@ class AskUsAnything(commands.Cog):
 
     # when robin reacts with 👍
     # update notion with "recorded"
-    @commands.Cog.listener()
+    @Cog.listener()
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent):
         if payload.channel_id != self.channel_id_aua:
             return
