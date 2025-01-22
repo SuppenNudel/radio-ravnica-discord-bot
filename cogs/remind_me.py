@@ -228,7 +228,10 @@ class RemindMe(commands.Cog):
             guild_icon_url = message.guild.icon.url if message.guild.icon else None
             embed.set_footer(text=message.guild.name, icon_url=guild_icon_url)
 
-            content = f"Hey, du wolltest an diese Nachricht erinnert werden {message.jump_url}{f'\nGrund: {reason}' if reason else ''}"
+            content = f"Hey, du wolltest an diese Nachricht erinnert werden {message.jump_url}"
+            if reason:
+                content += f"\nGrund: {reason}"
+                
             # Attachments
             if message.attachments:
                 for attachment in message.attachments:
