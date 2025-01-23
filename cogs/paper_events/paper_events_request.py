@@ -100,7 +100,7 @@ class PaperEventsRequest(Cog):
             embed.add_field(name="Start", value=start, inline=False)
             embed.add_field(name="Adresse", value=address, inline=False)
             embed.add_field(name="Entfernung", value=distance, inline=True)
-            embed.add_field(name="Dauer", value=duration, inline=True)
+            embed.add_field(name="Fahrtzeit", value=duration, inline=True)
 
             embeds.append(embed)
 
