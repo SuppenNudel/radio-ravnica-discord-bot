@@ -8,7 +8,6 @@ import googlemaps.client
 from notion_client import Client
 from datetime import datetime
 import logging
-import googlemaps
 import json
 from typing import Literal
 import requests
@@ -90,7 +89,7 @@ class PaperEventsNotionToForum(commands.Cog):
             raise Exception(".env/CHANNEL_PAPER_EVENTS not defined")
         self.channel_paper_event_id = int(channel_paper_events)
         self.gmaps_token = os.getenv("GMAPS_TOKEN")
-        self.gmaps:googlemaps.Client = googlemaps.Client(key=self.gmaps_token)
+        self.gmaps = googlemaps.client.Client(key=self.gmaps_token)
 
     @commands.Cog.listener()
     async def on_ready(self):
