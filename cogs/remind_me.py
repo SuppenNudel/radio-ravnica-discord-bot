@@ -14,7 +14,7 @@ import locale
 from discord.ui import Modal
 
 timezone = pytz.timezone("Europe/Berlin")
-locale.setlocale(locale.LC_TIME, "de")
+# locale.setlocale(locale.LC_TIME, "de")
 
 DB_ID_REMIND_ME = os.getenv("DATABASE_ID_REMIND_ME")
 DB_FIELD_DATE = "Timestamp"
