@@ -5,15 +5,16 @@ from ezcord.emb import EzContext
 from ezcord import log
 import discord
 from datetime import datetime
-import pendulum
-import locale
+import arrow
+import dateparser
 import modules.notion as notion
 import os
 import pytz
+import locale
 from discord.ui import Modal
 
 timezone = pytz.timezone("Europe/Berlin")
-# locale.setlocale(locale.LC_TIME, "de")
+locale.setlocale(locale.LC_TIME, "de")
 
 DB_ID_REMIND_ME = os.getenv("DATABASE_ID_REMIND_ME")
 DB_FIELD_DATE = "Timestamp"
@@ -22,106 +23,6 @@ DB_FIELD_MESSAGE = "Message"
 DB_FIELD_CHANNEL = "Channel"
 DB_FIELD_REASON = "Reason"
 DB_FIELD_GUILD = "Guild"
-
-def parse_time_input(input_str: str, base_date: datetime = pendulum.now()) -> pendulum.Date | pendulum.Time | pendulum.DateTime:
-    """
-    Parses a user input string for absolute or relative time and returns a pendulum.DateTime object.
-    
-    :param input_str: The input string (e.g., "2025-01-07", "2 Stunden", "4 Monate", "2 Jahre 5 Monate").
-    :param base_date: The base datetime to calculate relative times (defaults to now).
-    :return: A pendulum.DateTime object for the resulting time.
-    """
-
-    # Handle absolute date and datetime formats
-    try:
-        # Parse as ISO format first
-        return pendulum.parse(input_str)
-    except ValueError:
-        pass
-
-    # Define relative time units mapping
-    units = {
-        "sekunde": "seconds",
-        "sekunden": "seconds",
-        "m": "minutes",
-        "minute": "minutes",
-        "minuten": "minutes",
-        "s": "hours",
-        "stunde": "hours",
-        "stunden": "hours",
-        "t": "days",
-        "tag": "days",
-        "tage": "days",
-        "M": "months",
-        "monat": "months",
-        "monate": "months",
-        "monaten": "months",
-        "j": "years",
-        "jahr": "years",
-        "jahre": "years",
-        "jahren": "years",
-    }
-
-    # Split input into chunks and process each relative time
-    words = input_str.lower().split()
-    total_time = {}
-
-    i = 0
-    while i < len(words):
-        try:
-            amount = int(words[i])  # Try to parse the current word as an integer
-            unit = words[i + 1]  # Next word should be a time unit
-            if unit not in units:
-                raise ValueError(f"Invalid time unit: {unit}")
-            # Accumulate the time
-            unit_key = units[unit]
-            total_time[unit_key] = total_time.get(unit_key, 0) + amount
-            i += 2  # Move to the next pair of amount and unit
-        except (ValueError, IndexError):
-            raise ValueError(f"Could not parse time input: {input_str}")
-
-    # Add all accumulated time to the base_date
-    return base_date.add(**total_time)
-
-def format_relative_time(target_date: pendulum.DateTime, base_date: pendulum.DateTime | None = pendulum.now()) -> str:
-    """
-    Formats the difference between two dates into a detailed relative human-readable string.
-    
-    :param target_date: The future or past datetime to describe.
-    :param base_date: The base datetime to calculate the difference from (defaults to now).
-    :return: A string like "2 Jahren, 4 Monaten und 5 Tagen".
-    """
-    if base_date is None:
-        base_date = pendulum.now()
-
-    # Calculate the difference
-    diff = base_date.diff(target_date)
-
-    # Extract the components (ensure positive values)
-    years = abs(diff.years)
-    months = abs(diff.months)
-    days = abs(diff.days - years * 365 - months * 30)  # Remaining days after years/months
-    hours = abs(diff.hours)
-    minutes = abs(diff.minutes)
-
-    # Build a human-readable string
-    parts = []
-    if years:
-        parts.append(f"{years} Jahr{'en' if years > 1 else ''}")
-    if months:
-        parts.append(f"{months} Monat{'en' if months > 1 else ''}")
-    if days:
-        parts.append(f"{days} Tag{'en' if days > 1 else ''}")
-    if hours:
-        parts.append(f"{hours} Stunde{'n' if hours != 1 else ''}")
-    if minutes:
-        parts.append(f"{minutes} Minute{'n' if minutes != 1 else ''}")
-
-    # Join the parts into a readable format
-    if not parts:
-        return "0 Minuten"  # Default if no differences
-    result = ", ".join(parts[:-1]) + (f" und {parts[-1]}" if len(parts) > 1 else parts[0])
-    return result
 
 def save_reminder_request(user, referenced_message, channel_id, date, reason, guild_id):
     user_id = user.id
@@ -160,9 +61,14 @@ class MyModal(Modal):
     async def callback(self, interaction: discord.Interaction):
         user_input = self.children[0].value
         if user_input:
-            now = pendulum.now()
-            parsed_date = parse_time_input(user_input, base_date=now)
-            relative_time = format_relative_time(parsed_date, base_date=now)
+            parsed_date = dateparser.parse(user_input)
+            if parsed_date:
+                arrow_object = arrow.get(parsed_date)
+                relative_time = arrow_object.humanize(locale="de")
+            else:
+                log.error(f"Error parsing date '{user_input}'")
+                # TODO handle error
+                return
 
             reason = self.children[1].value
             save_reminder_request(self.user, self.message_id, self.channel_id, parsed_date, reason, self.guild_id)
