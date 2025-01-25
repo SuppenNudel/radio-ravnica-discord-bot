@@ -1,6 +1,6 @@
-from ezcord import Cog, Bot, log
+from ezcord import Cog, log
 from discord.ext.commands import slash_command
-from discord import ApplicationContext
+from discord import ApplicationContext, Bot
 
 class Ping(Cog):
     def __init__(self, bot:Bot):

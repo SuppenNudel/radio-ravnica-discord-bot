@@ -205,15 +205,16 @@ class PaperEvent():
         self.area_page_id = None
         if area_response:
             self.area_page_id = area_response[0]['id']
-
-        title = None
         
         if len(formate) == 1:
-            title = f"{f'{formate[0]} {event_type}' if event_type else f'{formate[0]} {title}'} @ {store} in {geo_city_long_name}"
+            if formate[0] in title:
+                thread_title = f"{f'{formate[0]} {event_type}' if event_type else f'{title}'} @ {store} in {geo_city_long_name}"    
+            else:
+                thread_title = f"{f'{formate[0]} {event_type}' if event_type else f'{formate[0]} {title}'} @ {store} in {geo_city_long_name}"
         else:
-            title = f"{f'{title} + {event_type}' if event_type else title} @ {store} in {geo_city_long_name}"
+            thread_title = f"{f'{title} + {event_type}' if event_type else title} @ {store} in {geo_city_long_name}"
 
-        self.title = f"{start_datetime.strftime('%d.%m.%Y')} - {title}"
+        self.title = f"{start_datetime.strftime('%d.%m.%Y')} - {thread_title}"
 
         self.content = ""
         if freitext:

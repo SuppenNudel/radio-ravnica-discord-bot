@@ -111,6 +111,7 @@ class AskUsAnything(Cog):
             if initial_response:
                 await initial_response.edit_original_response(content=f"{current_message}: Created database entry with status {status}")
 
+    # TODO make this also available as message command
     @slash_command()
     @discord.default_permissions(manage_guild=True)
     @commands.has_role("Moderator")
