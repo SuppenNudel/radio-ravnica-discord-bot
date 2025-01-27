@@ -122,7 +122,7 @@ class RemindMe(commands.Cog):
     async def erinnere_mich(self, ctx:EzContext, wann, grund):
         await ctx.response.defer(ephemeral=True)
         followup_message  = await ctx.followup.send(
-            "⌛ Working on your request, this might take a moment...", ephemeral=True
+            "⌛ Ich arbeite an deiner Anfrage, das kann kurz dauern...", ephemeral=True
         )
         reason = grund
         if followup_message is None:
