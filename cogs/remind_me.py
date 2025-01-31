@@ -1,16 +1,17 @@
 from discord.ext import commands, tasks
 from discord import Bot, Message
 from discord.commands import message_command, slash_command
+from discord.ui.item import Item
 from ezcord.emb import EzContext
 from ezcord import log
 import discord
 from datetime import datetime
-import dateparser
 import modules.notion as notion
 import os
 import pytz
 from discord.ui import Modal
 from discord.utils import format_dt
+from modules.date_time_interpretation import parse_date
 
 timezone = pytz.timezone("Europe/Berlin")
 
@@ -42,11 +43,13 @@ async def handle_input(interaction: discord.Interaction|EzContext, followup_mess
         await interaction.followup.edit_message(followup_message.id, content=r"Ohne Angaben kann ich nichts machen ¯\_(ツ)_/¯")
         return
     
-    parsed_date = dateparser.parse(time_input, settings={'RETURN_AS_TIMEZONE_AWARE': True})
+    parsed_date = parse_date(time_input)
     if not parsed_date:
-        raise ValueError(f"Ich konnte deine Zeitangabe nicht interpretieren: {time_input}")
+        await interaction.followup.edit_message(followup_message.id, content=f"❌ Ich konnte deine Zeitangabe nicht interpretieren: {time_input}\nBitte passe sie an.", view=ReopenModalView(user, message, time_input, reason))
+        return
     if parsed_date < datetime.now(tz=timezone):
-        raise ValueError(f"Interpretierter Zeitpunkt: {format_dt(parsed_date, style='R')}\nIch kann dich nicht in der Vergangenheit erinnern. Zeitreisen wurden noch nicht erfunden.")
+        await interaction.followup.edit_message(followup_message.id, content=f"⚠️ Interpretierter Zeitpunkt: {format_dt(parsed_date, style='R')}\nIch kann dich nicht in der Vergangenheit erinnern. Zeitreisen wurden noch nicht erfunden 😅", view=ReopenModalView(user, message, time_input, reason))
+        return
 
     if message:
         guild_id = message.guild.id
@@ -56,9 +59,17 @@ async def handle_input(interaction: discord.Interaction|EzContext, followup_mess
         guild_id = interaction.guild.id
         channel_id = interaction.channel.id
         message_id = None
-    
-    save_reminder_request(user, parsed_date, reason, guild_id, channel_id, message_id)
-    await interaction.followup.edit_message(followup_message.id, content=f"✅ {user.mention}, ich werde dich {format_dt(parsed_date, style='R')} erinnern (am {format_dt(parsed_date, style='F')})")
+
+    # check with user
+    confirm_view = ConfirmView(interaction.followup, followup_message.id)
+    await interaction.followup.edit_message(followup_message.id, content=f"🕒 Ich würde dich {format_dt(parsed_date, style='R')} am {format_dt(parsed_date, style='f')} erinnern. Passt das so?", view=confirm_view)
+    await confirm_view.wait()
+    confirm_answer = confirm_view.answer
+    if confirm_answer:
+        save_reminder_request(user, parsed_date, reason, guild_id, channel_id, message_id)
+        await interaction.followup.edit_message(followup_message.id, content=f"👍 Prima, dann bis {format_dt(parsed_date, style='R')}", view=None)
+    else:
+        await confirm_view.interaction.response.send_modal(ReminderModal(user, message, time_input, reason))
 
 class ReminderModal(Modal):
     def __init__(self, user, message:Message, time_input=None, reason=None):
@@ -68,7 +79,7 @@ class ReminderModal(Modal):
             label="Wann soll ich dich erinnern?",
             placeholder="z.B. in 10 Minuten, morgen um 17 Uhr, am 24.12.2025 um 12:00 Uhr",
             required=True,
-            value=f"{time_input} <- bitte anpassen" if time_input else None,
+            value=time_input,
         ))
         self.add_item(discord.ui.InputText(
             label="Grund",
@@ -97,22 +108,35 @@ class ReminderModal(Modal):
         except Exception as e:
             await interaction.followup.edit_message(followup_message.id, content=f"❌ Fehler\n{str(e)}\nKlicke auf den Button unten, um es erneut zu versuchen.", view=ReopenModalView(self.user, self.message, time_input, reason))
 
-class ReopenModalButton(discord.ui.Button):
+class ConfirmView(discord.ui.View):
+    def __init__(self, followup, followup_message_id):
+        super().__init__()
+        self.followup = followup
+        self.followup_message_id = followup_message_id
+
+    @discord.ui.button(label="Sieht gut aus", style=discord.ButtonStyle.primary, emoji="👍")
+    async def confirm_callback(self, button:discord.ui.Button, interaction:discord.Interaction):
+        self.answer = True
+        self.stop()        
+
+    @discord.ui.button(label="Nochmal anpassen", style=discord.ButtonStyle.blurple, emoji="🔄")
+    async def edit_callback(self, button:discord.ui.Button, interaction:discord.Interaction):
+        self.answer = False
+        self.interaction = interaction
+        self.stop()
+
+class ReopenModalView(discord.ui.View):
     def __init__(self, user, message, time_input=None, reason=None):
-        super().__init__(label="Erneut versuchen", style=discord.ButtonStyle.primary)
+        super().__init__()
         self.user = user
         self.message = message
         self.time_input = time_input
         self.reason = reason
 
-    async def callback(self, interaction: discord.Interaction):
+    @discord.ui.button(label="Erneut versuchen", style=discord.ButtonStyle.primary, emoji="🔄")
+    async def reopen_callback(self, button:discord.ui.Button, interaction:discord.Interaction):
         modal = ReminderModal(self.user, self.message, self.time_input, self.reason)
         await interaction.response.send_modal(modal)
-
-class ReopenModalView(discord.ui.View):
-    def __init__(self, user, message, time_input=None, reason=None):
-        super().__init__()
-        self.add_item(ReopenModalButton(user, message, time_input, reason))
 
 class RemindMe(commands.Cog):
     def __init__(self, bot:Bot):
