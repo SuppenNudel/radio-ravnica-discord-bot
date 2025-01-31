@@ -53,7 +53,7 @@ def get_favicon_url(website_url):
         log.error(f"Error: {e}")
         return None
     
-def convert_ico_to_png(ico_url, output_path="icon.png"):
+def convert_ico_to_png(ico_url, output_path="tmp/icon.png"):
     # Download the ICO file
     response = requests.get(ico_url)
     response.raise_for_status()  # Ensure the request was successful
@@ -64,6 +64,8 @@ def convert_ico_to_png(ico_url, output_path="icon.png"):
     # Save the image as PNG
     ico_image.save(output_path, format="PNG")
     log.debug(f"Converted ICO file to PNG: {output_path}")
+
+    return output_path
 
 if __name__ == "__main__":
     urls = {
@@ -78,7 +80,7 @@ if __name__ == "__main__":
         # Example usage
         favicon = get_favicon_url(url)
         if favicon:
-            new_image = convert_ico_to_png(favicon, f"icons/{store}.png")
+            new_image = convert_ico_to_png(favicon)
             log.debug(f"Favicon URL: {favicon}")
         else:
             log.debug("Favicon is None")

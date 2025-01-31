@@ -50,6 +50,7 @@ async def on_ready():
     )
 
 if __name__ == "__main__":
+    os.makedirs("tmp", exist_ok=True)
     bot.load_cogs(subdirectories=True)
     bot.add_status_changer(
         "Puzzelt mit Blacky",

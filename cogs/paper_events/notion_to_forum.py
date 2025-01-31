@@ -223,7 +223,7 @@ class PaperEvent():
 
         self.content += f"Danke an {self.author.mention} für's Posten"
         
-        ics_file_name = "event.ics"
+        ics_file_name = "tmp/event.ics"
         create_ics_file(ics_file_name, title, start_datetime, end_datetime, description=freitext, location=location)
 
         self.embeds = []
@@ -257,8 +257,9 @@ class PaperEvent():
             if thumbnail_url:
                 favicon.convert_ico_to_png(thumbnail_url)
                 thumbnail_url = f"attachment://icon.png"
-                file_thumb = discord.File("icon.png", filename="icon.png")
+                file_thumb = discord.File("tmp/icon.png", filename="icon.png")
             else:
+                # phblthp
                 thumbnail_url = "https://cards.scryfall.io/art_crop/front/e/c/ec8e4142-7c46-4d2f-aaa6-6410f323d9f0.jpg"
         if thumbnail_url:
             event_embed.set_thumbnail(url=thumbnail_url)
@@ -274,12 +275,11 @@ class PaperEvent():
         response = requests.get(google_map_url)
     
         # Save the file locally
-        file_path = "google_map.png"
-        with open(file_path, "wb") as file_maps:
+        with open("tmp/google_map.png", "wb") as file_maps:
             file_maps.write(response.content)
         
         # Create a discord.File object from the downloaded file
-        file_maps = discord.File(file_path, filename=file_path)
+        file_maps = discord.File("tmp/google_map.png", filename="google_map.png")
 
         self.files = [file_maps]
         if file_thumb:
@@ -287,7 +287,7 @@ class PaperEvent():
         google_embed = discord.Embed(
                 title="Google Maps",
                 url=f"https://www.google.com/maps/search/{location.replace(' ', '%20')}",
-                image=f"attachment://{file_path}",
+                image=f"attachment://google_map.png",
                 fields=[
                     discord.EmbedField(name="Laden", value=store, inline=True),
                     discord.EmbedField(name="Adresse", value=geocode_results[0]['formatted_address'], inline=True)
