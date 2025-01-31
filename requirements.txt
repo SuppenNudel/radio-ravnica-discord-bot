@@ -8,5 +8,4 @@ googlemaps
 beautifulsoup4
 python-dateutil
 dateparser
-pendulum
-arrow
+google-generativeai
