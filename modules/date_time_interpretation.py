@@ -2,10 +2,12 @@ import dateparser
 from datetime import datetime
 import google.generativeai as genai
 import os
+from ezcord import log
 
 def parse_date(user_time_input) -> datetime | None:
     parsed_date = dateparser.parse(user_time_input, settings={'RETURN_AS_TIMEZONE_AWARE': True})
     if parsed_date:
+        log.debug(f"using dateparser {user_time_input} -> {parsed_date}")
         return parsed_date
     
     # Set up API key
@@ -19,5 +21,7 @@ def parse_date(user_time_input) -> datetime | None:
     response = model.generate_content(f"Jetzt ist {now}. Welches Datum und Uhrzeit ist {user_time_input}? Prüfe das Ergebnis nochmal nach! Gib mir nur das Datum mit Uhrzeit.")
     response_date = response.text.strip()
     parsed_date = dateparser.parse(response_date, settings={'RETURN_AS_TIMEZONE_AWARE': True})
+
+    log.debug(f"using gemini-1.5-flash {user_time_input} -> {parsed_date}")
 
     return parsed_date
