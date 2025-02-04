@@ -254,12 +254,12 @@ class PaperEvent():
             event_embed.url = url
         if url and not thumbnail_url:
             thumbnail_url = favicon.get_favicon_url(url)
-            if thumbnail_url:
-                favicon.convert_ico_to_png(thumbnail_url)
-                thumbnail_url = f"attachment://icon.png"
-                file_thumb = discord.File("icon.png", filename="icon.png")
-            else:
-                thumbnail_url = "https://cards.scryfall.io/art_crop/front/e/c/ec8e4142-7c46-4d2f-aaa6-6410f323d9f0.jpg"
+        if thumbnail_url:
+            output_path = favicon.convert_ico_to_png(thumbnail_url)
+            thumbnail_url = f"attachment://{output_path}"
+            file_thumb = discord.File(output_path, filename=output_path)
+        else:
+            thumbnail_url = "https://cards.scryfall.io/art_crop/front/e/c/ec8e4142-7c46-4d2f-aaa6-6410f323d9f0.jpg"
         if thumbnail_url:
             event_embed.set_thumbnail(url=thumbnail_url)
 

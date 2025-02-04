@@ -65,6 +65,8 @@ def convert_ico_to_png(ico_url, output_path="icon.png"):
     ico_image.save(output_path, format="PNG")
     log.debug(f"Converted ICO file to PNG: {output_path}")
 
+    return output_path
+
 if __name__ == "__main__":
     urls = {
         "taschengeld-dieb": "https://taschengelddieb.de/Community-Laden-Dueren-Taschengelddieb",
