@@ -15,12 +15,12 @@ class ArenaDailyDeals(Cog):
 
     @Cog.listener()
     async def on_ready(self):
-        log.debug(self.__class__.__name__ + " is ready")
-
         self.author_did = bluesky.get_target_did(BSKY_ARENA_DAILY_DEALS_HANDLE)
 
         if not self.check_bsky_posts.is_running():
             self.check_bsky_posts.start()
+            
+        log.debug(self.__class__.__name__ + " is ready")
 
     async def get_latest_post(self):
         try:

@@ -5,32 +5,27 @@ from discord import Bot
 import scrapetube
 from ezcord import log
 from enum import Enum
-import asyncio
-
-KEEP_TRACK_COUNT = 5
 
 class ContentType(Enum):
     VIDEOS = "videos"
-    SHORTS = "shorts"
+    # SHORTS = "shorts"
     STREAMS = "streams"
 
 class YoutubeChannel():
     def __init__(self, name:str, dc_user_id:int):
         self.name = name
         self.dc_user_id = dc_user_id
+        self.content = {}
         for content_type in ContentType:
-            setattr(self, content_type.value, [])
+            self.content[content_type] = None
 
 class Youtube(commands.Cog):
     def __init__(self, bot:Bot):
         self.bot = bot
 
         self.channels = [
-            YoutubeChannel("gamerii", 270288996666441728)
+            YoutubeChannel("GameRii", 270288996666441728)
         ]
-
-        self.task_livestream_lock = asyncio.Lock()
-        self.task_video_lock = asyncio.Lock()
 
         channel_id_str = os.getenv("CHANNEL_YOUTUBE")
         if channel_id_str is not None:
@@ -42,71 +37,50 @@ class Youtube(commands.Cog):
 
     @commands.Cog.listener()
     async def on_ready(self):
-        discord_channel = self.bot.get_channel(self.channel_id)
+        discord_channel = await discord.utils.get_or_fetch(self.bot, 'channel', self.channel_id)
         if not type(discord_channel) == discord.TextChannel:
             log.error(f"type of discord_channel is not discord.TextChannel, but {type(discord_channel)}")
             raise Exception("discord_channel is not a discord.TextChannel")
-        self.discord_channel = discord_channel
+        self.discord_channel:discord.TextChannel = discord_channel
 
-        if not self.check_yt_video.is_running():
-            self.check_yt_video.start()
-        if not self.check_yt_livestream.is_running():
-            self.check_yt_livestream.start()
+        if not self.check_channels.is_running():
+            self.check_channels.start()
 
         log.debug(self.__class__.__name__ + " is ready")
 
-    def add_unique_with_limit(self, item, target_list:list, limit=KEEP_TRACK_COUNT):
-        if item not in target_list:
-            if len(target_list) >= limit:
-                target_list.pop(0)  # Remove the oldest item to make space
-            target_list.append(item)
+    async def post_video(self, yt_channel:YoutubeChannel, content_type:ContentType, content):
+        url = f"https://www.youtube.com/watch?v={content['videoId']}"
+        if content_type == ContentType.STREAMS:
+            await self.discord_channel.send(f"<@&{os.getenv('ROLE_ANNOUNCEMENT')}>\n<@{yt_channel.dc_user_id}> streamt gleich! Kommt, schaut vorbei!\n\n{url}")
+        else:
+            await self.discord_channel.send(f"<@&{os.getenv('ROLE_ANNOUNCEMENT')}>\nneues Video von **<@{yt_channel.dc_user_id}>**\n\n{url}")
 
-    def get_list(self, content_type, channel_name):
-        return self.channels[channel_name][content_type]
-
-    async def handle_video(self, loop:tasks.Loop, channel:YoutubeChannel, video, content_type:ContentType):
-        video_id = video['videoId']
-
-        video_list = channel.__getattribute__(content_type.value)
-
-        if loop.current_loop == 0:
-            self.add_unique_with_limit(video_id, video_list)
-            return
-        
-        in_list = video_id in video_list
-        has_badges = 'badges' in video
-        if has_badges:
-            return
-        if not in_list:
-            url = f"https://youtu.be/{video_id}"
-            if content_type == ContentType.STREAMS:
-                await self.discord_channel.send(f"<@&{os.getenv('ROLE_ANNOUNCEMENT')}>\n<@{channel.dc_user_id}> streamt gleich! Kommt, schaut vorbei!\n\n{url}")
-            else:
-                await self.discord_channel.send(f"<@&{os.getenv('ROLE_ANNOUNCEMENT')}>\nneues Video von **<@{channel.dc_user_id}>**\n\n{url}")
-            self.add_unique_with_limit(video_id, video_list)
-
-    async def look_for_new_content(self, content_type:ContentType):
-        for channel in self.channels:
-            result = scrapetube.get_channel(channel_url=f"https://www.youtube.com/@{channel.name}", limit=KEEP_TRACK_COUNT, content_type=content_type.value)
-            reverse_result = list(result)[::-1] # so that the newsest video is at the end
-            for content in reverse_result:
-                loop = self.check_yt_livestream if content_type == ContentType.STREAMS else self.check_yt_video
-                await self.handle_video(loop, channel, content, content_type)
-
-    @tasks.loop(minutes=1)
-    async def check_yt_livestream(self):
-        if self.task_livestream_lock.locked():
-            return
-        async with self.task_livestream_lock:
-            await self.look_for_new_content(ContentType.STREAMS)
+    async def get_latest_content(self, channel:YoutubeChannel, content_type:ContentType):
+        generator = scrapetube.get_channel(
+            channel_username=channel.name,
+            limit=5,
+            content_type=content_type.value,
+            sort_by='newest')
+        skipped = []
+        for content in generator:
+            if 'badges' in content:
+                skipped.append(content)
+                continue
+            return content
+        raise Exception("No 'non-badge' content in the last 5 videos")
 
     @tasks.loop(minutes=5)
-    async def check_yt_video(self):
-        if self.task_video_lock.locked():
-            return
-        async with self.task_video_lock:
-            await self.look_for_new_content(ContentType.VIDEOS)
-            await self.look_for_new_content(ContentType.SHORTS)
+    async def check_channels(self):
+        for yt_channel in self.channels:
+            for content_type, content_cache in yt_channel.content.items():
+                latest_content = await self.get_latest_content(yt_channel, content_type)
+                log.debug(f"https://www.youtube.com/watch?v={latest_content['videoId']} is the latest {content_type}")
+                if content_cache and not content_cache['videoId'] == latest_content['videoId']:
+                    log.debug("it is new, going to post")
+                    await self.post_video(yt_channel, content_type, latest_content)
+                else:
+                    log.debug("it has been posted already")
+                yt_channel.content[content_type] = latest_content
 
 def setup(bot:Bot):
     bot.add_cog(Youtube(bot))
