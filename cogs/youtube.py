@@ -24,7 +24,7 @@ class YoutubeChannel():
 class Youtube(commands.Cog):
     def __init__(self, bot:Bot):
         self.bot = bot
-
+        return
         self.channels = [
             YoutubeChannel("gamerii", 270288996666441728)
         ]
@@ -42,6 +42,7 @@ class Youtube(commands.Cog):
 
     @commands.Cog.listener()
     async def on_ready(self):
+        return
         discord_channel = self.bot.get_channel(self.channel_id)
         if not type(discord_channel) == discord.TextChannel:
             log.error(f"type of discord_channel is not discord.TextChannel, but {type(discord_channel)}")
