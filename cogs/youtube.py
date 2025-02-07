@@ -90,7 +90,8 @@ class Youtube(commands.Cog):
             result = scrapetube.get_channel(channel_url=f"https://www.youtube.com/@{channel.name}", limit=KEEP_TRACK_COUNT, content_type=content_type.value)
             reverse_result = list(result)[::-1] # so that the newsest video is at the end
             for content in reverse_result:
-                await self.handle_video(self.check_yt_livestream, channel, content, content_type)
+                loop = self.check_yt_livestream if content_type == ContentType.STREAMS else self.check_yt_video
+                await self.handle_video(loop, channel, content, content_type)
 
     @tasks.loop(minutes=1)
     async def check_yt_livestream(self):
