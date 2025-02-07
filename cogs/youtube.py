@@ -22,7 +22,6 @@ class YoutubeChannel():
 class Youtube(commands.Cog):
     def __init__(self, bot:Bot):
         self.bot = bot
-
         self.channels = [
             YoutubeChannel("GameRii", 270288996666441728)
         ]
@@ -67,13 +66,16 @@ class Youtube(commands.Cog):
                 skipped.append(content)
                 continue
             return content
-        raise Exception("No 'non-badge' content in the last 5 videos")
+        log.error(f"No 'non-badge' {content_type} in the last 5 videos")
+        return None
 
     @tasks.loop(minutes=5)
     async def check_channels(self):
         for yt_channel in self.channels:
             for content_type, content_cache in yt_channel.content.items():
                 latest_content = await self.get_latest_content(yt_channel, content_type)
+                if not latest_content:
+                    continue
                 log.debug(f"https://www.youtube.com/watch?v={latest_content['videoId']} is the latest {content_type}")
                 if content_cache and not content_cache['videoId'] == latest_content['videoId']:
                     log.debug("it is new, going to post")
