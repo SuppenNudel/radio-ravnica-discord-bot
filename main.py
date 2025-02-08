@@ -50,7 +50,7 @@ async def on_ready():
     )
 
 if __name__ == "__main__":
-    bot.load_cogs(subdirectories=True)
+    bot.load_cogs(subdirectories=True, ignored_cogs=["ping"])
     bot.add_status_changer(
         "Puzzelt mit Blacky",
     #     discord.Game("plays with you"),
