@@ -7,6 +7,7 @@ from ezcord import log
 import discord
 from datetime import datetime
 import modules.notion as notion
+from modules import env
 import os
 import pytz
 from discord.ui import Modal
@@ -197,7 +198,7 @@ class RemindMe(commands.Cog):
             embed = discord.Embed(
                 # title="Link zur Nachricht",
                 description=description,
-                color=discord.Color.blurple(),  # You can change the embed color
+                color=env.RR_GREEN,  # You can change the embed color
                 # url=message.jump_url,
                 timestamp=timestamp
             )

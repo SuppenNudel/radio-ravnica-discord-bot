@@ -3,165 +3,99 @@ from discord.ext import commands, tasks
 import os
 from ezcord import log
 from discord import Bot
-from discord.utils import format_dt
-import googlemaps.client
-from notion_client import Client
 from datetime import datetime
 import logging
-import json
 from typing import Literal
 import requests
 import modules.notion as notion
 import modules.favicon as favicon
-import ics
-import re
+from modules import gmaps, env, ics
 
 link_log = logging.getLogger("link_logger")
 
-state_tags = json.loads(os.getenv("STATE_TAGS", "{}")) # {} is the default
+STATE_TAGS = env.STATE_TAGS
+DEBUG = env.DEBUG
+GUILD_ID = env.GUILD_ID
+EVENT_DATABASE_ID = env.EVENT_DATABASE_ID
+AREA_DATABASE_ID = env.AREA_DATABASE_ID
+CHANNEL_PAPER_EVENTS_ID = env.CHANNEL_PAPER_EVENTS_ID
 
-def create_ics_file(file_name, event_name, start_datetime, end_datetime, description=None, location=None):
-    """
-    Creates a fully compliant .ics file with DTSTAMP and consistent CRLF line endings.
-    """
-    # Create a new calendar and event
-    calendar = ics.Calendar()
-    event = ics.Event()
-
-    # Set required event properties
-    event.name = event_name
-    event.begin = start_datetime
-    event.end = end_datetime
-    if end_datetime == start_datetime:
-        event.end = end_datetime.replace(hour=end_datetime.hour + 1)
-
-    # Add DTSTAMP (current UTC time)
-    event.created = datetime.utcnow()
-
-    # Optional properties
-    if description:
-        event.description = description
-    if location:
-        event.location = location
-
-    # Add the event to the calendar
-    calendar.events.add(event)
-
-    # Serialize the calendar
-    ics_content = calendar.serialize()
-
-    # Save to file
-    with open(file_name, "wb") as file:
-        file.write(ics_content.encode("utf-8"))
-
-# Retrieve the boolean value
-def get_bool_from_env(key: str, default: bool = False) -> bool:
-    value = os.getenv(key, str(default)).lower()  # Default to 'false' if key is not found
-    return value in ("true", "1", "yes", "on")
-
-def get_timestamp_style(timestamp1: datetime, timestamp2: datetime) -> Literal["t", "F", "D"]:
+def get_timestamp_style(timestamp1: datetime, timestamp2: datetime) -> Literal["t", "D"]:
     """
     Checks if two timestamps are on the same date.
     Returns "t" for short time if on the same date,
-    otherwise returns "F" for long date and time.
+    otherwise returns "D" for long date and time.
     """
     if timestamp1.date() == timestamp2.date():
         return "t"  # Same date: short time
     else:
-        return "D"  # DiDferent dates: long date and time
+        return "D"  # Different dates: long date and time
 
 class PaperEventsNotionToForum(commands.Cog):
     def __init__(self, bot:Bot):
         self.bot = bot
-        guild_id = os.getenv("GUILD")
-        if not guild_id:
-            raise Exception(".env/GUILD not defined")
-        self.guild_id = int(guild_id)
-        self.notion = Client(auth=os.getenv("NOTION_TOKEN"))
-        self.event_database_id = os.getenv("EVENT_DATABASE_ID")
-        if not self.event_database_id:
-            raise Exception(".env/EVENT_DATABASE_ID not defined")
-        
-        self.area_database_id = os.getenv("AREA_DATABASE_ID")
-        
-        channel_paper_events = os.getenv("CHANNEL_PAPER_EVENTS")
-        if not channel_paper_events:
-            raise Exception(".env/CHANNEL_PAPER_EVENTS not defined")
-        self.channel_paper_event_id = int(channel_paper_events)
-        self.gmaps_token = os.getenv("GMAPS_TOKEN")
-        self.gmaps = googlemaps.client.Client(key=self.gmaps_token)
 
     @commands.Cog.listener()
     async def on_ready(self):
-        self.paper_event_channel = self.bot.get_channel(self.channel_paper_event_id)
+        log.debug(f"Readying {self.__class__.__name__}...")
+        
+        self.paper_event_channel:discord.ForumChannel = await discord.utils.get_or_fetch(self.bot, "channel", CHANNEL_PAPER_EVENTS_ID)
         if not type(self.paper_event_channel) == discord.ForumChannel:
             raise Exception(f"Channel is not of type Forum Channel, but {type(self.paper_event_channel)}")
+        
+        self.guild = await discord.utils.get_or_fetch(self.bot, "guild", GUILD_ID)
+
         if not self.check.is_running():
             self.check.start()
-        log.debug(self.__class__.__name__ + " is ready")
 
     @tasks.loop(minutes=5)
-    async def check(self): # checks for entries that need to be posted on discord
-        if not type(self.paper_event_channel) == discord.ForumChannel:
-            raise Exception(f"Channel is not of type Forum Channel, but {type(self.paper_event_channel)}")#
-        
-        if not self.event_database_id:
-            raise Exception("event_database_id not defined")
-        
+    async def check(self): # checks for entries that need to be posted on discord        
         today = datetime.now().strftime("%Y-%m-%d")
         filter = (
             notion.NotionFilterBuilder()
             .add_date_filter("Start (und Ende)", notion.DateCondition.ON_OR_AFTER, today)
             .add_url_filter("Link", notion.URLCondition.IS_EMPTY, True)
         ).build()
-        entries = notion.get_all_entries(database_id=self.event_database_id, filter=filter)
+        entries = notion.get_all_entries(database_id=EVENT_DATABASE_ID, filter=filter)
         for entry in entries:
-            my_entry = notion.Entry(entry)
-            debug = get_bool_from_env('DEBUG')
-            is_test_entry = my_entry.get_checkbox_property("For Test")
-            if (debug and is_test_entry) or ((not debug) and (not is_test_entry)):
-                event = PaperEvent(self, my_entry)
+            try:
+                my_entry = notion.Entry(entry)
+                is_test_entry = my_entry.get_checkbox_property("For Test")
+                if (DEBUG and is_test_entry) or ((not DEBUG) and (not is_test_entry)):
+                    author_text = my_entry.get_text_property("Author")
+                    if not author_text:
+                        raise Exception(f"No Author value")
+                    author = self.guild.get_member_named(author_text)
+                    if not author:
+                        # reject
+                        update_properties = notion.NotionPayloadBuilder().add_status("Status", "Author not found").build()
+                        update_response = notion.update_entry(my_entry.id, update_properties=update_properties)
+                        log.error(f"Author not found: {author_text}")
+                        continue
 
-                if not event.author:
-                    # reject
-                    update_properties = notion.NotionPayloadBuilder().add_status("Status", "Author not found").build()
-                    update_response = notion.update_entry(my_entry.id, update_properties=update_properties)
-                    continue
+                    event = PaperEvent(my_entry, author)
+                    tag = discord.utils.get(self.paper_event_channel.available_tags, name=event.tag_name)
 
-                tag = discord.utils.get(self.paper_event_channel.available_tags, name=event.tag_name)
-
-                log.debug(f"Going to create post in paper_event_channe: {[event.title, event.content, event.embeds, [tag], event.files]}")
-                forum_post = await self.paper_event_channel.create_thread(name=event.title, content=event.content, embeds=event.embeds, applied_tags=[tag], files=event.files)
-                channel_id = forum_post.id
-                discord_link = forum_post.jump_url
-                link_log.info(f"Created forum post: {discord_link}")
-                update_properties = (
-                    notion.NotionPayloadBuilder()
-                    .add_text("Thread ID", str(channel_id))
-                    .add_text("Server ID", str(self.guild_id))
-                    .add_status("Status", "on Discord")
-                )
-                if event.area_page_id:
-                    update_properties.add_relation("(Bundes)land", event.area_page_id)
-                update_response = notion.update_entry(page_id=my_entry.id, update_properties=update_properties.build())
-                link_log.info(f"Updated Notion page: {update_response['url']}")
+                    log.debug(f"Going to create post in paper_event_channe: {[event.title, event.content, event.embeds, [tag], event.files]}")
+                    forum_post = await self.paper_event_channel.create_thread(name=event.title, content=event.content, embeds=event.embeds, applied_tags=[tag], files=event.files)
+                    channel_id = forum_post.id
+                    discord_link = forum_post.jump_url
+                    link_log.info(f"Created forum post: {discord_link}")
+                    update_properties = (
+                        notion.NotionPayloadBuilder()
+                        .add_text("Thread ID", str(channel_id))
+                        .add_text("Server ID", str(GUILD_ID))
+                        .add_status("Status", "on Discord")
+                    )
+                    if event.area_page_id:
+                        update_properties.add_relation("(Bundes)land", event.area_page_id)
+                    update_response = notion.update_entry(page_id=my_entry.id, update_properties=update_properties.build())
+                    link_log.info(f"Updated Notion page: {update_response['url']}")
+            except Exception as e:
+                log.error(f"Beim Lesen eines Events aus Notion ist ein Fehler passiert {e.args}")
 
 class PaperEvent():
-    def __init__(self, cog:PaperEventsNotionToForum, entry:notion.Entry):
-        author = entry.get_text_property("Author")
-        log.info(f"Author Value in Notion: {author}")
-        guild:discord.Guild | None = cog.bot.get_guild(cog.guild_id)
-        if not author:
-            raise Exception(f"No Author value")
-        if not guild:
-            raise Exception(f"Guild not found: {cog.guild_id}")
-        
-        self.author = guild.get_member_named(author)
-        log.info(f"Author: {self.author}")
-        
-        if not self.author:
-            raise Exception(f"Author not found")
-        
+    async def __init__(self, entry:notion.Entry, author:discord.Member):
         title = entry.get_text_property("Event Titel")
         freitext = entry.get_text_property("Freitext")
 
@@ -182,25 +116,24 @@ class PaperEvent():
         start_datetime:datetime = date['start']
         end_datetime:datetime = date['end']
 
-        geocode_results = cog.gmaps.geocode(location, language='de')
-        country = [obj for obj in geocode_results[0]['address_components'] if 'country' in obj.get('types', [])][0]
+        location = gmaps.get_location(location)
+        country = location.country
         country_short = country['short_name']
         area_name = country['long_name']
         self.tag_name = "nicht DACH"
         if country_short == 'DE':
-            state = [obj for obj in geocode_results[0]['address_components'] if 'administrative_area_level_1' in obj.get('types', [])][0]
+            state = location.state
             state_short = state['short_name']
             area_name = state['long_name']
-            if state_short in state_tags:
-                self.tag_name = state_tags[state_short]
+            if state_short in STATE_TAGS:
+                self.tag_name = STATE_TAGS[state_short]
         else:
-            if country_short in state_tags:
-                self.tag_name = state_tags[country_short]
+            if country_short in STATE_TAGS:
+                self.tag_name = STATE_TAGS[country_short]
         
-        geo_city = [obj for obj in geocode_results[0]['address_components'] if 'locality' in obj.get('types', [])][0]
-        geo_city_long_name = geo_city['long_name']
+        geo_city_long_name = location.city['long_name']
         filter = notion.NotionFilterBuilder().add_text_filter("Name", notion.TextCondition.EQUALS, area_name).build()
-        area_response = notion.get_all_entries(database_id=cog.area_database_id, filter=filter)
+        area_response = notion.get_all_entries(database_id=AREA_DATABASE_ID, filter=filter)
 
         self.area_page_id = None
         if area_response:
@@ -221,21 +154,21 @@ class PaperEvent():
             quoted_freitext = '\n'.join([f"> {line}" for line in freitext.split('\n')])
             self.content = f"{quoted_freitext}\n\n"
 
-        self.content += f"Danke an {self.author.mention} für's Posten"
+        self.content += f"Danke an {author.mention} für's Posten"
         
         ics_file_name = "event.ics"
-        create_ics_file(ics_file_name, title, start_datetime, end_datetime, description=freitext, location=location)
+        ics.create_ics_file(ics_file_name, title, start_datetime, end_datetime, description=freitext, location=location)
 
         self.embeds = []
         fields = []
         fields.append(discord.EmbedField(
             name="Start",
-            value=f"{format_dt(start_datetime, style='F')}\n{format_dt(start_datetime, style='R')}",
+            value=f"{discord.utils.format_dt(start_datetime, style='F')}\n{discord.utils.format_dt(start_datetime, style='R')}",
             inline=True
         ))
 
         if end_datetime and end_datetime != start_datetime:
-            fields.append(discord.EmbedField(name="Ende", value=format_dt(end_datetime, style=get_timestamp_style(start_datetime, end_datetime)), inline=True))
+            fields.append(discord.EmbedField(name="Ende", value=discord.utils.format_dt(end_datetime, style=get_timestamp_style(start_datetime, end_datetime)), inline=True))
         if entry_fee:
             formatted_fee = f"{entry_fee:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
             fields.append(discord.EmbedField(name="Startgebühr", value=f"{formatted_fee} €", inline=True))
@@ -266,12 +199,7 @@ class PaperEvent():
         self.embeds.append(event_embed)
         # self.embeds.append(discord.Embed(title=title, image="https://upload.wikimedia.org/wikipedia/commons/4/45/Notion_app_logo.png", url=public_url))
 
-        location_coord = geocode_results[0]['geometry']['location']
-        long = location_coord['lng']
-        lat = location_coord['lat']
-        google_map_url = f"https://maps.googleapis.com/maps/api/staticmap?center=50.6,11&zoom=6&size=600x640&markers=color:red%257label:S%7C{lat},{long}&language=de&key={cog.gmaps_token}"
-
-        response = requests.get(google_map_url)
+        response = requests.get(gmaps.get_static_map(location))
     
         # Save the file locally
         file_path = "google_map.png"
@@ -290,7 +218,7 @@ class PaperEvent():
                 image=f"attachment://{file_path}",
                 fields=[
                     discord.EmbedField(name="Laden", value=store, inline=True),
-                    discord.EmbedField(name="Adresse", value=geocode_results[0]['formatted_address'], inline=True)
+                    discord.EmbedField(name="Adresse", value=location.formatted_address, inline=True)
                 ]
             )
         

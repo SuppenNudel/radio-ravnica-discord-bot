@@ -8,6 +8,7 @@ import platform
 
 load_dotenv()
 LOG_WEBHOOK = os.getenv("LOG_WEBHOOK")
+IS_DEBUG = bool(os.getenv("DEBUG"))
 
 ezcord.set_log(
     log_level=logging.DEBUG,
@@ -50,7 +51,10 @@ async def on_ready():
     )
 
 if __name__ == "__main__":
-    bot.load_cogs(subdirectories=True, ignored_cogs=["ping"])
+    if IS_DEBUG:
+        bot.load_extension('cogs.paper_events.paper_event_submit')
+    else:
+        bot.load_cogs(subdirectories=True, ignored_cogs=["ping"])
     bot.add_status_changer(
         "Puzzelt mit Blacky",
     #     discord.Game("plays with you"),

@@ -11,7 +11,7 @@ import time, json
 from dotenv import load_dotenv
 load_dotenv()
 notion_token = os.getenv("NOTION_TOKEN")
-notion = Client(auth=os.getenv("NOTION_TOKEN"), logger=logging.getLogger())
+notion = Client(auth=notion_token, logger=logging.getLogger())
 
 # Enums for different property types
 class TextCondition(Enum):
@@ -229,6 +229,13 @@ class NotionPayloadBuilder():
         self.payload[name] = {
             "relation": [{"id": releated_page_id}]
         }
+        return self
+
+    def add_checkbox(self, name: str, checked: bool):
+        self.payload[name] = {
+            "checkbox": checked
+        }
+        return self
 
     def build(self):
         return self.payload
