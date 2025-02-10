@@ -51,6 +51,7 @@ async def on_ready():
     )
 
 if __name__ == "__main__":
+    os.makedirs("tmp", exist_ok=True)
     if IS_DEBUG:
         bot.load_extension('cogs.paper_events.paper_event_submit')
     else:
