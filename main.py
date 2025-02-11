@@ -1,12 +1,11 @@
 import os
 import discord
 import ezcord
-from dotenv import load_dotenv
 import logging
 from ezcord import log, Bot
 import platform
+from modules import env
 
-load_dotenv()
 LOG_WEBHOOK = os.getenv("LOG_WEBHOOK")
 IS_DEBUG = bool(os.getenv("DEBUG"))
 
@@ -55,7 +54,7 @@ if __name__ == "__main__":
     if IS_DEBUG:
         bot.load_extension('cogs.paper_events.paper_event_submit')
     else:
-        bot.load_cogs(subdirectories=True, ignored_cogs=["ping"])
+        bot.load_cogs(subdirectories=True, ignored_cogs=["ping", "hack", "spelltable_event_manager"])
     bot.add_status_changer(
         "Puzzelt mit Blacky",
     #     discord.Game("plays with you"),

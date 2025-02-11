@@ -1,5 +1,8 @@
 import os
 import json
+from dotenv import load_dotenv
+
+load_dotenv()
 
 def get_int_from_env(key:str) -> int:
     value = os.getenv(key)
@@ -13,6 +16,8 @@ def get_dict_from_env(key: str, default: str = "{}") -> dict[str, str]:
     return json.loads(os.getenv(key, default))
 
 RR_GREEN = 0x25584F
+COLORLESS_EMBED = 0x36393F
+SPIKE_RED = 0x9C1D26
 DEBUG = get_bool_from_env("DEBUG")
 STATE_TAGS = get_dict_from_env("STATE_TAGS")
 GUILD_ID = get_int_from_env("GUILD")

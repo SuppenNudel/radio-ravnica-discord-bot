@@ -154,7 +154,7 @@ class PaperEvent():
             quoted_freitext = '\n'.join([f"> {line}" for line in freitext.split('\n')])
             self.content = f"{quoted_freitext}\n\n"
 
-        self.content += f"Danke an {author.mention} für's Posten"
+        self.content += f"Danke an {author.mention} für's Posten!"
         
         ics_file_name = "tmp/event.ics"
         ics.create_ics_file(ics_file_name, title, start_datetime, end_datetime, description=freitext, location=location)
@@ -200,22 +200,16 @@ class PaperEvent():
         self.embeds.append(event_embed)
         # self.embeds.append(discord.Embed(title=title, image="https://upload.wikimedia.org/wikipedia/commons/4/45/Notion_app_logo.png", url=public_url))
 
-        response = requests.get(gmaps.get_static_map(location))
-    
-        # Save the file locally
-        with open("tmp/google_map.png", "wb") as file_maps:
-            file_maps.write(response.content)
-        
         # Create a discord.File object from the downloaded file
-        file_maps = discord.File("tmp/google_map.png", filename="google_map.png")
+        file_maps = discord.File(location.file_path, filename=location.file_name)
 
         self.files = [file_maps]
         if file_thumb:
             self.files.append(file_thumb)
         google_embed = discord.Embed(
                 title="Google Maps",
-                url=f"https://www.google.com/maps/search/{location.replace(' ', '%20')}",
-                image=f"attachment://google_map.png",
+                url=location.get_search_url(),
+                image=f"attachment://{location.file_name}",
                 fields=[
                     discord.EmbedField(name="Laden", value=store, inline=True),
                     discord.EmbedField(name="Adresse", value=location.formatted_address, inline=True)
