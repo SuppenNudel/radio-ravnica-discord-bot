@@ -56,7 +56,7 @@ class Location():
         self.types = geocode_result['types']
         self.get_static_map()
         if place_details:
-            self.phone_number = place_details['international_phone_number']
+            # self.phone_number = place_details['international_phone_number']
             self.name = place_details['name']
             self.gmaps_url = place_details['url']
             self.url = place_details['website']

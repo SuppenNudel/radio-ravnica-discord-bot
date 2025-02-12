@@ -91,8 +91,11 @@ class FieldSelect(discord.ui.Select):
             if ui_item:
                 new_view = discord.ui.View(timeout=None)
                 new_view.add_item(ui_item())
-                await interaction.followup.send(f"{selected_field.field_type.text} für {selected_field.name.value}:", view=new_view) #, view=CancelView()
-                wait_response = await bot.wait_for("interaction", check=check_factory(user))
+                interaction_message = await interaction.followup.send(f"{selected_field.field_type.text} für {selected_field.name.value}:", view=new_view) #, view=CancelView()
+                wait_response:discord.interactions.Interaction = await bot.wait_for("interaction", check=check_factory(user))
+                new_view.disable_all_items()
+                new_view.stop()
+                await wait_response.response.edit_message(view=new_view)
                 selected_field.value = wait_response
             else:
                 await interaction.followup.send(f"{selected_field.field_type.text} für {selected_field.name.value}:") #, view=CancelView()
@@ -143,14 +146,16 @@ class EditTourneyView(discord.ui.View):
         payload.add_checkbox("For Test", DEBUG)
         payload.add_text("Author", self.event.author.display_name if self.event.author.display_name else self.event.author.name)
         payload.add_text("Author ID", str(self.event.author.id))
-        # payload.add_select("Event Typ", self.event.fields[pe_common.FieldName.TYPE].value or "")
+        if self.event.fields[pe_common.FieldName.TYPE].value:
+            payload.add_select("Event Typ", self.event.fields[pe_common.FieldName.TYPE].value[0])
+        if self.event.fields[pe_common.FieldName.FORMATS].value:
+            payload.add_multiselect("Format(e)", self.event.fields[pe_common.FieldName.FORMATS].value)
         payload.add_date(
             "Start (und Ende)",
             start=self.event.fields[pe_common.FieldName.START].value,
             end=self.event.fields[pe_common.FieldName.END].value
         )
         payload.add_text("Freitext", self.event.fields[pe_common.FieldName.DESCRIPTION].value or "")
-        # payload.add_multiselect("Format(e)", self.event.fields[pe_common.FieldName.FORMATS].value or "")
         if self.event.fields[pe_common.FieldName.FEE].value:
             payload.add_number("Gebühr", self.event.fields[pe_common.FieldName.FEE].value)
         location:gmaps.Location = self.event.fields[pe_common.FieldName.LOCATION].value

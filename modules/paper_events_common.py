@@ -76,10 +76,31 @@ class FormatSelect(discord.ui.Select):
             for option in options
         ]
 
+
+
+class EventTypeSelect(discord.ui.Select):
+    def __init__(self):
+        options = self.get_options()
+        super().__init__(
+            placeholder="Wähle ein Event Typ...",
+            min_values=1,
+            max_values=1,
+            options=options
+        )
+
+    def get_options(self):
+        """Generates the options dynamically based on field status."""
+        options = notion.get_select_options(EVENT_DATABASE_ID, "Event Typ")
+        return [
+            discord.SelectOption(label=option, value=option)
+            for option in options
+        ]
+
 # Defining field types
 FIELD_TYPE_TIME = FieldType("🕒", "Bitte nenne einen Zeitpunkt", lambda message: dti.parse_date(message.content) if message.content else None)
 FIELD_TYPE_TEXT = FieldType("📝", "Bitte gib einen Text ein")
 FIELD_TYPE_FORMAT = FieldType("📝", "Wähle ein Format", ui_item=FormatSelect)
+FIELD_TYPE_EVENT_TYPE = FieldType("📝", "Wähle ein Event Typ", ui_item=EventTypeSelect)
 FIELD_TYPE_NUMBER = FieldType("🔢", "Bite gib eine Zahl ein", lambda message: int(message.content) if message.content.isdigit() else None)
 # FIELD_TYPE_EMAIL = FieldType("✉️", "Gib eine Email ein", lambda x: x if "@" in x else None)
 FIELD_TYPE_IMAGE = FieldType("🖼️", "Bitte schreibe einen Link zu einem Bild oder lade ein Bild hoch", parse_image)
@@ -162,7 +183,7 @@ class PaperEvent():
             InputField(FieldName.LOCATION, FIELD_TYPE_LOCATION, mandatory=True, icon="📍", description="Wo das Event/Turnier stattfindet"),
             InputField(FieldName.FEE, FIELD_TYPE_NUMBER, icon="💸"),
             InputField(FieldName.FORMATS, FIELD_TYPE_FORMAT, icon="🎮", description=f"Welche(s) Format(e) gespielt wird/werden", mandatory=True),
-            InputField(FieldName.TYPE, FIELD_TYPE_TEXT, icon="🏷️", description="Zum Beipsiel FNM, RCQ, Prerelease..."),
+            InputField(FieldName.TYPE, FIELD_TYPE_EVENT_TYPE, icon="🏷️", description="Zum Beipsiel FNM, RCQ, Prerelease..."),
             InputField(FieldName.URL, FIELD_TYPE_TEXT, icon="🔗", description="Der Link zur Veranstaltung"),
             InputField(FieldName.IMAGE, FIELD_TYPE_IMAGE, icon="🖼️", description="Repräsentiert die Veranstaltung. Wenn nicht angegeben: Versuch Bild aus Link"),
         ]
@@ -175,7 +196,8 @@ class PaperEvent():
         else:
             formats = self.fields[FieldName.FORMATS].value
             format = ", ".join(formats) if formats else f"<{FieldName.FORMATS.value}>"
-            type = self.fields[FieldName.TYPE].value or f"<{FieldName.TYPE.value}>"
+            event_type_list = self.fields[FieldName.TYPE].value
+            type = event_type_list[0] if event_type_list else f"<{FieldName.TYPE.value}>"
             return f"{format} {type}"
     
     def get_files(self):
@@ -221,7 +243,8 @@ class PaperEvent():
             image=f"attachment://{location.file_name}",
             fields=[
                 discord.EmbedField(name="Name", value=location.name, inline=False),
-                discord.EmbedField(name="Adresse", value=location.formatted_address, inline=False)
+                discord.EmbedField(name="Adresse", value=location.formatted_address, inline=False),
+                discord.EmbedField(name="Webseite", value=location.url, inline=False)
             ],
         )
         return embed
@@ -252,7 +275,8 @@ class PaperEvent():
         formats = self.fields[FieldName.FORMATS].value
         format = ", ".join(formats) if formats else f"<{FieldName.FORMATS.value}>"
         embed.add_field(name=FieldName.FORMATS.value, value=format, inline=False)
-        type = self.fields[FieldName.TYPE].value
+        event_type_list = self.fields[FieldName.TYPE].value
+        type = event_type_list[0] if event_type_list else f"<{FieldName.TYPE.value}>"
         if type:
             embed.add_field(name=FieldName.TYPE.value, value=type, inline=True)
         return embed

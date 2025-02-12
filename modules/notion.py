@@ -204,6 +204,18 @@ class NotionPayloadBuilder():
         }
         return self
     
+    def add_multiselect(self, name: str, options: list[str]):
+        self.payload[name] = {
+            "multi_select": [{"name": option} for option in options]
+        }
+        return self
+    
+    def add_select(self, name: str, option: str):
+        self.payload[name] = {
+            "select": {"name": option}
+        }
+        return self
+
     def add_number(self, name:str, number:int|float):
         self.payload[name] = {
             "number": number
