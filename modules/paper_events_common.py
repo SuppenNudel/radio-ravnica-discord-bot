@@ -8,17 +8,26 @@ from modules import date_time_interpretation as dti
 import re
 import textwrap
 
+EVENT_DATABASE_ID = env.EVENT_DATABASE_ID
 STATE_TAGS = env.STATE_TAGS
 AREA_DATABASE_ID = env.AREA_DATABASE_ID
 
 class FieldType:
-    def __init__(self, icon, text, parser=lambda message: message.content.strip()):
+    def __init__(self, icon, text, parser=None, ui_item:type[discord.ui.Item]|None=None):
         self.icon = icon
         self.parser = parser
         self.text = text
+        self.ui_item = ui_item
 
     def parse(self, value):
-        return self.parser(value) if value else None
+        if not value:
+            return None
+        if self.parser:
+            return self.parser(value)
+        if type(value) == discord.Message:
+            return value.content.strip()
+        if type(value) == discord.Interaction:
+            return value.data['values']
 
 def is_https_image_url(url: str) -> bool:
     pattern = re.compile(r'^https:\/\/.*\.(?:png|jpg|jpeg|gif|webp|svg)(?:\?.*)?$', re.IGNORECASE)
@@ -49,10 +58,28 @@ def parse_location(message:discord.Message) -> gmaps.Location:
     location = gmaps.get_location(content, details=True)
     return location
 
+class FormatSelect(discord.ui.Select):
+    def __init__(self):
+        options = self.get_options()
+        super().__init__(
+            placeholder="Wähle ein oder mehrere Format(e)...",
+            min_values=1,
+            max_values=len(options),
+            options=options
+        )
+
+    def get_options(self):
+        """Generates the options dynamically based on field status."""
+        options = notion.get_select_options(EVENT_DATABASE_ID, "Format(e)")
+        return [
+            discord.SelectOption(label=option, value=option)
+            for option in options
+        ]
+
 # Defining field types
 FIELD_TYPE_TIME = FieldType("🕒", "Bitte nenne einen Zeitpunkt", lambda message: dti.parse_date(message.content) if message.content else None)
 FIELD_TYPE_TEXT = FieldType("📝", "Bitte gib einen Text ein")
-FIELD_TYPE_FORMAT = FieldType("📝", "Bitte gib ein Format ein")
+FIELD_TYPE_FORMAT = FieldType("📝", "Wähle ein Format", ui_item=FormatSelect)
 FIELD_TYPE_NUMBER = FieldType("🔢", "Bite gib eine Zahl ein", lambda message: int(message.content) if message.content.isdigit() else None)
 # FIELD_TYPE_EMAIL = FieldType("✉️", "Gib eine Email ein", lambda x: x if "@" in x else None)
 FIELD_TYPE_IMAGE = FieldType("🖼️", "Bitte schreibe einen Link zu einem Bild oder lade ein Bild hoch", parse_image)
@@ -134,7 +161,7 @@ class PaperEvent():
             InputField(FieldName.END, FIELD_TYPE_TIME, icon="⏳", description="Wann das Event/Turnier zu Ende ist"),
             InputField(FieldName.LOCATION, FIELD_TYPE_LOCATION, mandatory=True, icon="📍", description="Wo das Event/Turnier stattfindet"),
             InputField(FieldName.FEE, FIELD_TYPE_NUMBER, icon="💸"),
-            InputField(FieldName.FORMATS, FIELD_TYPE_TEXT, icon="🎮", description=f"Welche(s) Format(e) gespielt wird/werden", mandatory=True),
+            InputField(FieldName.FORMATS, FIELD_TYPE_FORMAT, icon="🎮", description=f"Welche(s) Format(e) gespielt wird/werden", mandatory=True),
             InputField(FieldName.TYPE, FIELD_TYPE_TEXT, icon="🏷️", description="Zum Beipsiel FNM, RCQ, Prerelease..."),
             InputField(FieldName.URL, FIELD_TYPE_TEXT, icon="🔗", description="Der Link zur Veranstaltung"),
             InputField(FieldName.IMAGE, FIELD_TYPE_IMAGE, icon="🖼️", description="Repräsentiert die Veranstaltung. Wenn nicht angegeben: Versuch Bild aus Link"),
@@ -146,7 +173,8 @@ class PaperEvent():
         if title:
             return title
         else:
-            format = self.fields[FieldName.FORMATS].value or f"<{FieldName.FORMATS.value}>"
+            formats = self.fields[FieldName.FORMATS].value
+            format = ", ".join(formats) if formats else f"<{FieldName.FORMATS.value}>"
             type = self.fields[FieldName.TYPE].value or f"<{FieldName.TYPE.value}>"
             return f"{format} {type}"
     
@@ -161,12 +189,7 @@ class PaperEvent():
     def construct_thread_title(self):
         start:datetime|None = self.fields[FieldName.START].value
         start_str = start.strftime('%d.%m.%Y') if start else f'<{FieldName.START.value}>'
-        formats:str|None = self.fields[FieldName.FORMATS].value
-        if formats:
-            formats_list = re.split(r"[, ]", formats)
-        else:
-            formats = f"<{FieldName.FORMATS.value}>"
-
+        
         title = self.build_title()
         location:gmaps.Location|None = self.fields[FieldName.LOCATION].value
         if location:
@@ -226,7 +249,8 @@ class PaperEvent():
         fee = self.fields[FieldName.FEE].value
         if fee:
             embed.add_field(name=FieldName.FEE.value, value=fee+" €", inline=True)
-        format = self.fields[FieldName.FORMATS].value or f"<{FieldName.FORMATS.value}>"
+        formats = self.fields[FieldName.FORMATS].value
+        format = ", ".join(formats) if formats else f"<{FieldName.FORMATS.value}>"
         embed.add_field(name=FieldName.FORMATS.value, value=format, inline=False)
         type = self.fields[FieldName.TYPE].value
         if type:

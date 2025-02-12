@@ -12,8 +12,11 @@ DEBUG = env.DEBUG
 SPIKE_ART_CROP = "https://cards.scryfall.io/art_crop/front/b/0/b0e90b22-6f43-4e9a-a236-f33191768813.jpg"
 
 def check_factory(user):
-    def check(m:discord.Message):
-        return m.author == user and isinstance(m.channel, discord.DMChannel)
+    def check(m:discord.Message|discord.Interaction):
+        if type(m) == discord.Message:
+            return m.author == user and isinstance(m.channel, discord.DMChannel)
+        elif type(m) == discord.Interaction:
+            return m.user == user and isinstance(m.channel, discord.DMChannel)
     return check
 
 class SubmitButton(discord.ui.Button):
@@ -37,7 +40,13 @@ class SubmitButton(discord.ui.Button):
         if type(interaction.channel) == discord.DMChannel:
             await view.send_forum_post(interaction)
         else:
-            raise Exception("interaction.channel is not a DMChannel")
+            raise Exception("interaction.channel is not a DMChannel")  
+
+## TODO let the user cancel
+# class CancelView(discord.ui.View):
+#     def __init__(self):
+#         super().__init__()
+#         self.add_item(SubmitButton())
 
 class FieldSelect(discord.ui.Select):
     """Custom select menu handling field selection."""
@@ -73,18 +82,23 @@ class FieldSelect(discord.ui.Select):
         field_name = pe_common.FieldName[selection]
         if not field_name:
             raise Exception(f"no FieldName {selection}")
-        selected_field = view.event.fields[field_name]
+        selected_field:pe_common.InputField = view.event.fields[field_name]
 
         user:discord.User = interaction.user
         bot:Bot = interaction.client
         try:
-            await interaction.followup.send(f"{selected_field.field_type.text} für {selected_field.name.value}:")
-            event_response = await bot.wait_for("message", check=check_factory(user))
-            try:
-                selected_field.value = event_response
-                preview_message = await self.view.event.send_preview(user)
-            except Exception as e:
-                await interaction.followup.send("Das hat nicht geklappt: "+str(e.args))
+            ui_item = selected_field.field_type.ui_item
+            if ui_item:
+                new_view = discord.ui.View(timeout=None)
+                new_view.add_item(ui_item())
+                await interaction.followup.send(f"{selected_field.field_type.text} für {selected_field.name.value}:", view=new_view) #, view=CancelView()
+                wait_response = await bot.wait_for("interaction", check=check_factory(user))
+                selected_field.value = wait_response
+            else:
+                await interaction.followup.send(f"{selected_field.field_type.text} für {selected_field.name.value}:") #, view=CancelView()
+                wait_response = await bot.wait_for("message", check=check_factory(user))
+                selected_field.value = wait_response
+            await self.view.event.send_preview(user)
             await user.send(view=EditTourneyView(view.event))
         except TimeoutError as e:
             await user.send("Du hast dir leider zu viel Zeit gelassen took too long to respond. Bitte versuche es noch einmal mit dem `/poste_turnier` Befehl.")

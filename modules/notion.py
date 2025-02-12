@@ -397,10 +397,24 @@ def update_database_description(database_id: str, description: str):
         print(f"Error updating database description: {e}")
         raise
 
+def get_select_options(database_id: str, field_name: str) -> list[str]:
+    logging.debug(f"retreiving select options from database {database_id} column {field_name}")
+    database:dict = notion.databases.retrieve(database_id)
+
+    # Extract options from the select or multi-select field
+    if field_name in database["properties"] and database["properties"][field_name]["type"] in ["select", "multi_select"]:
+        options = database["properties"][field_name][database["properties"][field_name]["type"]]["options"]
+        select_options = [option["name"] for option in options]
+        return select_options
+    else:
+        raise Exception(f"Field '{field_name}' not found or not a select/multi-select field.")
+
 if __name__ == "__main__":
+    EVENT_DATABASE_ID="f05d532cf91f4f9cbce38e27dc85b522"
     db_id_card_score = "179f020626c280599916d453caeb0123"
     # youtube_videos_id = "15ef020626c28097acc4ec8a14c1fcca"
     # db_id_aua_questions = "159f020626c2807d839eec8dc4bfb0a0"
-    update_database_description(db_id_card_score, "Test")
+    # update_database_description(db_id_card_score, "Test")
+    get_select_options(EVENT_DATABASE_ID, "Format(e)")
 
 # Decks seit 16.07.2024, COMP, MAJOR, PROFESSIONAL -> 4516 decks
