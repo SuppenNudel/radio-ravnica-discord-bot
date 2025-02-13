@@ -4,6 +4,7 @@ from discord import ApplicationContext, Bot, InteractionContextType, Integration
 import discord
 from modules import notion, env, gmaps
 import modules.paper_events_common as pe_common
+import traceback
 
 CHANNEL_PAPER_EVENTS_ID = env.CHANNEL_PAPER_EVENTS_ID
 EVENT_DATABASE_ID = env.EVENT_DATABASE_ID
@@ -67,7 +68,7 @@ class FieldSelect(discord.ui.Select):
         ]
 
     async def callback(self, interaction: discord.Interaction):
-        await interaction.response.defer()
+        response_message = await interaction.response.send_message("Anfrage erhalten, einen Augeblick... ⏳")
         if not self.view and not type(self.view) == EditTourneyView:
             raise Exception("view is None")
         view:EditTourneyView = self.view
@@ -91,20 +92,38 @@ class FieldSelect(discord.ui.Select):
             if ui_item:
                 new_view = discord.ui.View(timeout=None)
                 new_view.add_item(ui_item())
-                interaction_message = await interaction.followup.send(f"{selected_field.field_type.text} für {selected_field.name.value}:", view=new_view) #, view=CancelView()
+                await response_message.edit(content=f"{selected_field.field_type.text} für {selected_field.name.value}:", view=new_view) #, view=CancelView()
                 wait_response:discord.interactions.Interaction = await bot.wait_for("interaction", check=check_factory(user))
                 new_view.disable_all_items()
                 new_view.stop()
                 await wait_response.response.edit_message(view=new_view)
-                selected_field.value = wait_response
             else:
-                await interaction.followup.send(f"{selected_field.field_type.text} für {selected_field.name.value}:") #, view=CancelView()
+                await response_message.edit(content=f"{selected_field.field_type.text} für {selected_field.name.value}:") #, view=CancelView()
                 wait_response = await bot.wait_for("message", check=check_factory(user))
-                selected_field.value = wait_response
-            await self.view.event.send_preview(user)
+            parsing_message = await user.send("Eingabe wird verarbeitet, einen Augeblick... ⏳")
+            selected_field.value = wait_response
+            # show preview
+            embeds = []
+            tourney_embed = view.event.construct_event_embed()
+            if tourney_embed:
+                embeds.append(tourney_embed)
+            gmaps_embed = view.event.construct_gmaps_embed()
+            if gmaps_embed:
+                embeds.append(gmaps_embed)
+            
+            view.event.construct_gmaps_embed()
+            await parsing_message.edit(
+                content=view.event.construct_content(preview=True),
+                embeds=embeds,
+                files=view.event.get_files()
+            )
+            # await self.view.event.send_preview(user)
             await user.send(view=EditTourneyView(view.event))
         except TimeoutError as e:
-            await user.send("Du hast dir leider zu viel Zeit gelassen took too long to respond. Bitte versuche es noch einmal mit dem `/poste_turnier` Befehl.")
+            await user.send("Du hast dir leider zu viel Zeit gelassen.")
+        except Exception as e:
+            log.error(traceback.format_exc())
+            await user.send(f"Da ist etwas schief gegangen: {repr(e)}")
 
 class EditTourneyView(discord.ui.View):
     def __init__(self, event:pe_common.PaperEvent):
