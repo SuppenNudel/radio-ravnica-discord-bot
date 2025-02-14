@@ -268,15 +268,19 @@ class PaperEvent():
             embed.set_image(url=image)
         end = self.fields[FieldName.END].value
         if end:
-            embed.add_field(name=FieldName.END.value, value=discord.utils.format_dt(end, get_timestamp_style(start, end)), inline=True)
+            end_value = discord.utils.format_dt(end, get_timestamp_style(start, end))
+            embed.add_field(name=FieldName.END.value, value=end_value, inline=True)
+        if start and end:
+            embed.add_field(name="Dauer", value=dti.human_delta(end, start), inline=True)
+
         fee = self.fields[FieldName.FEE].value
         if fee:
-            embed.add_field(name=FieldName.FEE.value, value=fee+" €", inline=True)
+            embed.add_field(name=FieldName.FEE.value, value=str(fee)+" €", inline=True)
         formats = self.fields[FieldName.FORMATS].value
         format = ", ".join(formats) if formats else f"<{FieldName.FORMATS.value}>"
         embed.add_field(name=FieldName.FORMATS.value, value=format, inline=False)
         event_type_list = self.fields[FieldName.TYPE].value
-        type = event_type_list[0] if event_type_list else f"<{FieldName.TYPE.value}>"
+        type = event_type_list[0] if event_type_list else None # f"<{FieldName.TYPE.value}>"
         if type:
             embed.add_field(name=FieldName.TYPE.value, value=type, inline=True)
         return embed

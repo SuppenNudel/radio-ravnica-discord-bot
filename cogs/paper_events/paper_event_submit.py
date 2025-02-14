@@ -118,12 +118,13 @@ class FieldSelect(discord.ui.Select):
                 files=view.event.get_files()
             )
             # await self.view.event.send_preview(user)
-            await user.send(view=EditTourneyView(view.event))
         except TimeoutError as e:
             await user.send("Du hast dir leider zu viel Zeit gelassen.")
         except Exception as e:
             log.error(traceback.format_exc())
             await user.send(f"Da ist etwas schief gegangen: {repr(e)}")
+        finally:
+            await user.send(view=EditTourneyView(view.event))
 
 class EditTourneyView(discord.ui.View):
     def __init__(self, event:pe_common.PaperEvent):
@@ -160,29 +161,35 @@ class EditTourneyView(discord.ui.View):
         self.submit_button.disabled = not is_valid
 
     def save_tourney_in_notion(self, thread):
+        event:pe_common.PaperEvent = self.event
         payload = notion.NotionPayloadBuilder()
-        payload.add_title("Event Titel", self.event.build_title())
+        image:str|None = event.fields[pe_common.FieldName.IMAGE].value
+        if image:
+            payload.add_file("Cover Bild", file_url=image, file_name="Cover Image")
+
+        pe_common.FieldName.IMAGE
+        payload.add_title("Event Titel", event.build_title())
         payload.add_checkbox("For Test", DEBUG)
-        payload.add_text("Author", self.event.author.display_name if self.event.author.display_name else self.event.author.name)
-        payload.add_text("Author ID", str(self.event.author.id))
-        if self.event.fields[pe_common.FieldName.TYPE].value:
-            payload.add_select("Event Typ", self.event.fields[pe_common.FieldName.TYPE].value[0])
-        if self.event.fields[pe_common.FieldName.FORMATS].value:
-            payload.add_multiselect("Format(e)", self.event.fields[pe_common.FieldName.FORMATS].value)
+        payload.add_text("Author", event.author.display_name if event.author.display_name else event.author.name)
+        payload.add_text("Author ID", str(event.author.id))
+        if event.fields[pe_common.FieldName.TYPE].value:
+            payload.add_select("Event Typ", event.fields[pe_common.FieldName.TYPE].value[0])
+        if event.fields[pe_common.FieldName.FORMATS].value:
+            payload.add_multiselect("Format(e)", event.fields[pe_common.FieldName.FORMATS].value)
         payload.add_date(
             "Start (und Ende)",
-            start=self.event.fields[pe_common.FieldName.START].value,
-            end=self.event.fields[pe_common.FieldName.END].value
+            start=event.fields[pe_common.FieldName.START].value,
+            end=event.fields[pe_common.FieldName.END].value
         )
-        payload.add_text("Freitext", self.event.fields[pe_common.FieldName.DESCRIPTION].value or "")
-        if self.event.fields[pe_common.FieldName.FEE].value:
-            payload.add_number("Gebühr", self.event.fields[pe_common.FieldName.FEE].value)
-        location:gmaps.Location = self.event.fields[pe_common.FieldName.LOCATION].value
+        payload.add_text("Freitext", event.fields[pe_common.FieldName.DESCRIPTION].value or "")
+        if event.fields[pe_common.FieldName.FEE].value:
+            payload.add_number("Gebühr", event.fields[pe_common.FieldName.FEE].value)
+        location:gmaps.Location = event.fields[pe_common.FieldName.LOCATION].value
         payload.add_text("Name des Ladens", location.name or "")
         payload.add_text("Stadt", location.city['long_name'])
         payload.add_relation("(Bundes)land", location.get_area_page_id())
-        if self.event.fields[pe_common.FieldName.URL].value:
-            payload.add_url("URL", self.event.fields[pe_common.FieldName.URL].value)
+        if event.fields[pe_common.FieldName.URL].value:
+            payload.add_url("URL", event.fields[pe_common.FieldName.URL].value)
         payload.add_text("Server ID", str(thread.guild.id))
         payload.add_text("Thread ID", str(thread.id))
         return notion.add_to_database(database_id=EVENT_DATABASE_ID, payload=payload.build())
