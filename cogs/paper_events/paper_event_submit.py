@@ -43,12 +43,6 @@ class SubmitButton(discord.ui.Button):
         else:
             raise Exception("interaction.channel is not a DMChannel")  
 
-## TODO let the user cancel
-# class CancelView(discord.ui.View):
-#     def __init__(self):
-#         super().__init__()
-#         self.add_item(SubmitButton())
-
 class FieldSelect(discord.ui.Select):
     """Custom select menu handling field selection."""
     def __init__(self, fields:dict[pe_common.FieldName, pe_common.InputField]):
@@ -136,8 +130,23 @@ class EditTourneyView(discord.ui.View):
         self.submit_button = SubmitButton()
         self.add_item(self.select_menu)
         self.add_item(self.submit_button)
+        self.add_cancel_button(self)
 
         self.update_submit_button()
+
+    def add_cancel_button(self, view: discord.ui.View):
+        cancel_button = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.red)
+
+        # Define the cancel button's behavior
+        async def cancel_button_callback(interaction: discord.Interaction):
+            # Optionally, disable the cancel button
+            view.disable_all_items()
+            view.stop()
+            await interaction.response.edit_message(view=view)            
+            await self.event.author.send("Erstellung der Veranstaltung abgebrochen.")
+
+        cancel_button.callback = cancel_button_callback
+        view.add_item(cancel_button)
 
     async def send_forum_post(self, interaction:discord.Interaction):
         guild = self.event.guild
