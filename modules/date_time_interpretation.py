@@ -20,6 +20,7 @@ settings = {
 }
 
 timezone = pytz.timezone("Europe/Berlin")
+log.debug(f"Timezone @ date_time_interpretation: {timezone}")
 
 def parse_date(user_time_input) -> datetime | None:
     parsed_date = dateparser.parse(user_time_input, settings=settings, languages=["de"])
