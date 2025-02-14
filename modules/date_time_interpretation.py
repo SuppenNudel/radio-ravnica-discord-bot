@@ -4,6 +4,8 @@ import google.generativeai as genai
 import os
 from dateutil.relativedelta import relativedelta
 from babel.dates import format_timedelta
+import pytz
+from ezcord import log
 
 # Set up API key
 genai.configure(api_key=os.getenv("GEMINI_KEY"), transport="rest")
@@ -17,17 +19,24 @@ settings = {
     # 'RELATIVE_BASE': None,
 }
 
+timezone = pytz.timezone("Europe/Berlin")
+
 def parse_date(user_time_input) -> datetime | None:
     parsed_date = dateparser.parse(user_time_input, settings=settings, languages=["de"])
     if parsed_date:
+        log.debug(f"Parsed by dateparser: '{user_time_input}' -> {parsed_date}")
         return parsed_date
 
-    now = datetime.now()
+    now = datetime.now(tz=timezone)
 
     # Generate text
-    response = model.generate_content(f"Jetzt ist {now}. Welches Datum und Uhrzeit ist {user_time_input}? Prüfe das Ergebnis nochmal nach! Gib mir nur das Datum mit Uhrzeit.")
+    prompt = f"Jetzt ist {now}. Welches Datum und Uhrzeit ist {user_time_input}? Prüfe das Ergebnis nochmal nach! Gib mir nur das Datum mit Uhrzeit."
+    log.debug(f"Gemini Prompt: {prompt}")
+    response = model.generate_content(prompt)
     response_date = response.text.strip()
+    log.debug(f"Gemini Response: {response_date}")
     parsed_date = dateparser.parse(response_date, settings=settings , languages=["de"])
+    log.debug(f"Parsed by dateparser after gemini: '{user_time_input}' -> {parsed_date}")
 
     return parsed_date
 
