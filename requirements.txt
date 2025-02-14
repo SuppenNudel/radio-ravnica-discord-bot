@@ -10,4 +10,4 @@ python-dateutil
 dateparser
 google-generativeai
 atproto
-babel python-dateutil
+babel
