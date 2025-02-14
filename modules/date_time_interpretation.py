@@ -16,11 +16,13 @@ settings = {
     'RETURN_AS_TIMEZONE_AWARE': True,
     'PREFER_DAY_OF_MONTH': 'first',
     'PREFER_DATES_FROM': 'future',
+    'TIMEZONE': 'Europe/Berlin'
     # 'RELATIVE_BASE': None,
 }
 
 timezone = pytz.timezone("Europe/Berlin")
-log.debug(f"Timezone @ date_time_interpretation: {timezone}")
+log.debug(f"Timezone @ date_time_interpretation")
+log.debug(timezone)
 
 def parse_date(user_time_input) -> datetime | None:
     parsed_date = dateparser.parse(user_time_input, settings=settings, languages=["de"])
