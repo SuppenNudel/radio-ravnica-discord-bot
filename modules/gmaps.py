@@ -59,7 +59,7 @@ class Location():
             # self.phone_number = place_details['international_phone_number']
             self.name = place_details['name']
             self.gmaps_url = place_details['url']
-            self.url = place_details['website']
+            self.url = place_details['website'] if 'website' in place_details else None
 
     def get_area_and_tag_name(self):
         country_short = self.country['short_name']

@@ -236,16 +236,18 @@ class PaperEvent():
         location:gmaps.Location|None = self.fields[FieldName.LOCATION].value
         if not location:
             return None
+        embed_fields = [
+                discord.EmbedField(name="Name", value=location.name, inline=False),
+                discord.EmbedField(name="Adresse", value=location.formatted_address, inline=False),
+            ]
+        if location.url:
+            embed_fields.append(discord.EmbedField(name="Webseite", value=location.url, inline=False))
         embed = discord.Embed(
             color=env.RR_GREEN,
             title="Google Maps",
             url=location.get_search_url(),
             image=f"attachment://{location.file_name}",
-            fields=[
-                discord.EmbedField(name="Name", value=location.name, inline=False),
-                discord.EmbedField(name="Adresse", value=location.formatted_address, inline=False),
-                discord.EmbedField(name="Webseite", value=location.url, inline=False)
-            ],
+            fields=embed_fields,
         )
         return embed
     
