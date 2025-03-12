@@ -220,21 +220,18 @@ class RemindMe(commands.Cog):
             if reason:
                 content += f"\nGrund: {reason}"
             
+            files = []
             if message:
                 # Attachments
                 if message.attachments:
                     for attachment in message.attachments:
                         file = await attachment.to_file()
-                        embed.set_image(url=attachment.url)  # If the attachment is an image
+                        files.append(file)
+                        # embed.set_image(url=attachment.url)  # If the attachment is an image
                         # Optionally, you can also send the file with the embed if you want
-                        await user.send(
-                            content=content,
-                            embed=embed,
-                            file=file
-                        )
 
             # Send the embed to the user via DM
-            await user.send(content=content, embed=embed)
+            await user.send(content=content, embed=embed files=files)
             log.debug(f"Message forwarded to {user.name} via DM.")
             return True
         except discord.NotFound:
