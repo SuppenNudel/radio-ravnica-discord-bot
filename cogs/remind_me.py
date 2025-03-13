@@ -231,7 +231,7 @@ class RemindMe(commands.Cog):
                         # Optionally, you can also send the file with the embed if you want
 
             # Send the embed to the user via DM
-            await user.send(content=content, embed=embed files=files)
+            await user.send(content=content, embed=embed, files=files)
             log.debug(f"Message forwarded to {user.name} via DM.")
             return True
         except discord.NotFound:
