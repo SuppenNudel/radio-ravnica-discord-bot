@@ -5,13 +5,13 @@ from datetime import datetime
 import logging
 from notion_client.helpers import collect_paginated_api
 from enum import Enum
-from typing import Union, Type
+from typing import Union, Type, Literal
 import time, json
 
 from dotenv import load_dotenv
 load_dotenv()
 notion_token = os.getenv("NOTION_TOKEN")
-notion = Client(auth=os.getenv("NOTION_TOKEN"), logger=logging.getLogger())
+notion = Client(auth=notion_token, logger=logging.getLogger())
 
 # Enums for different property types
 class TextCondition(Enum):
@@ -204,6 +204,18 @@ class NotionPayloadBuilder():
         }
         return self
     
+    def add_multiselect(self, name: str, options: list[str]):
+        self.payload[name] = {
+            "multi_select": [{"name": option} for option in options]
+        }
+        return self
+    
+    def add_select(self, name: str, option: str):
+        self.payload[name] = {
+            "select": {"name": option}
+        }
+        return self
+
     def add_number(self, name:str, number:int|float):
         self.payload[name] = {
             "number": number
@@ -229,6 +241,33 @@ class NotionPayloadBuilder():
         self.payload[name] = {
             "relation": [{"id": releated_page_id}]
         }
+        return self
+
+    def add_checkbox(self, name: str, checked: bool):
+        self.payload[name] = {
+            "checkbox": checked
+        }
+        return self
+
+    def add_file(self, name: str, file_url: str, file_name: str="Image", file_type: Literal["external", "file"] = "external"):
+        """
+        Adds a file or media item to the payload.
+
+        :param name: The name of the Notion property.
+        :param file_url: The URL of the file.
+        :param file_name: The name of the file (Notion requires this field).
+        :param file_type: Type of the file, either 'external' (default) or 'file' (for Notion-hosted files).
+        """
+        self.payload[name] = {
+            "files": [{
+                "name": file_name,  # Notion requires a name field
+                "type": file_type,
+                file_type: {
+                    "url": file_url
+                }
+            }]
+        }
+        return self
 
     def build(self):
         return self.payload
@@ -340,7 +379,7 @@ def remove_duplicates(entries):
         notion.blocks.delete(block_id=entry_id)
         print(f"Deleted entry with ID: {entry_id}")
 
-def add_or_update_entry(database_id: str, filter: dict, payload: dict):
+def add_or_update_entry(database_id: str, payload: dict, filter: dict|None=None):
     """
     Updates an entry if it exists or creates a new one if not.
 
@@ -349,19 +388,22 @@ def add_or_update_entry(database_id: str, filter: dict, payload: dict):
     :param payload: The properties of the entry to create or update.
     :return: The response from Notion API (creation or update).
     """
-    # Get all matching entries
-    matching_entries = get_all_entries(database_id, filter=filter)
+    if filter:
+        # Get all matching entries
+        matching_entries = get_all_entries(database_id, filter=filter)
 
-    if matching_entries:
-        if len(matching_entries) > 1:
-            raise Exception("Multiple entries found, not going to update")
-        # Update the first matching entry
-        page_id = matching_entries[0]["id"]
-        # print(f"Updating entry with ID: {page_id}")
-        response = update_entry(page_id, payload)
+        if matching_entries:
+            if len(matching_entries) > 1:
+                raise Exception("Multiple entries found, not going to update")
+            # Update the first matching entry
+            page_id = matching_entries[0]["id"]
+            # print(f"Updating entry with ID: {page_id}")
+            response = update_entry(page_id, payload)
+        else:
+            # Create a new entry
+            # print("No matching entry found. Creating a new entry.")
+            response = add_to_database(database_id, payload)
     else:
-        # Create a new entry
-        # print("No matching entry found. Creating a new entry.")
         response = add_to_database(database_id, payload)
     
     return response
@@ -390,10 +432,29 @@ def update_database_description(database_id: str, description: str):
         print(f"Error updating database description: {e}")
         raise
 
+def get_select_options(database_id: str, field_name: str) -> list[str]:
+    logging.debug(f"retreiving select options from database {database_id} column {field_name}")
+    database:dict = notion.databases.retrieve(database_id)
+
+    # Extract options from the select or multi-select field
+    if field_name in database["properties"] and database["properties"][field_name]["type"] in ["select", "multi_select"]:
+        options = database["properties"][field_name][database["properties"][field_name]["type"]]["options"]
+        select_options = [option["name"] for option in options]
+        return select_options
+    else:
+        raise Exception(f"Field '{field_name}' not found or not a select/multi-select field.")
+
 if __name__ == "__main__":
+    EVENT_DATABASE_ID="f05d532cf91f4f9cbce38e27dc85b522"
     db_id_card_score = "179f020626c280599916d453caeb0123"
     # youtube_videos_id = "15ef020626c28097acc4ec8a14c1fcca"
     # db_id_aua_questions = "159f020626c2807d839eec8dc4bfb0a0"
-    update_database_description(db_id_card_score, "Test")
+    # update_database_description(db_id_card_score, "Test")
+    # get_select_options(EVENT_DATABASE_ID, "Format(e)")
+    payload = (NotionPayloadBuilder()
+     .add_file("Cover Bild", "https://galerie.ultracomix-shop.de/cdn/shop/files/1.png", "Cover Image")
+     .add_title("Event Titel", "Test Titel")
+     .add_checkbox("For Test", True)).build()
+    add_or_update_entry(EVENT_DATABASE_ID, payload=payload)
 
 # Decks seit 16.07.2024, COMP, MAJOR, PROFESSIONAL -> 4516 decks

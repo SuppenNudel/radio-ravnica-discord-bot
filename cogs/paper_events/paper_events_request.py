@@ -2,7 +2,7 @@ from ezcord import Cog, log
 import discord
 from discord.ext.commands import slash_command
 from discord import ApplicationContext, Bot, Embed, Color
-from modules import gmaps, notion
+from modules import gmaps, notion, env
 import os
 from discord.utils import format_dt
 
@@ -13,7 +13,6 @@ DB_PAPER_EVENTS_ID = "f05d532cf91f4f9cbce38e27dc85b522"
 class PaperEventsRequest(Cog):
     def __init__(self, bot:Bot):
         self.bot = bot
-        self.gmaps = gmaps.DistanceCalculator(gmaps_token=gmaps_token)
 
     @Cog.listener()
     async def on_ready(self):
@@ -40,7 +39,7 @@ class PaperEventsRequest(Cog):
             }
             destinations.append(address)
 
-        results = self.gmaps.get_distances(f"{plz} {land if land else ''}", destinations)
+        results = gmaps.get_distances(f"{plz} {land if land else ''}", destinations)
 
         # Attach distance and duration values to the events
         for address, data in results.items():
@@ -96,7 +95,7 @@ class PaperEventsRequest(Cog):
 
             entry:notion.Entry = event["entry"]
             url = entry.get_formula_property("Link")
-            embed = Embed(title=title, color=Color.blue(), url=url)
+            embed = Embed(title=title, color=env.RR_GREEN, url=url)
             embed.add_field(name="Start", value=start, inline=False)
             embed.add_field(name="Adresse", value=address, inline=False)
             embed.add_field(name="Entfernung", value=distance, inline=True)

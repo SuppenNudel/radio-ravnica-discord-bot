@@ -9,3 +9,5 @@ beautifulsoup4
 python-dateutil
 dateparser
 google-generativeai
+atproto
+babel
