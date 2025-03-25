@@ -52,7 +52,7 @@ async def on_ready():
 if __name__ == "__main__":
     os.makedirs("tmp", exist_ok=True)
     if IS_DEBUG:
-        bot.load_extension('cogs.remind_me')
+        bot.load_extension('cogs.arena_daily_deals')
     else:
         bot.load_cogs(subdirectories=True, ignored_cogs=["ping", "hack", "spelltable_event_manager", "notion_to_forum"])
     bot.add_status_changer(
