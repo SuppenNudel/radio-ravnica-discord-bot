@@ -52,9 +52,9 @@ async def on_ready():
 if __name__ == "__main__":
     os.makedirs("tmp", exist_ok=True)
     if IS_DEBUG:
-        bot.load_extension('cogs.remind_me')
+        bot.load_extension('cogs.spelltable.spelltable_tournament')
     else:
-        bot.load_cogs(subdirectories=True, ignored_cogs=["ping", "hack", "spelltable_event_manager", "notion_to_forum"])
+        bot.load_cogs(subdirectories=True, ignored_cogs=["ping", "hack", "spelltable_tournament", "notion_to_forum"])
     bot.add_status_changer(
         "Puzzelt mit Blacky",
     #     discord.Game("plays with you"),
