@@ -8,6 +8,7 @@ from datetime import datetime
 import os, json, re
 from modules import swiss_mtg
 from modules import env
+from modules import table_to_image
 
 test_participants = []
 
@@ -200,6 +201,31 @@ def format_standings(tournament:swiss_mtg.SwissTournament) -> str:
 
     return f"Platzierungen nach der {round.round_number}. Runde\n```{header}{txt}```"
 
+def image_from_standings(tournament:SpelltableTournament) -> str:
+    round = tournament.swiss_tournament.current_round()
+    players = list({player for match in round.matches for player in (match.player1, match.player2) if player is not None})
+    swiss_mtg.sort_players_by_standings(players)
+
+    rows = [[
+        rank+1,
+        player.name,
+        player.calculate_match_points(),
+        player.get_match_results(),
+        f"{player.calculate_opponent_match_win_percentage():.4%}",
+        f"{player.calculate_game_win_percentage():.4%}",
+        f"{player.calculate_opponent_game_win_percentage():.4%}",
+    ] for rank, player in enumerate(players)]
+
+    data = {
+        "headers": ["Rang", "Name", "Punkte", "Matches", "OMW", "GW", "OGW"],
+        "rows": rows
+    }
+    id = tournament.get_id()
+    filename = f'tournaments/{id.replace("/", "_")}_standings_round_{round.round_number}.png'
+    table_to_image.generate_image(data, filename)
+
+    return filename
+
 class StartNextRoundView(discord.ui.View):
     def __init__(self, round, tournament:SpelltableTournament):
         super().__init__(timeout=None)
@@ -276,22 +302,26 @@ class ReportMatchModal(discord.ui.Modal):
         await self.round.message_pairings.edit(embed=new_embed)
         
         if self.round.is_concluded():
-            table_text = format_standings(self.tournament.swiss_tournament)
+            # table_text = format_standings(self.tournament.swiss_tournament)
+            image = image_from_standings(self.tournament)
+            file = discord.File(image, filename=image)
             if self.tournament.swiss_tournament.current_round().round_number >= self.tournament.swiss_tournament.max_rounds:
                 # tournament finished
                 swiss_mtg.sort_players_by_standings(self.tournament.swiss_tournament.players)
                 winner = self.tournament.swiss_tournament.players[0]
+                content = f"Finales Ergebnis!\nHerzlichen Glückwunsch <@{winner.player_id}> für den Sieg"
                 if self.round.message_standings:
-                    await self.round.message_standings.edit(content=f"Finales Ergebnis!\nHerzlichen Glückwunsch <@{winner.player_id}> für den Sieg\n{table_text}")
+                    await self.round.message_standings.edit(file=file, content=content)
                 else:
-                    message_standings = await interaction.followup.send(f"Finales Ergebnis!\nHerzlichen Glückwunsch <@{winner.player_id}> für den Sieg\n{table_text}")#, embed=embed)
+                    message_standings = await interaction.followup.send(file=file, content=content)
                     self.round.message_standings = message_standings
             else:
+                content = f"Platzierungen nach der {self.tournament.swiss_tournament.current_round().round_number}. Runde"
                 start_next_round_view = StartNextRoundView(self.round, self.tournament)
                 if self.round.message_standings:
-                    await self.round.message_standings.edit(content=table_text, view=start_next_round_view)#, embed=embed)
+                    await self.round.message_standings.edit(content=content, view=start_next_round_view, file=file)#, embed=embed)
                 else:
-                    message_standings = await interaction.followup.send(content=table_text, view=start_next_round_view)#, embed=embed)
+                    message_standings = await interaction.followup.send(content=content, view=start_next_round_view, file=file)#, embed=embed)
                     self.round.message_standings = message_standings
             # TODO Enable "Runde beenden" Button (only usable by TO/Manager)
             # after that button is clicked, calculate Standings and disable Report Match Result Button
@@ -340,11 +370,13 @@ class ReportMatchView(discord.ui.View):
                         # tournament finished
                     else:
                         start_next_round_view = StartNextRoundView(self.round, self.tournament)
-                        text = format_standings(self.tournament.swiss_tournament)
+                        content = f"Platzierungen nach der {self.tournament.swiss_tournament.current_round().round_number}. Runde"
+                        image = image_from_standings(self.tournament)
+                        file = discord.File(image, filename=image)
                         if self.round.message_standings:
-                            await self.round.message_standings.edit(content=text, view=start_next_round_view) #, embed=embed)
+                            await self.round.message_standings.edit(content=content, view=start_next_round_view, file=file) #, embed=embed)
                         else:
-                            message_standings = await interaction.followup.send(content=text, view=start_next_round_view)#, embed=embed)
+                            message_standings = await interaction.followup.send(content=content, view=start_next_round_view, file=file)#, embed=embed)
                             self.round.message_standings = message_standings
 
                 save_tournament(self.tournament)
