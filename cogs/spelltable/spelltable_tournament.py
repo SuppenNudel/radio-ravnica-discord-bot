@@ -205,14 +205,17 @@ class StartNextRoundView(discord.ui.View):
         self.tournament = tournament
         self.previous_round:swiss_mtg.Round = round
 
-        self.join_button.custom_id = StartNextRoundView.join_button_id(round, tournament)
+        self.next_round_button.custom_id = StartNextRoundView.join_button_id(round, tournament)
 
     @classmethod
     def join_button_id(cls, round:swiss_mtg.Round, tournament:SpelltableTournament):
         return f"start_next_round_{tournament.get_id()}_{round.round_number}"
     
     @discord.ui.button(label="Nächte Runde", style=discord.ButtonStyle.success, emoji="➡️", custom_id="start_next_round_placeholder")
-    async def join_button(self, button: discord.ui.Button, interaction: discord.Interaction):
+    async def next_round_button(self, button: discord.ui.Button, interaction: discord.Interaction):
+        if interaction.user != self.tournament.organizer:
+            await interaction.respond("Nur der Turn Organisator darf dies tun.")
+            return
         await self.previous_round.message_pairings.edit(view=None)
         await self.previous_round.message_standings.edit(view=None)
         await interaction.respond(f"Berechne Paarungen für Runde {self.previous_round.round_number+1}...", ephemeral=True)
@@ -488,27 +491,6 @@ class ParticipationView(discord.ui.View):
         self.tentative_button.custom_id = f"tentative_{tournament_id}"
         self.edit_button.custom_id = f"edit_{tournament_id}"
         self.start_button.custom_id = f"start_{tournament_id}"
-
-class ConfirmView(discord.ui.View):
-    def __init__(self):
-        super().__init__()
-        self.answer = None
-
-    @discord.ui.button(label="Sieht gut aus", style=discord.ButtonStyle.primary, emoji="👍")
-    async def confirm_callback(self, button:discord.ui.Button, interaction:discord.Interaction):
-        self.answer = True
-        self.disable_all_items()
-        await interaction.response.edit_message(view=self)
-        # await interaction.respond("OK erhalten")
-        self.stop()
-
-    @discord.ui.button(label="Abbrechen", style=discord.ButtonStyle.blurple, emoji="❌")
-    async def edit_callback(self, button:discord.ui.Button, interaction:discord.Interaction):
-        self.answer = False
-        self.disable_all_items()
-        await interaction.response.edit_message(view=self)
-        await interaction.respond("Ich breche ab! Bitte wiederhole die Erstellung.")
-        self.stop()
 
 class EnterTextModal(discord.ui.Modal):
     def __init__(self, input:discord.ui.InputText, key, tournament:SpelltableTournament, view:"EditTournamentView", parse=None):
