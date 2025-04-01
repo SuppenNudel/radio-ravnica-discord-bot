@@ -5,36 +5,68 @@ import discord
 from modules import date_time_interpretation
 from discord.utils import format_dt
 from datetime import datetime
-import os, json
+import os, json, re
 from modules import swiss_mtg
-import random
 
-test_participants = [
-    270288996666441728,
-    356120044754698252,
-    408731851771871232,
-    200627557157175296,
-    474617962129522692,
-    1034159825711546398,
-    792817438151934003,
-    331894482544885760,
-    319870394238763008
-]
+test_participants = []
 
-TOURNAMENT_FILE = "tournaments.json"
+IS_DEBUG = bool(os.getenv("DEBUG"))
 
-def load_tournaments():
-    if os.path.exists(TOURNAMENT_FILE):
-        with open(TOURNAMENT_FILE, "r") as f:
-            return json.load(f)
-    return {}
+if IS_DEBUG:
+    with open("test_participants.txt", "r", encoding="utf-8") as file:
+        test_participants = [int(line.strip()) for line in file]  # Splits by spaces
 
+EMOJI_PATTERN = re.compile("[\U0001F300-\U0001F6FF\U0001F900-\U0001F9FF\U0001FA70-\U0001FAFF\U0001F600-\U0001F64F]+", flags=re.UNICODE)
+TOURNAMENTS_FOLDER = "tournaments"
 
-active_tournaments = load_tournaments()
+class CustomJSONEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if hasattr(obj, "serialize"):  # Check if the object has a serialize() method
+            mapping = obj.serialize()
+            mapping["class"] = type(obj).__name__
+            return mapping
+        return super().default(obj)
+
+active_tournaments:dict[str, "SpelltableTournament"] = {}
+
+async def load_tournaments(bot) -> dict[str, "SpelltableTournament"]:
+    tournaments = {}
+
+    if not os.path.exists(TOURNAMENTS_FOLDER):
+        os.makedirs(TOURNAMENTS_FOLDER)  # Ensure the folder exists
+
+    for filename in os.listdir(TOURNAMENTS_FOLDER):
+        if filename.endswith(".json"):
+            file_path = os.path.join(TOURNAMENTS_FOLDER, filename)
+            with open(file_path, "r") as file:
+                json_data = file.read()
+                try:
+                    raw_dict = json.loads(json_data)
+                    tournament = await SpelltableTournament.deserialize(raw_dict, bot)
+                    tournament_id = filename[:-5].replace("_", "/")  # Convert back to original ID format
+                    tournaments[tournament_id] = tournament
+                except Exception as e:
+                    print(f"Failed to load {filename}: {e}")
+
+    return tournaments
 
 def save_tournaments():
-    with open(TOURNAMENT_FILE, "w") as f:
-        json.dump(active_tournaments, f, indent=4)
+    for tournament in active_tournaments.values():
+        save_tournament(tournament)
+
+def save_tournament(tournament: "SpelltableTournament"):
+    # Ensure the directory exists
+    os.makedirs(TOURNAMENTS_FOLDER, exist_ok=True)
+
+    # Convert tournament ID (slashes to underscores) for filename
+    filename = tournament.get_id().replace("/", "_") + ".json"
+    file_path = os.path.join(TOURNAMENTS_FOLDER, filename)
+
+    try:
+        with open(file_path, "w") as file:
+            json.dump(tournament, file, cls=CustomJSONEncoder, indent=4)
+    except Exception as e:
+        print(f"Error saving tournament {tournament.get_id()}: {e}")
 
 class SpelltableTournament():
     def __init__(self, title:str, organizer:discord.Member|discord.User):
@@ -42,22 +74,37 @@ class SpelltableTournament():
         self.description = None
         self.time:datetime = None
         self.organizer = organizer
-        self.participants = []
+        self.participants:list[int] = []
         self.declined = []
         self.tentative = []
-        self.message:discord.Message = None
+        self.message:discord.message.Message = None
+        self.swiss_tournament:swiss_mtg.SwissTournament = None
 
-        self.participants.extend(test_participants)
+        if IS_DEBUG:
+            self.participants.extend(test_participants)
+
+    def get_id(self):
+        return f"{self.message.guild.id}/{self.message.channel.id}/{self.message.id}"
 
     @classmethod
-    def deserialize(cls, data, organizer, message):
+    async def deserialize(cls, data, bot:Bot): #, organizer, message):
+        channel:discord.TextChannel = await discord.utils.get_or_fetch(bot, "channel", data["channel_id"])
+        message = await channel.fetch_message(data["message_id"])
+        organizer:discord.Member = await bot.get_or_fetch_user(data["organizer_id"])
+
         tournament = cls(data["name"], organizer)
         tournament.description = data["description"]
-        tournament.time = datetime.fromisoformat(data["time"])
+        if "time" in data and data["time"]:
+            tournament.time = datetime.fromisoformat(data["time"])
         tournament.participants = data["participants"]
         tournament.declined = data["declined"]
         tournament.tentative = data["tentative"]
         tournament.message = message
+
+        if "tournament" in data and data["tournament"]:
+            swiss_tournament_data = data['tournament']
+            tournament.swiss_tournament = await swiss_mtg.SwissTournament.deserialize(swiss_tournament_data, channel)
+        
         return tournament
     
     def serialize(self):
@@ -65,13 +112,14 @@ class SpelltableTournament():
             "name": self.title,
             "organizer_id": self.organizer.id,
             "description": self.description,
-            "time": self.time.isoformat(),
+            "time": self.time.isoformat() if self.time else None,
             "participants": self.participants,
             "declined": self.declined,
             "tentative": self.tentative,
             "guild_id": self.message.guild.id,
             "message_id": self.message.id,
-            "channel_id": self.message.channel.id
+            "channel_id": self.message.channel.id,
+            "tournament": self.swiss_tournament
         }
 
     async def user_state(self, userid, state):
@@ -98,121 +146,263 @@ class SpelltableTournament():
         if self.organizer:
             embed.set_author(name=self.organizer.display_name, icon_url=self.organizer.avatar.url)
         if self.time:
-            formatted_time = discord.utils.format_dt(self.time)
-            embed.add_field(name="Start", value=formatted_time, inline=False)
+            embed.add_field(name="Start", value=discord.utils.format_dt(self.time, "F")+"\n"+discord.utils.format_dt(self.time, 'R'), inline=False)
         embed.add_field(name="✅ Teilnehmer", value="\n".join([f"<@{p}>" for p in self.participants]), inline=True)
         embed.add_field(name="❌ Abgelehnt", value="\n".join([f"<@{p}>" for p in self.declined]), inline=True)
         embed.add_field(name="❓ Vielleicht", value="\n".join([f"<@{p}>" for p in self.tentative]), inline=True)
         return embed
+    
+
+def format_standings_by_tournament(round_no:int, players:list[swiss_mtg.Player]) -> Embed:
+    swiss_mtg.sort_players_by_standings(players)
+    embed = Embed(
+        title=f"Platzierungen nach der {round_no}. Runde",
+        # description=f"Die Spieler wurden zufällig gepaart. Viel Erfolg!\n\n{'\n'.join(bye_pairings)}",
+        color=Color.from_rgb(37, 88, 79),
+        fields=[
+            discord.EmbedField(
+                name="Platz",
+                value="\n".join([f"{rank}" for rank in range(1, len(players)+1)]),
+                inline=True
+            ),
+            discord.EmbedField(
+                name="Spieler",
+                value="\n".join([f"<@{player.player_id}>" for player in players]),
+                inline=True
+            ),
+            discord.EmbedField(
+                name="Match Punkte",
+                value="\n".join([f"{player.calculate_match_points()}" for player in players]),
+                inline=True
+            ),
+        ]
+    )
+
+    return embed
+
+def format_standings(tournament:swiss_mtg.SwissTournament) -> str:
+    round = tournament.current_round()
+    final_round = round.round_number == tournament.max_rounds
+    players = list({player for match in round.matches for player in (match.player1, match.player2) if player is not None})
+    swiss_mtg.sort_players_by_standings(players)
+
+    max_length = max(len(player.name) for player in players) + 2
+
+    header = f"{'Rang':<5}{'Name':<{max_length}}{'Punkte':<8}{'Matches':<10}"
+    if final_round:
+        header += f"{'OMW':<12}{'GW':<12}{'OGW':<12}"
+    txt = ""
+    for rank, player in enumerate(players):
+        txt += f"\n{rank+1:<5}{player.name:<{max_length}}{player.calculate_match_points():<8}{player.get_match_results():<10}"
+        if final_round:
+            txt += f"{player.calculate_opponent_match_win_percentage():<12.4%}{player.calculate_game_win_percentage():<12.4%}{player.calculate_opponent_game_win_percentage():<12.4%}"
+
+    return f"Platzierungen nach der {round.round_number}. Runde\n```{header}{txt}```"
+
+class StartNextRoundView(discord.ui.View):
+    def __init__(self, round, tournament:SpelltableTournament):
+        super().__init__(timeout=None)
+        self.tournament = tournament
+        self.previous_round:swiss_mtg.Round = round
+
+        self.join_button.custom_id = StartNextRoundView.join_button_id(round, tournament)
+
+    @classmethod
+    def join_button_id(cls, round:swiss_mtg.Round, tournament:SpelltableTournament):
+        return f"start_next_round_{tournament.get_id()}_{round.round_number}"
+    
+    @discord.ui.button(label="Nächte Runde", style=discord.ButtonStyle.success, emoji="➡️", custom_id="start_next_round_placeholder")
+    async def join_button(self, button: discord.ui.Button, interaction: discord.Interaction):
+        await self.previous_round.message_pairings.edit(view=None)
+        await self.previous_round.message_standings.edit(view=None)
+        await interaction.respond(f"Berechne Paarungen für Runde {self.previous_round.round_number+1}...", ephemeral=True)
+        round = self.tournament.swiss_tournament.pair_players()
+        reportMatchView = ReportMatchView(round, self.tournament)
+        message_pairings:discord.message.Message = await self.previous_round.message_standings.reply(embed=format_pairings(round), view=reportMatchView)
+        round.message_pairings = message_pairings
+        save_tournament(self.tournament)
 
 class ReportMatchModal(discord.ui.Modal):
-    def __init__(self, round:int, pairings, player1: swiss_mtg.Player, player2: swiss_mtg.Player, message):
+    def __init__(self, tournament:SpelltableTournament, round:swiss_mtg.Round, match:swiss_mtg.Match):
         super().__init__(title="Report Match Result")
-        self.player1 = player1
-        self.player2 = player2
+        self.tournament = tournament
+        self.match = match
         self.round = round
-        self.message = message
-        self.pairings = pairings
 
         self.p1_score = discord.ui.InputText(
-            label=f"Player 1 - {player1.user.name}",
+            label=f"Player 1 - {match.player1.user.name}",
             placeholder="",
-            required=True
+            required=True,
+            value=match.wins[match.player1] or "0" if match.is_finished() else ""
         )
         self.add_item(self.p1_score)
         self.p2_score = discord.ui.InputText(
-            label=f"Player 2 - {player2.user.name}",
+            label=f"Player 2 - {match.player2.user.name}",
             placeholder="",
-            required=True
+            required=True,
+            value=match.wins[match.player2] or "0" if match.is_finished() else ""
         )
         self.add_item(self.p2_score)
         self.draw_score = discord.ui.InputText(
             label=f"Draws",
             placeholder="",
-            required=False
+            required=False,
+            value=match.wins["draws"]
         )
         self.add_item(self.draw_score)
 
     async def callback(self, interaction: discord.Interaction):
+        p1_user:discord.Member = self.match.player1.user
+        p2_user:discord.Member = self.match.player2.user
+        try:
+            self.match.set_result(int(self.p1_score.value), int(self.p2_score.value), int(self.draw_score.value) if self.draw_score.value else 0)
+        except ValueError as e:
+            await interaction.respond(f"Dein Match Resultat {int(self.p1_score.value)}-{int(self.p2_score.value)}-{int(self.draw_score.value) if self.draw_score.value else 0} ist invalide: {e}", ephemeral=True)
+            return
+
         await interaction.response.send_message(
-            f"Match result submitted: **{self.player1.user.mention}** vs **{self.player2.user.mention}** → {self.p1_score.value}-{self.p2_score.value}-{self.draw_score.value if self.draw_score.value else 0}",
+            f"Match result submitted: **{p1_user.mention}** vs **{p2_user.mention}** → {self.p1_score.value}-{self.p2_score.value}-{self.draw_score.value if self.draw_score.value else 0}",
             ephemeral=True
         )
-        p1_tuple = (self.player2, self.p1_score.value, self.p2_score.value, self.draw_score.value if self.draw_score.value else 0)
-        p2_tuple = (self.player1, self.p1_score.value, self.p2_score.value, self.draw_score.value if self.draw_score.value else 0)
-        if self.round - 1 < len(self.player1.results):
-            # If within bounds, update the existing result
-            self.player1.results[self.round - 1] = p1_tuple
-        else:
-            # If out of bounds, append a new result
-            self.player1.results.append(p1_tuple)
 
-        if self.round - 1 < len(self.player2.results):
-            # If within bounds, update the existing result
-            self.player2.results[self.round - 1] = p2_tuple
-        else:
-            # If out of bounds, append a new result
-            self.player2.results.append(p2_tuple)
-        new_embed = format_pairings(self.pairings, self.round)
-        await self.message.edit(embed=new_embed)
+        if IS_DEBUG:
+            swiss_mtg.simulate_remaining_matches(self.tournament.swiss_tournament)
+
+        new_embed = format_pairings(self.round)
+        await self.round.message_pairings.edit(embed=new_embed)
+        
+        if self.round.is_concluded():
+            table_text = format_standings(self.tournament.swiss_tournament)
+            if self.tournament.swiss_tournament.current_round().round_number >= self.tournament.swiss_tournament.max_rounds:
+                # tournament finished
+                swiss_mtg.sort_players_by_standings(self.tournament.swiss_tournament.players)
+                winner = self.tournament.swiss_tournament.players[0]
+                if self.round.message_standings:
+                    await self.round.message_standings.edit(content=f"Finales Ergebnis!\nHerzlichen Glückwunsch <@{winner.player_id}> für den Sieg\n{table_text}")
+                else:
+                    message_standings = await interaction.followup.send(f"Finales Ergebnis!\nHerzlichen Glückwunsch <@{winner.player_id}> für den Sieg\n{table_text}")#, embed=embed)
+                    self.round.message_standings = message_standings
+            else:
+                start_next_round_view = StartNextRoundView(self.round, self.tournament)
+                if self.round.message_standings:
+                    await self.round.message_standings.edit(content=table_text, view=start_next_round_view)#, embed=embed)
+                else:
+                    message_standings = await interaction.followup.send(content=table_text, view=start_next_round_view)#, embed=embed)
+                    self.round.message_standings = message_standings
+            # TODO Enable "Runde beenden" Button (only usable by TO/Manager)
+            # after that button is clicked, calculate Standings and disable Report Match Result Button
+        save_tournament(self.tournament)
+
 
 class ReportMatchView(discord.ui.View):
-    def __init__(self, round:int, pairings, message):
+    def __init__(self, round:swiss_mtg.Round, tournament:SpelltableTournament):
         super().__init__(timeout=None)
-        self.pairings = pairings
         self.round = round
-        self.message = message
+        self.tournament = tournament
 
-    @discord.ui.button(label="Report Match Result", style=discord.ButtonStyle.primary, custom_id="report_match")
+        self.report_button.custom_id = f"report_match_{tournament.get_id()}_{round.round_number}"
+        self.drop_button.custom_id = f"drop_{tournament.get_id()}_{round.round_number}"
+
+
+    @discord.ui.button(label="Report Match Result", style=discord.ButtonStyle.primary, custom_id="report_match_placeholder")
     async def report_button(self, button: discord.ui.Button, interaction: discord.Interaction):
-        player1 = None
-        player2 = None
-        for p1, p2 in self.pairings:
-            if not p1 or not p2:
-                continue
-            if p1.name == interaction.user.id or p2.name == interaction.user.id:
-                player1 = p1
-                player2 = p2
-        if not player1 or not player2:
-            await interaction.response.send_message("You are not participating in this tournament", ephemeral=True)
-            return
-        p1_user = await interaction.client.get_or_fetch_user(player1.name)
-        p2_user = await interaction.client.get_or_fetch_user(player2.name)
-        player1.user = p1_user
-        player2.user = p2_user
-        await interaction.response.send_modal(ReportMatchModal(self.round, self.pairings, player1, player2, self.message))
+        the_match = None
+        for match in self.round.matches:
+            players_in_match = []
+            if match.player1:
+                players_in_match.append(match.player1.player_id)
+            if match.player2:
+                players_in_match.append(match.player2.player_id)
 
-def format_pairings(pairings:list[tuple[swiss_mtg.Player, swiss_mtg.Player]], current_round:int) -> Embed:
-    bye_pairings = [f"<@{p1.name}> gets a bye" for p1, p2 in pairings if not p2]
-    # for p1, p2 in pairings:
-    #     if p1 and p2:
-    #         p1win = random.randint(0, 2)
-    #         p1loss = 3-p1win-random.randint(0,1)
-    #         p1.results.append((p2, p1win, p1loss, 0))
-    #         p2.results.append((p1, p1loss, p1win, 0))
+            if interaction.user.id in players_in_match:
+                the_match = match
+                break
+        if not the_match:
+            await interaction.response.send_message("Du bist nicht Teilnehmer in diesem Turnier", ephemeral=True)
+            return
+        
+        if the_match.is_bye():
+            await interaction.response.send_message("Du hast diese Runde ein Bye", ephemeral=True)
+
+            if IS_DEBUG:
+                swiss_mtg.simulate_remaining_matches(self.tournament.swiss_tournament)
+
+                new_embed = format_pairings(self.round)
+                await self.round.message_pairings.edit(embed=new_embed)
+                
+                if self.round.is_concluded():
+                    if self.tournament.swiss_tournament.current_round().round_number >= self.tournament.swiss_tournament.max_rounds:
+                        pass
+                        # tournament finished
+                    else:
+                        start_next_round_view = StartNextRoundView(self.round, self.tournament)
+                        text = format_standings(self.tournament.swiss_tournament)
+                        if self.round.message_standings:
+                            await self.round.message_standings.edit(content=text, view=start_next_round_view) #, embed=embed)
+                        else:
+                            message_standings = await interaction.followup.send(content=text, view=start_next_round_view)#, embed=embed)
+                            self.round.message_standings = message_standings
+
+                save_tournament(self.tournament)
+            return
+        
+        try:
+            p1_user:discord.Member = await discord.utils.get_or_fetch(interaction.guild, "member", the_match.player1.player_id)
+        except:
+            p1_user:discord.Member = await discord.utils.get_or_fetch(interaction.client, "user", the_match.player1.player_id)
+            
+        try:
+            p2_user:discord.Member = await discord.utils.get_or_fetch(interaction.guild, "member", the_match.player2.player_id)
+        except:
+            p2_user:discord.Member = await discord.utils.get_or_fetch(interaction.client, "user", the_match.player2.player_id)
+
+        the_match.player1.user = p1_user
+        the_match.player2.user = p2_user
+
+        await interaction.response.send_modal(ReportMatchModal(self.tournament, self.round, the_match))
+
+    @discord.ui.button(label="DROP", style=discord.ButtonStyle.danger, custom_id="drop_placeholder", disabled=True)
+    async def drop_button(self, button: discord.ui.Button, interaction: discord.Interaction):
+        player = self.tournament.swiss_tournament.player_by_id(interaction.user.id)
+        if not player:
+            await interaction.response.send_message("Du bist nicht Teilnehmer in diesem Turnier", ephemeral=True)
+            return
+        player.dropped = True
+        text = format_standings(self.tournament.swiss_tournament)
+        if self.round.message_standings:
+            await self.round.message_standings.edit(content=text) #, embed=embed)
+        else:
+            message_standings = await interaction.followup.send(content=text)#, embed=embed)
+            self.round.message_standings = message_standings
+        save_tournament(self.tournament)
+        await interaction.response.send_message("Du wurdest aus dem Turnier entfernt", ephemeral=True)
+
+def format_pairings(round:swiss_mtg.Round) -> Embed:
+    bye_pairings = [f"<@{match.player1.player_id}> bekommt das Bye" for match in round.matches if match.is_bye()]
     
     results = []
-    for p1, p2 in pairings:
-        if len(p1.results) >= current_round:
-            opponent, win, loss, draw = p1.results[current_round-1]
-            if opponent and opponent.name != p2.name:
-                raise Exception("wrong opponent")
+    for match in round.matches:
+        if match.is_finished():
+            if match.is_bye():
+                win, loss, draw = 2, 0, 0
+            else:
+                win, loss, draw = match.wins.values()
             results.append(f"{win} - {loss} - {draw}")
         else:
             results.append("Ausstehend")
     embed = Embed(
-        title=f"Paarungen für die {current_round}. Runde",
-        description=f"Die Spieler wurden zufällig gepaart. Viel Erfolg!\n{'\n'.join(bye_pairings)}",
+        title=f"Paarungen für die {round.round_number}. Runde",
+        # description=f"Die Spieler wurden zufällig gepaart. Viel Erfolg!\n\n{'\n'.join(bye_pairings)}",
         color=Color.from_rgb(37, 88, 79),
         fields=[
             discord.EmbedField(
                 name="Spieler 1",
-                value="\n".join([f"<@{p1.name}>" for p1, p2 in pairings]),
+                value="\n".join([f"<@{match.player1.player_id}>" for match in round.matches]),
                 inline=True
             ),
             discord.EmbedField(
                 name="Spieler 2",
-                value="\n".join([f"<@{p2.name}>" if p2 else "BYE" for p1, p2 in pairings]),
+                value="\n".join([f"<@{match.player2.player_id}>" if match.player2 else "BYE" for match in round.matches]),
                 inline=True
             ),
             discord.EmbedField(
@@ -222,65 +412,76 @@ def format_pairings(pairings:list[tuple[swiss_mtg.Player, swiss_mtg.Player]], cu
             ),
         ]
     )
-    return embed    
+    return embed
 
 class ParticipationView(discord.ui.View):
-    def __init__(self, tournament: SpelltableTournament, guild_id: int, channel_id: int):
+    def __init__(self, tournament: SpelltableTournament):
         super().__init__(timeout=None)  # Ensure persistence
         self.tournament = tournament
-        self.guild_id = guild_id
-        self.channel_id = channel_id
 
         # Placeholder message ID (it gets updated after sending the message)
         if tournament.message:
             self.update_button_ids(tournament.message.id)
 
-    @discord.ui.button(label="Teilnehmen", style=discord.ButtonStyle.success, custom_id="join_placeholder")
+    @discord.ui.button(label="Teilnehmen", style=discord.ButtonStyle.success, emoji="✅", custom_id="join_placeholder")
     async def join_button(self, button: discord.ui.Button, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         await self.tournament.user_state(interaction.user.id, "participate")
-        save_tournaments()
+        save_tournament(self.tournament)
 
-    @discord.ui.button(label="Absagen", style=discord.ButtonStyle.danger, custom_id="leave_placeholder")
+    @discord.ui.button(label="Absagen", style=discord.ButtonStyle.danger, emoji="❌", custom_id="leave_placeholder")
     async def leave_button(self, button: discord.ui.Button, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         await self.tournament.user_state(interaction.user.id, "decline")
-        save_tournaments()
+        save_tournament(self.tournament)
 
-    @discord.ui.button(label="Vielleicht", style=discord.ButtonStyle.primary, custom_id="tentative_placeholder")
+    @discord.ui.button(label="Vielleicht", style=discord.ButtonStyle.primary, emoji="❓", custom_id="tentative_placeholder")
     async def tentative_button(self, button: discord.ui.Button, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         await self.tournament.user_state(interaction.user.id, "tentative")
-        save_tournaments()
+        save_tournament(self.tournament)
 
-    @discord.ui.button(label="Bearbeiten", style=discord.ButtonStyle.primary, custom_id="edit_placeholder")
+    @discord.ui.button(label="Bearbeiten", style=discord.ButtonStyle.primary, emoji="✏️" , custom_id="edit_placeholder", disabled=True)
     async def edit_button(self, button: discord.ui.Button, interaction: discord.Interaction):
         if interaction.user.id != self.tournament.organizer.id:
             await interaction.response.send_message("Du bist nicht der Turnierorganisator!", ephemeral=True)
             return
+        
+        view = EditTournamentView(self.tournament, self.tournament.message.channel)
+        await interaction.respond(view=view, ephemeral=True)
 
-        await interaction.response.send_message(f"Edit button clicked by {interaction.user.name}", ephemeral=True)
-
-    @discord.ui.button(label="Starte Turnier", style=discord.ButtonStyle.primary, custom_id="start_placeholder")
+    @discord.ui.button(label="Starte Turnier", style=discord.ButtonStyle.primary, emoji="▶️", custom_id="start_placeholder")
     async def start_button(self, button: discord.ui.Button, interaction: discord.Interaction):
         if interaction.user.id != self.tournament.organizer.id:
-            await interaction.response.send_message("Du bist nicht der Turnierorganisator!", ephemeral=True)
+            await interaction.respond("Du bist nicht der Turnierorganisator!", ephemeral=True)
             return
+        await interaction.respond("Starte Turnier und berechne erste Runde...", ephemeral=True)
+        
+        await self.tournament.message.edit(view=None)
 
-        await interaction.response.send_message(f"Start button clicked by {interaction.user.name}", ephemeral=True)
-        tournament = swiss_mtg.Tournament(self.tournament.title, self.tournament.participants)
-        pairings = tournament.next_round()
+        players = []
+        for participant_id in self.tournament.participants:
+            try:
+                member:discord.Member = await discord.utils.get_or_fetch(interaction.guild, "member", participant_id)
+            except:
+                member = await discord.utils.get_or_fetch(interaction.client, "user", participant_id)
 
+            player_name = EMOJI_PATTERN.sub("", member.display_name).strip()
+            players.append(swiss_mtg.Player(player_name, participant_id))
+
+        swiss_tournament = swiss_mtg.SwissTournament(players)
+        self.tournament.swiss_tournament = swiss_tournament
+        round = swiss_tournament.pair_players()
         # modal für match report
-        message = await interaction.followup.send(f"Paarungen für die {tournament.current_round}. Runde:",
-                                        embed=format_pairings(pairings, tournament.current_round))
-        view = ReportMatchView(tournament.current_round, pairings, message)
-        await message.edit(view=view)
+        view = ReportMatchView(round, self.tournament)
+        message_pairings:discord.message.Message = await interaction.followup.send(embed=format_pairings(round), view=view)
+        round.message_pairings = message_pairings
+        save_tournament(self.tournament)
 
     def update_button_ids(self, message_id: int):
         """ Update button custom IDs after the message is created """
         self.message_id = message_id
-        tournament_id = f"{self.guild_id}/{self.channel_id}/{self.message_id}"
+        tournament_id = self.tournament.get_id()
         # Update custom IDs for the buttons
         self.join_button.custom_id = f"join_{tournament_id}"
         self.leave_button.custom_id = f"leave_{tournament_id}"
@@ -288,6 +489,109 @@ class ParticipationView(discord.ui.View):
         self.edit_button.custom_id = f"edit_{tournament_id}"
         self.start_button.custom_id = f"start_{tournament_id}"
 
+class ConfirmView(discord.ui.View):
+    def __init__(self):
+        super().__init__()
+        self.answer = None
+
+    @discord.ui.button(label="Sieht gut aus", style=discord.ButtonStyle.primary, emoji="👍")
+    async def confirm_callback(self, button:discord.ui.Button, interaction:discord.Interaction):
+        self.answer = True
+        self.disable_all_items()
+        await interaction.response.edit_message(view=self)
+        # await interaction.respond("OK erhalten")
+        self.stop()
+
+    @discord.ui.button(label="Abbrechen", style=discord.ButtonStyle.blurple, emoji="❌")
+    async def edit_callback(self, button:discord.ui.Button, interaction:discord.Interaction):
+        self.answer = False
+        self.disable_all_items()
+        await interaction.response.edit_message(view=self)
+        await interaction.respond("Ich breche ab! Bitte wiederhole die Erstellung.")
+        self.stop()
+
+class EnterTextModal(discord.ui.Modal):
+    def __init__(self, input:discord.ui.InputText, key, tournament:SpelltableTournament, view:"EditTournamentView", parse=None):
+        super().__init__(title="Bearbeite Turnier")
+        self.tournament = tournament
+        self.parse = parse
+        self.key = key
+        self.view = view
+
+        self.input = input
+        self.add_item(self.input)
+
+    async def callback(self, interaction: discord.Interaction):
+        new_value = self.input.value
+        if self.parse:
+            new_value = self.parse(self.input.value)
+
+        setattr(self.tournament, self.key, new_value)
+        
+        if self.tournament.description and self.tournament.time:
+            self.view.submit_button.disabled = False
+
+        await interaction.response.edit_message(embed=self.tournament.to_embed(), view=self.view)
+
+class EditTournamentView(discord.ui.View):
+    def __init__(self, tournament:SpelltableTournament, channel:discord.TextChannel):
+        super().__init__()
+        self.tournament = tournament
+        self.channel = channel
+
+        self.submit_button = discord.ui.Button(label="Abschicken", style=discord.ButtonStyle.success, emoji="✅")
+        self.submit_button.callback = self.submit_callback
+
+        # Abschicken immer erlaubt (Beschreibung und Zeit optional)
+        # self.submit_button.disabled = True and not IS_DEBUG
+
+        # if self.tournament.description and self.tournament.time:
+        #     self.submit_button.disabled = False
+        
+        self.add_item(self.submit_button)
+
+    @discord.ui.button(label="Beschreibung", style=discord.ButtonStyle.primary, emoji="🗒️")
+    async def description_callback(self, button:discord.ui.Button, interaction:discord.Interaction):
+        input = discord.ui.InputText(
+            label="Beschreibung",
+            placeholder="Eine Beschreibung für das Turnier",
+            required=True,
+            value=self.tournament.description,
+            style=discord.InputTextStyle.long,
+        )
+
+        await interaction.response.send_modal(EnterTextModal(input, "description", self.tournament, self))
+          
+    @discord.ui.button(label="Zeit", style=discord.ButtonStyle.primary, emoji="🕑")
+    async def time_callback(self, button:discord.ui.Button, interaction:discord.Interaction):
+        input = discord.ui.InputText(
+            label="Start",
+            placeholder="Die Startzeit für das Turnier",
+            required=True,
+            value=str(self.tournament.time) if self.tournament.time else "",
+        )
+
+        def parse(input_value):
+            return date_time_interpretation.parse_date(input_value)
+
+        await interaction.response.send_modal(EnterTextModal(input, "time", self.tournament, self, parse))
+
+    async def submit_callback(self, interaction:discord.Interaction):
+        if not interaction.channel:
+            await interaction.response.send_message("Threads can only be created in text channels.", ephemeral=True)
+            return
+        self.disable_all_items()
+        await interaction.edit(view=self)
+        #  save into database
+        participationView = ParticipationView(self.tournament)
+        thread = await interaction.channel.create_thread(name=self.tournament.title)
+        message = await thread.send(embed=self.tournament.to_embed(), view=participationView)
+        self.tournament.message = message
+        participationView.update_button_ids(message.id)
+        await message.edit(view=participationView)            
+        active_tournaments[self.tournament.get_id()] = self.tournament
+        save_tournament(self.tournament)
+        await interaction.respond(f"Prima! Das Turnier `{self.tournament.title}` wurde erstellt: {message.jump_url}", ephemeral=True)
 
 class SpelltableTournamentManager(Cog):
     def __init__(self, bot:Bot):
@@ -295,15 +599,24 @@ class SpelltableTournamentManager(Cog):
 
     @Cog.listener()
     async def on_ready(self):
-        log.debug(self.__class__.__name__ + " is ready")
+        loaded_tournaments = await load_tournaments(self.bot)
 
-        for message_path, data in active_tournaments.items():
-            channel:discord.TextChannel = await discord.utils.get_or_fetch(self.bot, "channel", data["channel_id"])
-            message = await channel.fetch_message(data["message_id"])
-            organizer = await self.bot.get_or_fetch_user(data["organizer_id"])
-            tournament = SpelltableTournament.deserialize(data, organizer, message)  # Restore tournament object
-            view = ParticipationView(tournament, channel.guild.id, channel.id)  # Create a new view
-            self.bot.add_view(view)  # Reattach buttons
+        global active_tournaments
+        for message_path, tournament in loaded_tournaments.items():
+            view = ParticipationView(tournament)
+            self.bot.add_view(view) # Reattach buttons
+            await tournament.message.edit(view=view) # to update the buttons status (enabled/disabled)
+            active_tournaments[message_path] = tournament
+
+        # Reattach buttons
+        for key, tournament in active_tournaments.items():
+            if tournament.swiss_tournament and type(tournament.swiss_tournament) == swiss_mtg.SwissTournament:
+                if tournament.swiss_tournament.rounds:
+                    for round in tournament.swiss_tournament.rounds:
+                        self.bot.add_view(ReportMatchView(round, tournament))
+                        self.bot.add_view(StartNextRoundView(round, tournament))
+
+        log.debug(self.__class__.__name__ + " is ready")
 
     @has_role("Moderator")
     @slash_command(description="Erstelle ein Spelltable Turnier für den Server")
@@ -312,40 +625,11 @@ class SpelltableTournamentManager(Cog):
             await ctx.respond("Dieser Befehl kann nur in einem Textkanal verwendet werden.", ephemeral=True)
             return
         tournament = SpelltableTournament(titel, ctx.author)
-        try:
-            user = ctx.author
-            direct_message = await user.send(
-                content="Lass uns zusammen das Turnier erstellen",
-                embed=tournament.to_embed()
-            )
-            def check(m):
-                return m.author == user and isinstance(m.channel, discord.DMChannel)
-            
-            await ctx.send_response(f"Lass uns zusammen in den Direktnachrichten das Turnier erstellen: {direct_message.jump_url}", ephemeral=True)
-
-            to_fill_out = ["description", "time"]
-            for key in to_fill_out:
-                await user.send(f"Gib mir ein(e) {key} für das Event:")
-                event_response = await self.bot.wait_for("message", check=check, timeout=60)
-                value = event_response.content
-                if key == "time":
-                    value = date_time_interpretation.parse_date(value)
-                setattr(tournament, key, value)
-                await user.send(embed=tournament.to_embed(), allowed_mentions=discord.AllowedMentions.none())
-            
-            #  save into database
-            participationView = ParticipationView(tournament, ctx.guild.id, ctx.channel.id)
-            message = await ctx.channel.send(content="Content", embed=tournament.to_embed(), view=participationView)
-            tournament.message = message
-            participationView.update_button_ids(message.id)
-            await message.edit(view=participationView)
-            active_tournaments[f"{message.guild.id}/{message.channel.id}/{message.id}"] = tournament.serialize()
-            save_tournaments()
-            await user.send(f"Prima! Das Turnier `{tournament.title}` findet {format_dt(tournament.time, 'R')} am {format_dt(tournament.time, 'D')} um {format_dt(tournament.time, 't')} statt. {message.jump_url}")
-        except discord.Forbidden:
-            await ctx.respond("Ich konnte dir nicht per Direktnachricht schreiben! Bitte erlaube Direktnachrichten von Servermitgliedern.")
-        except TimeoutError as e:
-            await user.send("Du hast zu lange zum Antworten gebraucht. Bitte verwende nocheinmal `/erstelle_turnier`.")
+        view = EditTournamentView(tournament, ctx.channel)
+        await ctx.respond(
+            embed=tournament.to_embed(),
+            view=view,
+            ephemeral=True)
 
 def setup(bot:Bot):
     bot.add_cog(SpelltableTournamentManager(bot))

@@ -1,5 +1,6 @@
 import random, re
 import networkx as nx
+import discord
 
 # The following tiebreakers are used to determine how a player ranks in a tournament:
 # 1. Match points
@@ -19,13 +20,27 @@ def pad_ansi_text(text, width):
     visible_len = visible_length(text)
     return text + " " * (width - visible_len)
 
-class Player:
+class Player():
     def __init__(self, name, player_id):
         self.name = name
-        self.player_id = player_id
+        self.player_id:int = player_id
         self.match_history:list[Match] = []
         self.dropped = False
+        self.user = None
         # dont receive bye twice
+
+    @classmethod
+    def deserialize(cls, data) -> "Player":
+        return Player(data['name'], data['player_id'])
+
+    def serialize(self):
+        my_dict = {
+            "name": self.name,
+            "player_id": self.player_id,
+        }
+        if self.dropped:
+            my_dict["dropped"] = self.dropped
+        return my_dict
 
     def had_bye(self):
         return any(match.is_bye() for match in self.match_history)
@@ -38,7 +53,7 @@ class Player:
 
     def get_match_results(self):
         # Using a generator expression to sum up wins, draws, and losses
-        results = [match.get_winner() for match in self.match_history if match.finished]
+        results = [match.get_winner() for match in self.match_history if match.is_finished()]
 
         wins = sum(1 for result in results if result == self)
         draws = results.count(None)
@@ -50,10 +65,10 @@ class Player:
         return any(match.get_opponent_of(self) == opponent for match in self.match_history)
 
     def get_finished_matches(self):
-        return [match for match in self.match_history if match.finished]
+        return [match for match in self.match_history if match.is_finished()]
     
     def get_finished_non_bye_matches(self):
-        return [match for match in self.match_history if match.finished and not match.is_bye()]
+        return [match for match in self.match_history if match.is_finished() and not match.is_bye()]
 
     def calculate_match_points(self):
         match_points = 0
@@ -67,7 +82,7 @@ class Player:
     def calculate_game_points(self):
         game_points = 0
         for match in self.get_finished_matches():
-            game_points += match.wins[self] * 3 + match.wins[None]  # Player's wins + draws
+            game_points += match.wins[self] * 3 + match.wins["draws"]  # Player's wins + draws
         return game_points
     
     def calculate_match_win_percentage(self):
@@ -112,17 +127,14 @@ class Player:
         return max(ogwp, 0.33)
 
 class Match:
-    def __init__(self, player1:Player, player2:Player|None, best_of=3):
+    def __init__(self, player1:Player, player2:Player|None):
         if player1 is None:
             raise ValueError("player1 can not be None.")
-        self.wins = {player1: 0, player2: 0, None: 0}
-        self.best_of = best_of
-        self.finished = False
-        self.player1 = player1
+        self.wins:dict[Player|None|str, int] = {player1: 0, player2: 0, "draws": 0}
+        self.player1:Player = player1
         self.player2 = player2
 
         if player2 is None: # is bye
-            self.finished = True
             self.wins[player1] = 2
             player1.match_history.append(self)
         elif not player1.has_played_against(player2) and not player2.has_played_against(player1):
@@ -130,6 +142,41 @@ class Match:
             player2.match_history.append(self)
         else:
             raise ValueError("Players can not play against each other twice.")
+        
+    def serialize(self):
+        wins_by_id = {player.player_id if player and player != 'draws' else player: count for player, count in self.wins.items()}
+        return {
+            "wins": wins_by_id
+        }
+    
+    @classmethod
+    def deserialize(cls, match_data, players:dict[int, Player]):#
+        wins:dict[str, int] = match_data['wins']
+        draws:int = wins.pop('draws')
+        p1:tuple[str, int] = wins.popitem()
+        p2:tuple[str, int]|None = wins.popitem()
+        if p1[0] == 'null':
+            p2, p1 = p1, p2
+        if p2[0] == 'null':
+            p2 = None
+
+        player1 = players[int(p1[0])]
+        player2 = players[int(p2[0])] if p2 else None
+        match = Match(player1, player2)
+        if p2 and (p1[1] or p2[1] or draws):
+            match.set_result(p1[1], p2[1], draws)
+        return match
+    
+    def is_finished(self, best_of=3):
+        player1_wins = self.wins[self.player1]
+        player2_wins = self.wins[self.player2]
+        if player1_wins + player2_wins > best_of:
+            # too many games
+            return False
+        if player1_wins > best_of / 2 or player2_wins > best_of / 2 or sum(self.wins.values()) >= best_of:
+            return True
+        # too few games
+        return False
 
     def get_opponent_of(self, player:Player):
         if player == self.player1:
@@ -140,7 +187,7 @@ class Match:
             raise ValueError(f"{player} didn't participate in this match")
 
     def get_winner(self):
-        if not self.finished:
+        if not self.is_finished():
             return False
         if self.wins[self.player1] > self.wins[self.player2]:
             return self.player1
@@ -151,20 +198,18 @@ class Match:
 
     def set_result(self, player1_wins, player2_wins, draws):
         if self.player2 is None: # is bye
-            raise ValueError("Result of Bye Matches can not be set.")
+            raise ValueError("Ergebnis eines Bye-Matches kann nicht manuell gesetzt werden.")
         self.wins[self.player1] = player1_wins
         self.wins[self.player2] = player2_wins
-        self.wins[None] = draws
-        if player1_wins > self.best_of / 2 or player2_wins > self.best_of / 2 or sum(self.wins.values()) >= self.best_of:
-            self.finished = True
-        else:
-            raise ValueError("Match is not finished yet.")
+        self.wins['draws'] = draws
+        if not self.is_finished():
+            raise ValueError("Inkorrekte Anzahl an Games")
 
     def is_bye(self):
         return self.player2 is None
 
     def is_draw(self):
-        if not self.finished:
+        if not self.is_finished():
             return None
         return self.wins[self.player1] == self.wins[self.player2]
     
@@ -175,7 +220,7 @@ class Match:
         if self.player2 is None:
             return f"Bye for {self.player1.name}"
         text = f"Match between {self.player1.name} and {self.player2.name}"
-        if self.finished:
+        if self.is_finished():
             win_string = "-".join(map(str, self.wins.values()))
             winner = self.get_winner()
             winner_text = f"{winner.name} won" if winner else "Draw"
@@ -187,6 +232,33 @@ class Round:
     def __init__(self, round_number: int):
         self.round_number = round_number
         self.matches: list[Match] = []
+        self.message_pairings:discord.message.Message = None
+        self.message_standings:discord.message.Message = None
+
+    def serialize(self):
+        obj = {
+            "round_number": self.round_number,
+            "matches": self.matches,
+            "message_pairings": self.message_pairings.id,
+        }
+        if self.message_standings:
+            obj["message_standings"] = self.message_standings.id
+        return obj
+    
+    @classmethod
+    async def deserialize(cls, round_data, players:dict[int, Player], channel:discord.TextChannel):
+        round = Round(round_data['round_number'])
+        round.matches = [Match.deserialize(match, players) for match in round_data['matches']]
+        if 'message_pairings' in round_data:
+            message = await channel.fetch_message(round_data['message_pairings'])
+            round.message_pairings = message
+        if 'message_standings' in round_data:
+            message = await channel.fetch_message(round_data['message_standings'])
+            round.message_standings = message
+        return round
+    
+    def is_concluded(self):
+        return all(match.is_finished() for match in self.matches)
 
     def add_match(self, match: Match):
         self.matches.append(match)
@@ -204,14 +276,33 @@ def sort_players_by_standings(players:list[Player]):
 
 double_bye_count = 0
 
-class Tournament:
-    def __init__(self, players, max_rounds=None):
+class SwissTournament:
+    def __init__(self, players:list[Player], max_rounds:int|None=None):
         if max_rounds is None:
             max_rounds = self.recommended_rounds(len(players))
         self.max_rounds = max_rounds
         self.players:list[Player] = players
         self.rounds:list[Round] = []
-        self.current_round = 0
+
+    def serialize(self):
+        return {
+            "max_rounds": self.max_rounds,
+            "players": self.players,
+            "rounds": self.rounds,
+        }
+    
+    def current_round(self) -> Round:
+        return self.rounds[-1] if self.rounds else None
+
+    @classmethod
+    async def deserialize(cls, data, channel):
+        players = data['players']
+        players:list[Player] = [Player.deserialize(player) for player in players]
+        tournament = SwissTournament(players, data['max_rounds'])
+        if 'rounds' in data:
+            player_map = {player.player_id: player for player in players}
+            tournament.rounds = [await Round.deserialize(round, player_map, channel) for round in data['rounds']]
+        return tournament
 
     def player_by_id(self, id):
         for player in self.players:
@@ -399,23 +490,27 @@ class Tournament:
             raise ValueError("There should be no players left in the group.")
         return round
 
-    def pair_players(self):
-        self.current_round += 1
+    def pair_players(self) -> Round:
+        round = self.current_round()
+        next_round_no = self.current_round().round_number + 1 if round else 1
+        if next_round_no > self.max_rounds:
+            return None
         round = None
-        if self.current_round == 1:
-            round = self.random_pairing(self.current_round)
-        elif self.current_round == self.max_rounds:  # Last round
+        if next_round_no == 1:
+            round = self.random_pairing(next_round_no)
+        elif next_round_no == self.max_rounds:  # Last round
             # round = self.last_round_pairing(self.current_round)
-            round = self.last_round_pairing_gpt(self.current_round)
+            round = self.last_round_pairing_gpt(next_round_no)
         else:
-            round = self.intermediate_round_pairing(self.current_round)
+            round = self.intermediate_round_pairing(next_round_no)
         self.rounds.append(round)
+        return round
 
     def print_standings(self):
         sort_players_by_standings(self.players)
 
         # Print the headers
-        print("Standings for Round: ", self.current_round)
+        print("Standings for Round: ", self.current_round().round_number)
         print(f"{'Rank':<5}{'Name':<15}{'Points':<8}{'Results':<10}{'OMW':<12}{'GW':<12}{'OGW':<12}")
 
         # Print each player's data
@@ -429,7 +524,7 @@ class Tournament:
         for match in round.matches:
             print(f"{match.player1} vs {match.player2}")
 
-def simulate_matches(tournament:Tournament):
+def simulate_remaining_matches(tournament:SwissTournament):
     outcomes = [
         (2, 0, 0),  # Player 1 wins, Player 2 loses
         (2, 1, 0),  # Player 1 wins, Player 2 wins 1 game
@@ -437,20 +532,20 @@ def simulate_matches(tournament:Tournament):
         (1, 2, 0),  # Player 1 wins 1 game, Player 2 wins 2 games
         (0, 2, 0)   # Player 2 wins, Player 1 loses
     ]
-    for match in tournament.rounds[tournament.current_round - 1].matches:
-        if match.is_bye():
+    for match in tournament.current_round().matches:
+        if match.is_bye() or match.is_finished():
             continue
         result = random.choice(outcomes)
         match.set_result(*result)
 
-def play_round(tournament:Tournament, random_drop_rate):
+def play_round(tournament:SwissTournament, random_drop_rate):
     """Simulate playing a round (actual match logic not included)."""
     tournament.pair_players()
-    tournament.print_round_pairings(tournament.rounds[tournament.current_round - 1])
+    tournament.print_round_pairings(tournament.current_round())
     print()
-    simulate_matches(tournament)
+    simulate_remaining_matches(tournament)
     print()
-    print("\n".join(str(match) for match in tournament.rounds[tournament.current_round - 1].matches))
+    print("\n".join(str(match) for match in tournament.current_round().matches))
     print()
     if random.random() < random_drop_rate:
         # randomly drop a player
@@ -460,18 +555,18 @@ def play_round(tournament:Tournament, random_drop_rate):
     print("\n")
 
 def main():
-    PLAYER_COUNT = 8
+    PLAYER_COUNT = 17
     # value between 0 and 1, chance of a player dropping out after a round
     # 0 means no player will drop out
     # 1 means a random player will drop each round
     # 0.5 means a random player will drop every other round
-    RANDOM_DROP_RATE = 0
+    RANDOM_DROP_RATE = 0.1
 
     # Step 1: Initialize players
     players = [Player(f"Player {player_id+1}", player_id) for player_id in range(PLAYER_COUNT)]
 
     # Step 2: Create tournament
-    tournament = Tournament(players)
+    tournament = SwissTournament(players)
 
     # Step 3: Play multiple rounds (simulate rounds in a Swiss system)
     for round_num in range(tournament.max_rounds):
