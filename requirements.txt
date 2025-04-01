@@ -11,3 +11,4 @@ dateparser
 google-generativeai
 atproto
 babel
+networkx
