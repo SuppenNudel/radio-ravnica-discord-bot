@@ -7,10 +7,11 @@ from discord.utils import format_dt
 from datetime import datetime
 import os, json, re
 from modules import swiss_mtg
+from modules import env
 
 test_participants = []
 
-IS_DEBUG = bool(os.getenv("DEBUG"))
+IS_DEBUG = env.DEBUG
 
 if IS_DEBUG:
     with open("test_participants.txt", "r", encoding="utf-8") as file:
@@ -29,7 +30,7 @@ class CustomJSONEncoder(json.JSONEncoder):
 
 active_tournaments:dict[str, "SpelltableTournament"] = {}
 
-async def load_tournaments(bot) -> dict[str, "SpelltableTournament"]:
+async def load_tournaments(guild:discord.Guild) -> dict[str, "SpelltableTournament"]:
     tournaments = {}
 
     if not os.path.exists(TOURNAMENTS_FOLDER):
@@ -42,7 +43,7 @@ async def load_tournaments(bot) -> dict[str, "SpelltableTournament"]:
                 json_data = file.read()
                 try:
                     raw_dict = json.loads(json_data)
-                    tournament = await SpelltableTournament.deserialize(raw_dict, bot)
+                    tournament = await SpelltableTournament.deserialize(raw_dict, guild)
                     tournament_id = filename[:-5].replace("_", "/")  # Convert back to original ID format
                     tournaments[tournament_id] = tournament
                 except Exception as e:
@@ -87,10 +88,10 @@ class SpelltableTournament():
         return f"{self.message.guild.id}/{self.message.channel.id}/{self.message.id}"
 
     @classmethod
-    async def deserialize(cls, data, bot:Bot): #, organizer, message):
-        channel:discord.TextChannel = await discord.utils.get_or_fetch(bot, "channel", data["channel_id"])
+    async def deserialize(cls, data, guild:discord.Guild): #, organizer, message):
+        channel:discord.TextChannel = await discord.utils.get_or_fetch(guild, "channel", data["channel_id"])
         message = await channel.fetch_message(data["message_id"])
-        organizer:discord.Member = await bot.get_or_fetch_user(data["organizer_id"])
+        organizer:discord.Member = await discord.utils.get_or_fetch(guild, "member", data["organizer_id"])
 
         tournament = cls(data["name"], organizer)
         tournament.description = data["description"]
@@ -581,7 +582,8 @@ class SpelltableTournamentManager(Cog):
 
     @Cog.listener()
     async def on_ready(self):
-        loaded_tournaments = await load_tournaments(self.bot)
+        guild:discord.Guild = self.bot.get_guild(env.GUILD_ID)
+        loaded_tournaments = await load_tournaments(guild)
 
         global active_tournaments
         for message_path, tournament in loaded_tournaments.items():
