@@ -54,7 +54,7 @@ if __name__ == "__main__":
     if IS_DEBUG:
         bot.load_extension('cogs.spelltable.spelltable_tournament')
     else:
-        bot.load_cogs(subdirectories=True, ignored_cogs=["ping", "hack", "spelltable_tournament", "notion_to_forum"])
+        bot.load_cogs(subdirectories=True, ignored_cogs=["ping", "hack", "notion_to_forum"])
     bot.add_status_changer(
         "Puzzelt mit Blacky",
     #     discord.Game("plays with you"),

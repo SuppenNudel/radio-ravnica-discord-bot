@@ -170,3 +170,4 @@ cython_debug/
 event.ics
 tmp/
 tournaments/
+test_participants.txt
