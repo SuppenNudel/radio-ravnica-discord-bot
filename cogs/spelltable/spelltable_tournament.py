@@ -203,12 +203,12 @@ def format_standings(tournament:swiss_mtg.SwissTournament) -> str:
 
 def image_from_standings(tournament:SpelltableTournament) -> str:
     round = tournament.swiss_tournament.current_round()
-    players = list({player for match in round.matches for player in (match.player1, match.player2) if player is not None})
+    players = tournament.swiss_tournament.players
     swiss_mtg.sort_players_by_standings(players)
 
     rows = [[
         rank+1,
-        player.name,
+        (player.name, player.dropped),
         player.calculate_match_points(),
         player.get_match_results(),
         f"{player.calculate_opponent_match_win_percentage():.4%}",
@@ -327,6 +327,73 @@ class ReportMatchModal(discord.ui.Modal):
             # after that button is clicked, calculate Standings and disable Report Match Result Button
         save_tournament(self.tournament)
 
+class ConfirmDropModal(discord.ui.Modal):
+    def __init__(self, player:swiss_mtg.Player, tournament:SpelltableTournament):
+        super().__init__(title="Bestätige deine Turnierausscheidung")
+        self.player = player
+        self.tournament = tournament
+
+        self.drop_input = discord.ui.InputText(
+            label=f"Tippe DROP",
+            placeholder="DROP",
+            required=True,
+        )
+        self.add_item(self.drop_input)
+
+    async def callback(self, interaction: discord.Interaction):
+        if self.drop_input.value != "DROP":
+            await interaction.respond("Turnier ausscheidung fehlgeschlagen", ephemeral=True)
+        self.player.dropped = True
+        swiss_tournament = self.tournament.swiss_tournament
+        text = format_standings(swiss_tournament)
+
+        round = swiss_tournament.current_round()
+
+        if round.message_standings:
+            await round.message_standings.edit(content=text) #, embed=embed)
+        else:
+            pass
+            # message_standings = await interaction.followup.send(content=text)#, embed=embed)
+            # round.message_standings = message_standings
+        
+        new_embed = format_pairings(round)
+        await round.message_pairings.edit(embed=new_embed)
+
+        save_tournament(self.tournament)
+        await interaction.response.send_message("Du wurdest aus dem Turnier entfernt", ephemeral=True)
+
+async def simulate_on_not_playing(tournament, round, interaction):
+    if IS_DEBUG:
+        swiss_mtg.simulate_remaining_matches(tournament.swiss_tournament)
+
+        new_embed = format_pairings(round)
+        await round.message_pairings.edit(embed=new_embed)
+        
+        if round.is_concluded():
+            if tournament.swiss_tournament.current_round().round_number >= tournament.swiss_tournament.max_rounds:
+                swiss_mtg.sort_players_by_standings(tournament.swiss_tournament.players)
+                winner = tournament.swiss_tournament.players[0]
+                content = f"Finales Ergebnis!\nHerzlichen Glückwunsch <@{winner.player_id}> für den Sieg"
+
+                image = image_from_standings(tournament)
+                file = discord.File(image, filename=image)
+                if round.message_standings:
+                    await round.message_standings.edit(file=file, content=content)
+                else:
+                    message_standings = await interaction.followup.send(file=file, content=content)
+                    round.message_standings = message_standings
+            else:
+                start_next_round_view = StartNextRoundView(round, tournament)
+                content = f"Platzierungen nach der {tournament.swiss_tournament.current_round().round_number}. Runde"
+                image = image_from_standings(tournament)
+                file = discord.File(image, filename=image)
+                if round.message_standings:
+                    await round.message_standings.edit(content=content, view=start_next_round_view, file=file) #, embed=embed)
+                else:
+                    message_standings = await interaction.followup.send(content=content, view=start_next_round_view, file=file)#, embed=embed)
+                    round.message_standings = message_standings
+
+        save_tournament(tournament)
 
 class ReportMatchView(discord.ui.View):
     def __init__(self, round:swiss_mtg.Round, tournament:SpelltableTournament):
@@ -334,9 +401,12 @@ class ReportMatchView(discord.ui.View):
         self.round = round
         self.tournament = tournament
 
-        self.report_button.custom_id = f"report_match_{tournament.get_id()}_{round.round_number}"
-        self.drop_button.custom_id = f"drop_{tournament.get_id()}_{round.round_number}"
-
+        report_button_id = f"report_{tournament.get_id()}_{round.round_number}"
+        drop_id = f"drop_{tournament.get_id()}_{round.round_number}"
+        print(report_button_id)
+        print(drop_id)
+        self.report_button.custom_id = report_button_id
+        self.drop_button.custom_id = drop_id
 
     @discord.ui.button(label="Report Match Result", style=discord.ButtonStyle.primary, custom_id="report_match_placeholder")
     async def report_button(self, button: discord.ui.Button, interaction: discord.Interaction):
@@ -353,33 +423,16 @@ class ReportMatchView(discord.ui.View):
                 break
         if not the_match:
             await interaction.response.send_message("Du bist nicht Teilnehmer in diesem Turnier", ephemeral=True)
+            
+            if IS_DEBUG:
+                await simulate_on_not_playing(self.tournament, self.round, interaction)
             return
         
         if the_match.is_bye():
             await interaction.response.send_message("Du hast diese Runde ein Bye", ephemeral=True)
 
             if IS_DEBUG:
-                swiss_mtg.simulate_remaining_matches(self.tournament.swiss_tournament)
-
-                new_embed = format_pairings(self.round)
-                await self.round.message_pairings.edit(embed=new_embed)
-                
-                if self.round.is_concluded():
-                    if self.tournament.swiss_tournament.current_round().round_number >= self.tournament.swiss_tournament.max_rounds:
-                        pass
-                        # tournament finished
-                    else:
-                        start_next_round_view = StartNextRoundView(self.round, self.tournament)
-                        content = f"Platzierungen nach der {self.tournament.swiss_tournament.current_round().round_number}. Runde"
-                        image = image_from_standings(self.tournament)
-                        file = discord.File(image, filename=image)
-                        if self.round.message_standings:
-                            await self.round.message_standings.edit(content=content, view=start_next_round_view, file=file) #, embed=embed)
-                        else:
-                            message_standings = await interaction.followup.send(content=content, view=start_next_round_view, file=file)#, embed=embed)
-                            self.round.message_standings = message_standings
-
-                save_tournament(self.tournament)
+                await simulate_on_not_playing(self.tournament, self.round, interaction)
             return
         
         try:
@@ -397,21 +450,18 @@ class ReportMatchView(discord.ui.View):
 
         await interaction.response.send_modal(ReportMatchModal(self.tournament, self.round, the_match))
 
-    @discord.ui.button(label="DROP", style=discord.ButtonStyle.danger, custom_id="drop_placeholder", disabled=True)
+    @discord.ui.button(label="DROP", style=discord.ButtonStyle.danger, custom_id="drop_placeholder")
     async def drop_button(self, button: discord.ui.Button, interaction: discord.Interaction):
         player = self.tournament.swiss_tournament.player_by_id(interaction.user.id)
         if not player:
             await interaction.response.send_message("Du bist nicht Teilnehmer in diesem Turnier", ephemeral=True)
             return
-        player.dropped = True
-        text = format_standings(self.tournament.swiss_tournament)
-        if self.round.message_standings:
-            await self.round.message_standings.edit(content=text) #, embed=embed)
-        else:
-            message_standings = await interaction.followup.send(content=text)#, embed=embed)
-            self.round.message_standings = message_standings
-        save_tournament(self.tournament)
-        await interaction.response.send_message("Du wurdest aus dem Turnier entfernt", ephemeral=True)
+        if not player in self.tournament.swiss_tournament.get_active_players():
+            await interaction.respond("Du bist bereits aus diesem Turnier ausgetreten", ephemeral=True)
+            return
+        
+        await interaction.response.send_modal(ConfirmDropModal(player, self.tournament))
+
 
 def format_pairings(round:swiss_mtg.Round) -> Embed:
     bye_pairings = [f"<@{match.player1.player_id}> bekommt das Bye" for match in round.matches if match.is_bye()]
@@ -433,12 +483,19 @@ def format_pairings(round:swiss_mtg.Round) -> Embed:
         fields=[
             discord.EmbedField(
                 name="Spieler 1",
-                value="\n".join([f"<@{match.player1.player_id}>" for match in round.matches]),
+                value="\n".join([
+                    f"{'~~' if match.player1 and match.player1.dropped else ''}<@{match.player1.player_id}>{'~~' if match.player1 and match.player1.dropped else ''}"
+                    for match in round.matches
+                ]),
                 inline=True
             ),
             discord.EmbedField(
                 name="Spieler 2",
-                value="\n".join([f"<@{match.player2.player_id}>" if match.player2 else "BYE" for match in round.matches]),
+                value="\n".join([
+                    f"{'~~' if match.player2 and match.player2.dropped else ''}<@{match.player2.player_id}>{'~~' if match.player2 and match.player2.dropped else ''}" 
+                    if match.player2 else "BYE" 
+                    for match in round.matches
+                ]),
                 inline=True
             ),
             discord.EmbedField(

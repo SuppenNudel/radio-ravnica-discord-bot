@@ -31,7 +31,9 @@ class Player():
 
     @classmethod
     def deserialize(cls, data) -> "Player":
-        return Player(data['name'], data['player_id'])
+        player = Player(data['name'], data['player_id'])
+        player.dropped = data['dropped'] if 'dropped' in data else False
+        return player
 
     def serialize(self):
         my_dict = {
@@ -95,7 +97,7 @@ class Player():
         possible_game_points = 0
         for match in self.get_finished_matches():
             possible_game_points += sum(match.wins.values()) * 3
-        gwp = self.calculate_game_points() / possible_game_points
+        gwp = self.calculate_game_points() / possible_game_points if possible_game_points else 0.33
         return max(gwp, 0.33)
     
     def calculate_opponent_match_win_percentage(self):
@@ -284,6 +286,9 @@ class SwissTournament:
         self.players:list[Player] = players
         self.rounds:list[Round] = []
 
+    def get_active_players(self):
+        return [player for player in self.players if not player.dropped]
+    
     def serialize(self):
         return {
             "max_rounds": self.max_rounds,
@@ -336,7 +341,7 @@ class SwissTournament:
         return None
 
     def random_pairing(self, round_number):
-        active_players: list[Player] = [p for p in self.players if not p.dropped]
+        active_players = self.get_active_players()
         random.shuffle(active_players)
 
         round = Round(round_number)
@@ -362,22 +367,17 @@ class SwissTournament:
         previous_matches = {frozenset({match.player1, match.player2}) for match in past_matches}
         
         round = Round(round_number)
-        
+
         # List of players who haven't dropped, along with their match points
         players: list[tuple[Player, int]] = [(player, player.calculate_match_points()) for player in self.players if not player.dropped]
         
-        # Create a graph to hold the possible pairings and weights
-        G = nx.Graph()
-
+        # shuffle the players around and sort them afterwards ONLY by match points
+        random.shuffle(players)
         # Sort players by match points in descending order (top players first)
         players.sort(key=lambda toup: -toup[1])
 
-        # Build match-points brackets and shuffle them to randomize pairings within the same score group
-        match_brackets: dict[int, list[Player]] = {}
-        for player, points in players:
-            match_brackets.setdefault(points, []).append(player)
-        for match_bracket in match_brackets.values():
-            random.shuffle(match_bracket)
+        # Create a graph to hold the possible pairings and weights
+        G = nx.Graph()
 
         # Build the graph with weighted edges based on score differences, avoiding rematches
         for i in range(len(players)):
@@ -413,98 +413,74 @@ class SwissTournament:
 
         return round
     
-    def last_round_pairing_gpt(self, round_number):
-        """
-        Pair players based on ranking while ensuring they haven't played each other before.
-
-        :param players: List of player objects sorted by ranking.
-        :return: List of tuples (player1, player2).
-        """
-        players: list[Player] = [p for p in self.players if not p.dropped]
-        sort_players_by_standings(players)
-        round = Round(round_number)
-        used = set()
-    
-        i = 0
-        while i < len(players):
-            if players[i] in used:
-                i += 1
-                continue  # Skip already paired players
-            
-            player1 = players[i]
-            best_match = None
-
-            # Find the best available opponent
-            for j in range(i + 1, len(players)):
-                player2 = players[j]
-
-                if player2 not in used and not player1.has_played_against(player2):
-                    best_match = player2
-                    break  # Pair them immediately
-
-            if best_match:
-                round.matches.append(Match(player1, best_match))
-                used.add(player1)
-                used.add(best_match)
-            else:
-                if player1.had_bye():
-                    print(f"{player1.name} already had a bye.")
-                    global double_bye_count
-                    double_bye_count += 1
-                # If no valid opponent, the player gets a bye
-                round.matches.append(Match(player1, None))
-                used.add(player1)
-
-            i += 1  # Move to the next player
-            
-        return round
-
     def last_round_pairing(self, round_number):
-        # 1. Match points
-        # 2. Opponents’ match-win percentage
-        # 3. Game-win percentage
-        # 4. Opponents’ game-win percentage
-        active_players: list[Player] = [p for p in self.players if not p.dropped]
-        sort_players_by_standings(active_players)
+        """
+        Pair players using min-weight maximum matching while prioritizing fair top-table matchups.
+        
+        :param round_number: The current round number.
+        :return: Round object with the matches.
+        """
+        # Retrieve all previous matches to prevent rematches
+        past_matches: list[Match] = [match for round in self.rounds for match in round.matches]
+        previous_matches = {frozenset({match.player1, match.player2}) for match in past_matches}
+        
         round = Round(round_number)
-        bye_candidates = []
-        while len(active_players) >= 2:
-            player1 = active_players.pop(0)
-            player2 = self.get_opponent(player1, active_players)
-            if player2 is None:
-                bye_candidates.append(player1)
-                continue
-            active_players.remove(player2)
-            round.matches.append(Match(player1, player2))
-        if active_players or bye_candidates:
-            if len(active_players) + len(bye_candidates) > 1:
-                raise ValueError("More than one players would receive a bye.")
-            active_players.extend(bye_candidates)
-            last_player = active_players.pop()
-            if last_player.had_bye():
-                print(f"{player1.name} already had a bye.")
-                global double_bye_count
-                double_bye_count += 1
-            round.matches.append(Match(last_player, None))
-        if active_players:
-            raise ValueError("There should be no players left in the group.")
+        
+        sort_players_by_standings(self.players)
+        
+        # List of players who haven't dropped, along with their match points
+        players: list[tuple[Player, int]] = [(player, rank) for rank, player in enumerate(self.players) if not player.dropped]
+        
+        # Create a graph to hold the possible pairings and weights
+        G = nx.Graph()
+
+        # Build the graph with weighted edges based on score differences, avoiding rematches
+        for i in range(len(players)):
+            for j in range(i + 1, len(players)):
+                p1, rank1 = players[i]
+                p2, rank2 = players[j]
+                
+                # Prevent rematches
+                if frozenset({p1, p2}) in previous_matches:
+                    weight = float('inf')  # Disallow this pairing
+                else:
+                    score_diff = abs(rank1 - rank2)
+                    if score_diff == 0:
+                        weight = 1  # Ideal same-score pairing
+                    else:
+                        weight = score_diff * 5  # Linear weight based on score difference
+
+                G.add_edge(p1, p2, weight=-weight)  # Negate weight since networkx maximizes weight
+
+        # Find optimal pairings using the max weight matching
+        matching = nx.max_weight_matching(G, maxcardinality=True)
+        match_objects = [Match(p1, p2) for p1, p2 in matching]
+        round.matches.extend(match_objects)
+
+        # Handle odd number of players (assign a bye to the lowest-ranked player who hasn't had one yet)
+        unpaired = set(p[0] for p in players) - set(x for pair in matching for x in pair)
+        bye_candidates = [p for p in unpaired if not p.had_bye()]
+        
+        # Find the lowest-ranked player who has not yet received a bye
+        if bye_candidates:
+            bye = min(bye_candidates, key=lambda p: next(points for pid, points in players if pid == p))  # Assign the lowest-ranked eligible player
+            round.matches.append(Match(bye, None))  # Append the bye as a match with 'None'
+
         return round
 
     def pair_players(self) -> Round:
-        round = self.current_round()
-        next_round_no = self.current_round().round_number + 1 if round else 1
+        next_round_no = self.current_round().round_number + 1 if self.current_round() else 1
         if next_round_no > self.max_rounds:
             return None
-        round = None
+        new_round = None
         if next_round_no == 1:
-            round = self.random_pairing(next_round_no)
+            new_round = self.random_pairing(next_round_no)
         elif next_round_no == self.max_rounds:  # Last round
-            # round = self.last_round_pairing(self.current_round)
-            round = self.last_round_pairing_gpt(next_round_no)
+            new_round = self.last_round_pairing(next_round_no)
         else:
-            round = self.intermediate_round_pairing(next_round_no)
-        self.rounds.append(round)
-        return round
+            new_round = self.intermediate_round_pairing(next_round_no)
+        self.rounds.append(new_round)
+        return new_round
 
     def print_standings(self):
         sort_players_by_standings(self.players)
