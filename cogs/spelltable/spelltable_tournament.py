@@ -1,6 +1,6 @@
 from ezcord import Cog, log
 from discord.ext.commands import slash_command, has_role
-from discord import ApplicationContext, Bot, Embed, Color
+from discord import ApplicationContext, Bot, Embed, Color, Option
 import discord
 from modules import date_time_interpretation
 from discord.utils import format_dt
@@ -636,7 +636,11 @@ class SpelltableTournamentManager(Cog):
 
     @has_role("Moderator")
     @slash_command(description="Erstelle ein Spelltable Turnier für den Server")
-    async def erstelle_turnier(self, ctx:ApplicationContext, titel:str):
+    async def erstelle_turnier(
+        self,
+        ctx:ApplicationContext,
+        titel:Option(str, description="Der Titel, den das Turnier tragen soll")
+    ):
         if type(ctx.channel) != discord.TextChannel:
             await ctx.respond("Dieser Befehl kann nur in einem Textkanal verwendet werden.", ephemeral=True)
             return
