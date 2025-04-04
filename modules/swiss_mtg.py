@@ -355,7 +355,7 @@ class SwissTournament:
                 round.matches.append(Match(active_players[i], None))
         return round
 
-    def intermediate_round_pairing(self, round_number):
+    def round_pairing(self, round_number, players):
         """
         Pair players using min-weight maximum matching while prioritizing fair top-table matchups.
         
@@ -366,15 +366,6 @@ class SwissTournament:
         past_matches: list[Match] = [match for round in self.rounds for match in round.matches]
         previous_matches = {frozenset({match.player1, match.player2}) for match in past_matches}
         
-        round = Round(round_number)
-
-        # List of players who haven't dropped, along with their match points
-        players: list[tuple[Player, int]] = [(player, player.calculate_match_points()) for player in self.players if not player.dropped]
-        
-        # shuffle the players around and sort them afterwards ONLY by match points
-        random.shuffle(players)
-        # Sort players by match points in descending order (top players first)
-        players.sort(key=lambda toup: -toup[1])
 
         # Create a graph to hold the possible pairings and weights
         G = nx.Graph()
@@ -397,6 +388,8 @@ class SwissTournament:
 
                 G.add_edge(p1, p2, weight=-weight)  # Negate weight since networkx maximizes weight
 
+        round = Round(round_number)
+
         # Find optimal pairings using the max weight matching
         matching = nx.max_weight_matching(G, maxcardinality=True)
         match_objects = [Match(p1, p2) for p1, p2 in matching]
@@ -413,61 +406,6 @@ class SwissTournament:
 
         return round
     
-    def last_round_pairing(self, round_number):
-        """
-        Pair players using min-weight maximum matching while prioritizing fair top-table matchups.
-        
-        :param round_number: The current round number.
-        :return: Round object with the matches.
-        """
-        # Retrieve all previous matches to prevent rematches
-        past_matches: list[Match] = [match for round in self.rounds for match in round.matches]
-        previous_matches = {frozenset({match.player1, match.player2}) for match in past_matches}
-        
-        round = Round(round_number)
-        
-        sort_players_by_standings(self.players)
-        
-        # List of players who haven't dropped, along with their match points
-        players: list[tuple[Player, int]] = [(player, rank) for rank, player in enumerate(self.players) if not player.dropped]
-        
-        # Create a graph to hold the possible pairings and weights
-        G = nx.Graph()
-
-        # Build the graph with weighted edges based on score differences, avoiding rematches
-        for i in range(len(players)):
-            for j in range(i + 1, len(players)):
-                p1, rank1 = players[i]
-                p2, rank2 = players[j]
-                
-                # Prevent rematches
-                if frozenset({p1, p2}) in previous_matches:
-                    weight = float('inf')  # Disallow this pairing
-                else:
-                    score_diff = abs(rank1 - rank2)
-                    if score_diff == 0:
-                        weight = 1  # Ideal same-score pairing
-                    else:
-                        weight = score_diff * 5  # Linear weight based on score difference
-
-                G.add_edge(p1, p2, weight=-weight)  # Negate weight since networkx maximizes weight
-
-        # Find optimal pairings using the max weight matching
-        matching = nx.max_weight_matching(G, maxcardinality=True)
-        match_objects = [Match(p1, p2) for p1, p2 in matching]
-        round.matches.extend(match_objects)
-
-        # Handle odd number of players (assign a bye to the lowest-ranked player who hasn't had one yet)
-        unpaired = set(p[0] for p in players) - set(x for pair in matching for x in pair)
-        bye_candidates = [p for p in unpaired if not p.had_bye()]
-        
-        # Find the lowest-ranked player who has not yet received a bye
-        if bye_candidates:
-            bye = min(bye_candidates, key=lambda p: next(points for pid, points in players if pid == p))  # Assign the lowest-ranked eligible player
-            round.matches.append(Match(bye, None))  # Append the bye as a match with 'None'
-
-        return round
-
     def pair_players(self) -> Round:
         next_round_no = self.current_round().round_number + 1 if self.current_round() else 1
         if next_round_no > self.max_rounds:
@@ -475,10 +413,21 @@ class SwissTournament:
         new_round = None
         if next_round_no == 1:
             new_round = self.random_pairing(next_round_no)
-        elif next_round_no == self.max_rounds:  # Last round
-            new_round = self.last_round_pairing(next_round_no)
+        elif next_round_no == self.max_rounds:  # Last round      
+            sort_players_by_standings(self.players)
+            # List of players who haven't dropped, along with their match points
+            players: list[tuple[Player, int]] = [(player, rank) for rank, player in enumerate(self.players) if not player.dropped]
+
+            new_round = self.swiss_pairing(next_round_no, players)
         else:
-            new_round = self.intermediate_round_pairing(next_round_no)
+            # List of players who haven't dropped, along with their match points
+            players: list[tuple[Player, int]] = [(player, player.calculate_match_points()) for player in self.players if not player.dropped]
+            # shuffle the players around and sort them afterwards ONLY by match points
+            random.shuffle(players)
+            # Sort players by match points in descending order (top players first)
+            players.sort(key=lambda toup: -toup[1])
+
+            new_round = self.swiss_pairing(next_round_no, players)
         self.rounds.append(new_round)
         return new_round
 
