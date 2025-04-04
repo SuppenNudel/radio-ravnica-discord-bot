@@ -15,7 +15,7 @@ class ArenaDailyDeals(Cog):
 
     @Cog.listener()
     async def on_ready(self):
-        log.info(self.bot.guilds)
+        log.info(f"{self.bot.guilds}")
         self.author_did = bluesky.get_target_did(BSKY_ARENA_DAILY_DEALS_HANDLE)
 
         if not self.check_bsky_posts.is_running():
