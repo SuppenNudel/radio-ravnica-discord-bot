@@ -325,7 +325,7 @@ class ReportMatchModal(discord.ui.Modal):
                 # tournament finished
                 swiss_mtg.sort_players_by_standings(self.tournament.swiss_tournament.players)
                 winner = self.tournament.swiss_tournament.players[0]
-                content = f"Finales Ergebnis!\nHerzlichen Glückwunsch <@{winner.player_id}> für den Sieg"
+                content = f"Finales Ergebnis!\nHerzlichen Glückwunsch <@{winner.player_id}> für den Sieg 🏆"
                 if self.round.message_standings:
                     await self.round.message_standings.edit(file=file, content=content)
                 else:

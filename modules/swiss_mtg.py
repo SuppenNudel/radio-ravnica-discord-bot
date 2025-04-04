@@ -313,7 +313,7 @@ class SwissTournament:
         for player in self.players:
             if player.player_id == id:
                 return player
-        raise ValueError("No player with that id")
+        return None
 
     def recommended_rounds(self, num_players):
         if num_players <= 8:
@@ -355,7 +355,7 @@ class SwissTournament:
                 round.matches.append(Match(active_players[i], None))
         return round
 
-    def round_pairing(self, round_number, players):
+    def swiss_pairing(self, round_number, players):
         """
         Pair players using min-weight maximum matching while prioritizing fair top-table matchups.
         
