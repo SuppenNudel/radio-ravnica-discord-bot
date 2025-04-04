@@ -9,6 +9,7 @@ import os, json, re
 from modules import swiss_mtg
 from modules import env
 from modules import table_to_image
+from enum import StrEnum, auto
 
 test_participants = []
 
@@ -70,23 +71,32 @@ def save_tournament(tournament: "SpelltableTournament"):
     except Exception as e:
         print(f"Error saving tournament {tournament.get_id()}: {e}")
 
+class ParticipationState(StrEnum):
+    PARTICIPATE = auto()
+    DECLINE = auto()
+    TENTATIVE = auto()
+    WAITLIST = auto()
+
 class SpelltableTournament():
-    def __init__(self, title:str, organizer:discord.Member|discord.User):
+    def __init__(self, title:str, organizer:discord.Member|discord.User, max_participants:int=None):
         self.title = title
         self.description = None
         self.time:datetime = None
         self.organizer = organizer
-        self.participants:list[int] = []
-        self.declined = []
-        self.tentative = []
+        self.users:dict[int,ParticipationState] = {} 
         self.message:discord.message.Message = None
         self.swiss_tournament:swiss_mtg.SwissTournament = None
+        self.max_participants = max_participants
 
         if IS_DEBUG:
-            self.participants.extend(test_participants)
+            for user_id in test_participants:
+                self.users[user_id] = ParticipationState.PARTICIPATE
 
     def get_id(self):
         return f"{self.message.guild.id}/{self.message.channel.id}/{self.message.id}"
+    
+    def get_users_by_state(self, state:ParticipationState):
+        return [user for user in self.users if self.users[user] == state]
 
     @classmethod
     async def deserialize(cls, data, guild:discord.Guild): #, organizer, message):
@@ -98,10 +108,12 @@ class SpelltableTournament():
         tournament.description = data["description"]
         if "time" in data and data["time"]:
             tournament.time = datetime.fromisoformat(data["time"])
-        tournament.participants = data["participants"]
-        tournament.declined = data["declined"]
-        tournament.tentative = data["tentative"]
+
+        tournament.users = {int(k): v for k, v in data["users"].items()}
         tournament.message = message
+
+        if "max_participants" in data and data["max_participants"]:
+            tournament.max_participants = data["max_participants"]
 
         if "tournament" in data and data["tournament"]:
             swiss_tournament_data = data['tournament']
@@ -115,29 +127,25 @@ class SpelltableTournament():
             "organizer_id": self.organizer.id,
             "description": self.description,
             "time": self.time.isoformat() if self.time else None,
-            "participants": self.participants,
-            "declined": self.declined,
-            "tentative": self.tentative,
+            "users": self.users,
             "guild_id": self.message.guild.id,
             "message_id": self.message.id,
             "channel_id": self.message.channel.id,
-            "tournament": self.swiss_tournament
+            "tournament": self.swiss_tournament,
+            "max_participants": self.max_participants
         }
 
-    async def user_state(self, userid, state):
-        if userid in self.participants:
-            self.participants.remove(userid)
-        if userid in self.declined:
-            self.declined.remove(userid)
-        if userid in self.tentative:
-            self.tentative.remove(userid)
-        if state == "participate":
-            self.participants.append(userid)
-        elif state == "decline":
-            self.declined.append(userid)
-        elif state == "tentative":
-            self.tentative.append(userid)
+    async def user_state(self, userid:int, state:ParticipationState):
+        message = None
+        participants = self.get_users_by_state(ParticipationState.PARTICIPATE)
+        if state == ParticipationState.PARTICIPATE and self.max_participants and len(participants) >= self.max_participants:
+            state = ParticipationState.WAITLIST
+            message = f"Das Tunier ist bereits voll. Du wurdest auf der Warteliste gesetzt. In Zukunft sollst du benachrichtigt, wenn ein Platz frei wird (noch nicht implementiert)."
+        
+        self.users[userid] = state
+        save_tournament(self)
         await self.message.edit(embed=self.to_embed())
+        return message
 
     def to_embed(self):
         embed = Embed(
@@ -149,9 +157,17 @@ class SpelltableTournament():
             embed.set_author(name=self.organizer.display_name, icon_url=self.organizer.avatar.url)
         if self.time:
             embed.add_field(name="Start", value=discord.utils.format_dt(self.time, "F")+"\n"+discord.utils.format_dt(self.time, 'R'), inline=False)
-        embed.add_field(name="✅ Teilnehmer", value="\n".join([f"<@{p}>" for p in self.participants]), inline=True)
-        embed.add_field(name="❌ Abgelehnt", value="\n".join([f"<@{p}>" for p in self.declined]), inline=True)
-        embed.add_field(name="❓ Vielleicht", value="\n".join([f"<@{p}>" for p in self.tentative]), inline=True)
+
+        participants = self.get_users_by_state(ParticipationState.PARTICIPATE)
+        waitlist = self.get_users_by_state(ParticipationState.WAITLIST)
+        tentative = self.get_users_by_state(ParticipationState.TENTATIVE)
+        declined = self.get_users_by_state(ParticipationState.DECLINE)
+
+        embed.add_field(name=f"✅ Teilnehmer ({len(participants)}{f'/{self.max_participants}' if self.max_participants else ''})", value="\n".join([f"<@{p}>" for p in participants]), inline=True)
+        embed.add_field(name=f"⌚ Warteliste ({len(waitlist)})", value="\n".join([f"<@{p}>" for p in waitlist]), inline=True)
+        embed.add_field(name="\u200B", value="\u200B", inline=False)
+        embed.add_field(name=f"❓ Vielleicht ({len(tentative)})", value="\n".join([f"<@{p}>" for p in tentative]), inline=True)
+        embed.add_field(name=f"❌ Abgelehnt ({len(declined)})", value="\n".join([f"<@{p}>" for p in declined]), inline=True)
         return embed
     
 
@@ -403,8 +419,6 @@ class ReportMatchView(discord.ui.View):
 
         report_button_id = f"report_{tournament.get_id()}_{round.round_number}"
         drop_id = f"drop_{tournament.get_id()}_{round.round_number}"
-        print(report_button_id)
-        print(drop_id)
         self.report_button.custom_id = report_button_id
         self.drop_button.custom_id = drop_id
 
@@ -519,20 +533,24 @@ class ParticipationView(discord.ui.View):
     @discord.ui.button(label="Teilnehmen", style=discord.ButtonStyle.success, emoji="✅", custom_id="join_placeholder")
     async def join_button(self, button: discord.ui.Button, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        await self.tournament.user_state(interaction.user.id, "participate")
-        save_tournament(self.tournament)
+        message = await self.tournament.user_state(interaction.user.id, ParticipationState.PARTICIPATE)
+        if message:
+            await interaction.respond(message, ephemeral=True)
 
-    @discord.ui.button(label="Absagen", style=discord.ButtonStyle.danger, emoji="❌", custom_id="leave_placeholder")
-    async def leave_button(self, button: discord.ui.Button, interaction: discord.Interaction):
+    @discord.ui.button(label="Warteliste", style=discord.ButtonStyle.primary, emoji="⌚", custom_id="waitlist_placeholder")
+    async def waitlist_button(self, button: discord.ui.Button, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        await self.tournament.user_state(interaction.user.id, "decline")
-        save_tournament(self.tournament)
+        await self.tournament.user_state(interaction.user.id, ParticipationState.WAITLIST)
 
     @discord.ui.button(label="Vielleicht", style=discord.ButtonStyle.primary, emoji="❓", custom_id="tentative_placeholder")
     async def tentative_button(self, button: discord.ui.Button, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        await self.tournament.user_state(interaction.user.id, "tentative")
-        save_tournament(self.tournament)
+        await self.tournament.user_state(interaction.user.id, ParticipationState.TENTATIVE)
+
+    @discord.ui.button(label="Absagen", style=discord.ButtonStyle.danger, emoji="❌", custom_id="leave_placeholder")
+    async def leave_button(self, button: discord.ui.Button, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        await self.tournament.user_state(interaction.user.id, ParticipationState.DECLINE)
 
     @discord.ui.button(label="Bearbeiten", style=discord.ButtonStyle.primary, emoji="✏️" , custom_id="edit_placeholder", disabled=True)
     async def edit_button(self, button: discord.ui.Button, interaction: discord.Interaction):
@@ -553,7 +571,8 @@ class ParticipationView(discord.ui.View):
         await self.tournament.message.edit(view=None)
 
         players = []
-        for participant_id in self.tournament.participants:
+        participants = self.tournament.get_users_by_state(ParticipationState.PARTICIPATE)
+        for participant_id in participants:
             try:
                 member:discord.Member = await discord.utils.get_or_fetch(interaction.guild, "member", participant_id)
             except:
@@ -579,6 +598,7 @@ class ParticipationView(discord.ui.View):
         self.join_button.custom_id = f"join_{tournament_id}"
         self.leave_button.custom_id = f"leave_{tournament_id}"
         self.tentative_button.custom_id = f"tentative_{tournament_id}"
+        self.waitlist_button.custom_id = f"waitlist_{tournament_id}"
         self.edit_button.custom_id = f"edit_{tournament_id}"
         self.start_button.custom_id = f"start_{tournament_id}"
 
@@ -696,12 +716,13 @@ class SpelltableTournamentManager(Cog):
     async def erstelle_turnier(
         self,
         ctx:ApplicationContext,
-        titel:Option(str, description="Der Titel, den das Turnier tragen soll")
+        titel:Option(str, description="Der Titel, den das Turnier tragen soll"),
+        max_teilnehmer:Option(int, description="Maximale Anzahl an Teilnehmern", required=False, default=None),
     ):
         if type(ctx.channel) != discord.TextChannel:
             await ctx.respond("Dieser Befehl kann nur in einem Textkanal verwendet werden.", ephemeral=True)
             return
-        tournament = SpelltableTournament(titel, ctx.author)
+        tournament = SpelltableTournament(titel, ctx.author, max_teilnehmer)
         view = EditTournamentView(tournament, ctx.channel)
         await ctx.respond(
             embed=tournament.to_embed(),
