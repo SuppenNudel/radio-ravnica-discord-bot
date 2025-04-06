@@ -1,6 +1,6 @@
 import random, re
 import networkx as nx
-import discord
+from modules.serializable import Serializable
 
 # The following tiebreakers are used to determine how a player ranks in a tournament:
 # 1. Match points
@@ -20,14 +20,12 @@ def pad_ansi_text(text, width):
     visible_len = visible_length(text)
     return text + " " * (width - visible_len)
 
-class Player():
+class Player(Serializable):
     def __init__(self, name, player_id):
         self.name = name
         self.player_id:int = player_id
         self.match_history:list[Match] = []
         self.dropped = False
-        self.user = None
-        # dont receive bye twice
 
     @classmethod
     def deserialize(cls, data) -> "Player":
@@ -128,7 +126,7 @@ class Player():
         ogwp = opponent_gwp / non_bye_matches
         return max(ogwp, 0.33)
 
-class Match:
+class Match(Serializable):
     def __init__(self, player1:Player, player2:Player|None):
         if player1 is None:
             raise ValueError("player1 can not be None.")
@@ -230,33 +228,33 @@ class Match:
         else:
             return f"{text} is not finished yet."
 
-class Round:
+class Round(Serializable):
     def __init__(self, round_number: int):
         self.round_number = round_number
         self.matches: list[Match] = []
-        self.message_pairings:discord.message.Message = None
-        self.message_standings:discord.message.Message = None
+        self.message_id_pairings:int = None
+        self.message_id_standings:int = None
 
     def serialize(self):
         obj = {
             "round_number": self.round_number,
             "matches": self.matches,
-            "message_pairings": self.message_pairings.id,
+            "message_pairings": self.message_id_pairings,
         }
-        if self.message_standings:
-            obj["message_standings"] = self.message_standings.id
+        if self.message_id_standings:
+            obj["message_standings"] = self.message_id_standings
         return obj
     
     @classmethod
-    async def deserialize(cls, round_data, players:dict[int, Player], channel:discord.TextChannel):
+    def deserialize(cls, round_data, players:dict[int, Player]):
         round = Round(round_data['round_number'])
         round.matches = [Match.deserialize(match, players) for match in round_data['matches']]
         if 'message_pairings' in round_data:
-            message = await channel.fetch_message(round_data['message_pairings'])
-            round.message_pairings = message
+            message = int(round_data['message_pairings'])
+            round.message_id_pairings = message
         if 'message_standings' in round_data:
-            message = await channel.fetch_message(round_data['message_standings'])
-            round.message_standings = message
+            message = int(round_data['message_standings'])
+            round.message_id_standings = message
         return round
     
     def is_concluded(self):
@@ -278,7 +276,7 @@ def sort_players_by_standings(players:list[Player]):
 
 double_bye_count = 0
 
-class SwissTournament:
+class SwissTournament(Serializable):
     def __init__(self, players:list[Player], max_rounds:int|None=None):
         if max_rounds is None:
             max_rounds = self.recommended_rounds(len(players))
@@ -300,13 +298,13 @@ class SwissTournament:
         return self.rounds[-1] if self.rounds else None
 
     @classmethod
-    async def deserialize(cls, data, channel):
+    def deserialize(cls, data):
         players = data['players']
         players:list[Player] = [Player.deserialize(player) for player in players]
         tournament = SwissTournament(players, data['max_rounds'])
         if 'rounds' in data:
             player_map = {player.player_id: player for player in players}
-            tournament.rounds = [await Round.deserialize(round, player_map, channel) for round in data['rounds']]
+            tournament.rounds = [Round.deserialize(round, player_map) for round in data['rounds']]
         return tournament
 
     def player_by_id(self, id):
