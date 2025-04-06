@@ -192,7 +192,7 @@ class SpelltableTournament(Serializable):
         participants = self.get_users_by_state(ParticipationState.PARTICIPATE)
         if state == ParticipationState.PARTICIPATE and self.max_participants and len(participants) >= self.max_participants:
             self.waitlist.append(userid)
-            message_str = f"Das Tunier ist bereits voll. Du wurdest auf der Warteliste gesetzt. In Zukunft sollst du benachrichtigt, wenn ein Platz frei wird (noch nicht implementiert)."
+            message_str = f"Das Tunier ist bereits voll. Du wurdest auf der Warteliste gesetzt.\nIn Zukunft sollst du benachrichtigt, wenn ein Platz frei wird und automatisch auf die Teilnehmer liste gesetzt werden. - ist aber noch nicht implementiert"
         else:
             self.users[userid] = state
 
