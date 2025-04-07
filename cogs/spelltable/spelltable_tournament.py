@@ -960,7 +960,7 @@ class SpelltableTournamentManager(Cog):
 
         log.debug(self.__class__.__name__ + " is ready")
 
-    @has_role("Moderator")
+    # @has_role("Moderator")
     @slash_command(description="Erstelle ein Spelltable Turnier für den Server")
     async def erstelle_turnier(
         self,
