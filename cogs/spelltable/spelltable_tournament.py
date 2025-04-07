@@ -856,8 +856,12 @@ class EnterTextModal(discord.ui.Modal):
 
     async def callback(self, interaction: discord.Interaction):
         new_value = self.input.value
-        if self.parse:
-            new_value = self.parse(self.input.value)
+        try:
+            if self.parse:
+                new_value = self.parse(self.input.value)
+        except ValueError:
+            await interaction.respond(f"Konnte die Eingabe `{self.input.value}` nicht auswerten.")
+            return
 
         setattr(self.tournament, self.key, new_value)
         
@@ -903,6 +907,20 @@ class EditTournamentView(discord.ui.View):
             return date_time_interpretation.parse_date(input_value)
 
         await interaction.response.send_modal(EnterTextModal(input, "time", self.tournament, self, parse))
+
+    @discord.ui.button(label="Max. Teilnehmer", style=discord.ButtonStyle.primary, emoji="🔢")
+    async def max_player_callback(self, button:discord.ui.Button, interaction:discord.Interaction):
+        input = discord.ui.InputText(
+            label="Maximale Teilnehmer",
+            placeholder="Wieviele Spieler maximal Teilnehmen können",
+            required=True,
+            value=str(self.tournament.max_participants) if self.tournament.max_participants else "",
+        )
+
+        def parse(input_value):
+            return int(input_value)
+
+        await interaction.response.send_modal(EnterTextModal(input, "max_participants", self.tournament, self, parse))
 
     @discord.ui.button(label="Abschicken", style=discord.ButtonStyle.success, emoji="✅")
     async def submit_callback(self, button:discord.ui.Button, interaction:discord.Interaction):
