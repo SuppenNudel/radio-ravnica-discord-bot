@@ -17,7 +17,7 @@ class ArenaDailyDeals(Cog):
     async def on_ready(self):
         guilds_str = "This Bot is installed on the following Servers:"
         for guild in self.bot.guilds:
-            guilds_str += f"\n{guild}"
+            guilds_str += f"\n{repr(guild)}"
         log.info(guilds_str)
         self.author_did = bluesky.get_target_did(BSKY_ARENA_DAILY_DEALS_HANDLE)
 
