@@ -914,7 +914,9 @@ class EditTournamentView(discord.ui.View):
         await interaction.edit(view=self)
         #  save into database
         participationView = await ParticipationView.create(self.tournament)
-        thread = await interaction.channel.create_thread(name=self.tournament.title)
+        thread = await interaction.channel.create_thread(name=self.tournament.title, type=discord.ChannelType.public_thread)
+        organizer = await self.tournament.organizer
+        await interaction.channel.send(f"{organizer.mention} hat ein Turnier erstellt. Macht doch mit! :) {thread.mention}")
         message = await thread.send(embed=await self.tournament.to_embed(), view=participationView)
         self.tournament.message = message
         await participationView.update_button_ids(message.id)
