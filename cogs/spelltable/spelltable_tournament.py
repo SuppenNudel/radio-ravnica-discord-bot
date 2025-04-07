@@ -11,11 +11,13 @@ from modules import env
 from modules import table_to_image
 from enum import StrEnum, auto
 from modules.serializable import Serializable
+import logging
+
+link_log = logging.getLogger("link_logger")
 
 test_participants = []
 
 IS_DEBUG = env.DEBUG
-
 BOT = None
 
 if IS_DEBUG:
@@ -920,6 +922,7 @@ class EditTournamentView(discord.ui.View):
         active_tournaments[await self.tournament.get_id()] = self.tournament
         await save_tournament(self.tournament)
         await interaction.followup.send(f"Prima! Das Turnier `{self.tournament.title}` wurde erstellt: {message.jump_url}", ephemeral=True)
+        link_log.info(f"Ein Turnier wurde erstellt: {message.jump_url}")
 
 class SpelltableTournamentManager(Cog):
     def __init__(self, bot:Bot):
@@ -928,16 +931,24 @@ class SpelltableTournamentManager(Cog):
 
     @Cog.listener()
     async def on_ready(self):
+        if not BOT:
+            raise Exception("BOT is None")
+        
         guild:discord.Guild = BOT.get_guild(env.GUILD_ID)
         loaded_tournaments = await load_tournaments(guild)
 
         global active_tournaments
         for message_path, tournament in loaded_tournaments.items():
-            view = await ParticipationView.create(tournament)
-            BOT.add_view(view) # Reattach buttons
-            # message = await tournament.message
-            # await message.edit(view=view) # to update the buttons status (enabled/disabled)
-            active_tournaments[message_path] = tournament
+            try:
+                view = await ParticipationView.create(tournament)
+                BOT.add_view(view) # Reattach buttons
+                # message = await tournament.message
+                # await message.edit(view=view) # to update the buttons status (enabled/disabled)
+                active_tournaments[message_path] = tournament
+                message = await tournament.message
+                link_log.info(f"Turnier wurde geladen: {message.jump_url}")
+            except discord.errors.NotFound:
+                log.warning("Turnier konnte nicht geladen werden, weil vermutlich der entprechende Channel gelöscht wurde")
 
         # Reattach buttons
         for key, tournament in active_tournaments.items():

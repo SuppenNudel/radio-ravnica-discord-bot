@@ -15,7 +15,10 @@ class ArenaDailyDeals(Cog):
 
     @Cog.listener()
     async def on_ready(self):
-        log.info(f"{self.bot.guilds}")
+        guilds_str = "This Bot is installed on the following Servers:"
+        for guild in self.bot.guilds:
+            guilds_str += f"\n{guild}"
+        log.info(guilds_str)
         self.author_did = bluesky.get_target_did(BSKY_ARENA_DAILY_DEALS_HANDLE)
 
         if not self.check_bsky_posts.is_running():
