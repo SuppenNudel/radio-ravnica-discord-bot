@@ -277,22 +277,14 @@ def sort_players_by_standings(players:list[Player]):
 double_bye_count = 0
 
 def recommended_rounds(num_players):
-    if num_players <= 8:
-        return 3
-    elif num_players <= 16:
-        return 4
-    elif num_players <= 32:
-        return 5
-    elif num_players <= 64:
-        return 6
-    elif num_players <= 128:
-        return 7
-    elif num_players <= 226:
-        return 8
-    elif num_players <= 409:
-        return 9
-    else:
-        return 10
+    if num_players <= 8: return 3
+    if num_players <= 16: return 4
+    if num_players <= 32: return 5
+    if num_players <= 64: return 6
+    if num_players <= 128: return 7
+    if num_players <= 226: return 8
+    if num_players <= 409: return 9
+    return 10
 
 class SwissTournament(Serializable):
     def __init__(self, players:list[Player], max_rounds:int|None=None):
