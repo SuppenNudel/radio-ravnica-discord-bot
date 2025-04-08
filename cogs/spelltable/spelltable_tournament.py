@@ -83,7 +83,7 @@ class ParticipationState(StrEnum):
     DECLINE = auto()
 
 class SpelltableTournament(Serializable):
-    def __init__(self, guild:discord.Guild, title:str, organizer_id:int, max_participants:int=None):
+    def __init__(self, guild:discord.Guild, title:str, organizer_id:int):
         self.title = title
         self.description = None
         self.time:datetime = None
@@ -92,9 +92,10 @@ class SpelltableTournament(Serializable):
         self.message_id:int = None
         self.channel_id:int = None
         self.swiss_tournament:swiss_mtg.SwissTournament = None
-        self.max_participants = max_participants
+        self.max_participants = None
         self.waitlist:list[int] = []
         self.guild = guild
+        self.max_rounds = None
 
         if IS_DEBUG:
             for user_id in test_participants:
@@ -155,6 +156,8 @@ class SpelltableTournament(Serializable):
         if "time" in data and data["time"]:
             tournament.time = datetime.fromisoformat(data["time"])
 
+        tournament.max_rounds = data["max_rounds"]
+
         tournament.users = {int(k): v for k, v in data["users"].items()}
         tournament.message_id = int(data["message_id"])
         tournament.channel_id = int(data["channel_id"])
@@ -182,8 +185,9 @@ class SpelltableTournament(Serializable):
             "guild_id": message.guild.id,
             "message_id": message.id,
             "channel_id": message.channel.id,
-            "tournament": self.swiss_tournament,
-            "max_participants": self.max_participants
+            "max_participants": self.max_participants,
+            "max_rounds": self.max_rounds,
+            "tournament": self.swiss_tournament
         }
     
     async def check_waitlist(self, participants):
@@ -236,6 +240,13 @@ class SpelltableTournament(Serializable):
             embed.add_field(name="Start", value=discord.utils.format_dt(self.time, "F")+"\n"+discord.utils.format_dt(self.time, 'R'), inline=False)
 
         participants = self.get_users_by_state(ParticipationState.PARTICIPATE)
+        rec_round_count = swiss_mtg.recommended_rounds(len(participants))
+        if self.max_rounds:
+            current_round_count = min(self.max_rounds, rec_round_count)
+            embed.add_field(name="Anzahl Runden", value=f"Abhängig von der Spielerzahl. Aber Maximal {self.max_rounds}\nAktuell: {current_round_count}", inline=False)
+        else:
+            embed.add_field(name="Anzahl Runden", value=f"Abhängig von der Spielerzahl.\nAktuell: {rec_round_count}", inline=False)
+
         waitlist = self.waitlist
         tentative = self.get_users_by_state(ParticipationState.TENTATIVE)
         # declined = self.get_users_by_state(ParticipationState.DECLINE)
@@ -253,7 +264,7 @@ class SpelltableTournament(Serializable):
             # as long as the current round has not concluded, don't post standings
             return
         message_standings = await get_round_message(current_round, self, standings_messages)
-        if current_round.round_number >= self.swiss_tournament.max_rounds:
+        if current_round.round_number >= self.swiss_tournament.rounds_count:
             swiss_mtg.sort_players_by_standings(self.swiss_tournament.players)
             winner = None
             for player in self.swiss_tournament.players:
@@ -334,7 +345,7 @@ def format_standings_by_tournament(round_no:int, players:list[swiss_mtg.Player])
 
 def format_standings(tournament:swiss_mtg.SwissTournament) -> str:
     round = tournament.current_round()
-    final_round = round.round_number == tournament.max_rounds
+    final_round = round.round_number == tournament.rounds
     players = list({player for match in round.matches for player in (match.player1, match.player2) if player is not None})
     swiss_mtg.sort_players_by_standings(players)
 
@@ -427,7 +438,7 @@ class StartNextRoundView(discord.ui.View):
     @discord.ui.button(label="Nächte Runde", style=discord.ButtonStyle.success, emoji="➡️", custom_id="start_next_round_placeholder")
     async def next_round_button(self, button: discord.ui.Button, interaction: discord.Interaction):
         if interaction.user.id != self.tournament.organizer_id:
-            await interaction.respond("Nur der Turn Organisator darf dies tun.")
+            await interaction.respond("Nur der Turn Organisator darf dies tun.", ephemeral=True)
             return
         await interaction.response.defer()
         previous_pairings_message = await get_round_message(self.previous_round, self.tournament, pairings_messages)
@@ -826,7 +837,7 @@ class ParticipationView(discord.ui.View):
             player_name = EMOJI_PATTERN.sub("", member.display_name).strip()
             players.append(swiss_mtg.Player(player_name, participant_id))
 
-        swiss_tournament = swiss_mtg.SwissTournament(players)
+        swiss_tournament = swiss_mtg.SwissTournament(players, max_rounds=self.tournament.max_rounds if self.tournament.max_rounds else None)
         self.tournament.swiss_tournament = swiss_tournament
         await self.tournament.next_round(interaction)
 
@@ -860,7 +871,7 @@ class EnterTextModal(discord.ui.Modal):
             if self.parse:
                 new_value = self.parse(self.input.value)
         except ValueError:
-            await interaction.respond(f"Konnte die Eingabe `{self.input.value}` nicht auswerten.")
+            await interaction.respond(f"Konnte die Eingabe `{self.input.value}` nicht auswerten.", ephemeral=True)
             return
 
         setattr(self.tournament, self.key, new_value)
@@ -870,7 +881,7 @@ class EnterTextModal(discord.ui.Modal):
 class EditTournamentView(discord.ui.View):
     def __init__(self):
         raise RuntimeError("Use 'await EditTournamentView.create(...)' instead")
-    
+
     async def _init(self, tournament:SpelltableTournament, channel:discord.TextChannel):
         super().__init__()
         self.tournament = tournament
@@ -921,6 +932,20 @@ class EditTournamentView(discord.ui.View):
             return int(input_value)
 
         await interaction.response.send_modal(EnterTextModal(input, "max_participants", self.tournament, self, parse))
+
+    @discord.ui.button(label="Max. Runden", style=discord.ButtonStyle.primary, emoji="🔃")
+    async def round_count_callback(self, button:discord.ui.Button, interaction:discord.Interaction):
+        input = discord.ui.InputText(
+            label="Maximal Runden (0 für empfohlene Anzahl)",
+            placeholder="Wieviele Runden maximal gespielt werden sollen",
+            required=True,
+            value=str(self.tournament.max_participants) if self.tournament.max_participants else "",
+        )
+
+        def parse(input_value):
+            return int(input_value)
+
+        await interaction.response.send_modal(EnterTextModal(input, "max_rounds", self.tournament, self, parse))
 
     @discord.ui.button(label="Abschicken", style=discord.ButtonStyle.success, emoji="✅")
     async def submit_callback(self, button:discord.ui.Button, interaction:discord.Interaction):
@@ -997,7 +1022,8 @@ class SpelltableTournamentManager(Cog):
         if ctx.guild is None:
             await ctx.respond("Dieser Befehl kann nur in einem Server verwendet werden.", ephemeral=True)
             return
-        tournament = SpelltableTournament(ctx.guild, titel, ctx.author.id, max_teilnehmer)
+        tournament = SpelltableTournament(ctx.guild, titel, ctx.author.id)
+        tournament.max_participants = max_teilnehmer
         tournament.organizer = ctx.author
         view = await EditTournamentView.create(tournament, ctx.channel)
         await ctx.respond(

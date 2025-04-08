@@ -276,11 +276,31 @@ def sort_players_by_standings(players:list[Player]):
 
 double_bye_count = 0
 
+def recommended_rounds(num_players):
+    if num_players <= 8:
+        return 3
+    elif num_players <= 16:
+        return 4
+    elif num_players <= 32:
+        return 5
+    elif num_players <= 64:
+        return 6
+    elif num_players <= 128:
+        return 7
+    elif num_players <= 226:
+        return 8
+    elif num_players <= 409:
+        return 9
+    else:
+        return 10
+
 class SwissTournament(Serializable):
     def __init__(self, players:list[Player], max_rounds:int|None=None):
         if max_rounds is None:
-            max_rounds = self.recommended_rounds(len(players))
-        self.max_rounds = max_rounds
+            rounds_count = recommended_rounds(len(players))
+        else:
+            rounds_count = min(max_rounds, recommended_rounds(len(players)))
+        self.rounds_count = rounds_count
         self.players:list[Player] = players
         self.rounds:list[Round] = []
 
@@ -289,7 +309,7 @@ class SwissTournament(Serializable):
     
     def serialize(self):
         return {
-            "max_rounds": self.max_rounds,
+            "rounds_count": self.rounds_count,
             "players": self.players,
             "rounds": self.rounds,
         }
@@ -301,7 +321,8 @@ class SwissTournament(Serializable):
     def deserialize(cls, data):
         players = data['players']
         players:list[Player] = [Player.deserialize(player) for player in players]
-        tournament = SwissTournament(players, data['max_rounds'])
+        tournament = SwissTournament(players)
+        tournament.rounds_count = data['rounds_count']
         if 'rounds' in data:
             player_map = {player.player_id: player for player in players}
             tournament.rounds = [Round.deserialize(round, player_map) for round in data['rounds']]
@@ -312,24 +333,6 @@ class SwissTournament(Serializable):
             if player.player_id == id:
                 return player
         return None
-
-    def recommended_rounds(self, num_players):
-        if num_players <= 8:
-            return 3
-        elif num_players <= 16:
-            return 4
-        elif num_players <= 32:
-            return 5
-        elif num_players <= 64:
-            return 6
-        elif num_players <= 128:
-            return 7
-        elif num_players <= 226:
-            return 8
-        elif num_players <= 409:
-            return 9
-        else:
-            return 10
 
     def get_opponent(self, player:Player, opponents:list[Player]) -> Player|None:
         for possible_opponent in opponents:
@@ -406,12 +409,12 @@ class SwissTournament(Serializable):
     
     def pair_players(self) -> Round:
         next_round_no = self.current_round().round_number + 1 if self.current_round() else 1
-        if next_round_no > self.max_rounds:
+        if next_round_no > self.rounds_count:
             return None
         new_round = None
         if next_round_no == 1:
             new_round = self.random_pairing(next_round_no)
-        elif next_round_no == self.max_rounds:  # Last round      
+        elif next_round_no == self.rounds_count:  # Last round      
             sort_players_by_standings(self.players)
             # List of players who haven't dropped, along with their match points
             players: list[tuple[Player, int]] = [(player, rank) for rank, player in enumerate(self.players) if not player.dropped]
@@ -492,7 +495,7 @@ def main():
     tournament = SwissTournament(players)
 
     # Step 3: Play multiple rounds (simulate rounds in a Swiss system)
-    for round_num in range(tournament.max_rounds):
+    for round_num in range(tournament.rounds):
         play_round(tournament, RANDOM_DROP_RATE)
 
 if __name__ == "__main__":
