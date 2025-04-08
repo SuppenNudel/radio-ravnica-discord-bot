@@ -993,7 +993,9 @@ class SpelltableTournamentManager(Cog):
                 message = await tournament.message
                 link_log.info(f"Turnier wurde geladen: {message.jump_url}")
             except discord.errors.NotFound:
-                log.warning("Turnier konnte nicht geladen werden, weil vermutlich der entprechende Channel gelöscht wurde")
+                file_path = TOURNAMENTS_FOLDER+"/"+(message_path.replace("/", "_"))+".json"
+                log.warning(f"Turnier konnte nicht geladen werden, weil vermutlich der entprechende Channel gelöscht wurde. Lösche Datei {file_path}")
+                os.remove(file_path)
 
         # Reattach buttons
         for key, tournament in active_tournaments.items():
