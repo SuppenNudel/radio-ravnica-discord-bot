@@ -190,7 +190,7 @@ async def edit_event_post(event:"PaperEvent", interaction_or_message:discord.Int
         embeds.append(gmaps_embed)
     if type(interaction_or_message) == discord.Interaction:
         await interaction_or_message.response.edit_message(
-            content=event.construct_content(),
+            content=event.construct_content(preview=False),
             embeds=embeds,
             files=event.get_files(),
             attachments=[],
@@ -201,7 +201,7 @@ async def edit_event_post(event:"PaperEvent", interaction_or_message:discord.Int
         if isinstance(thread, discord.Thread):
             await thread.edit(name=event.construct_thread_title())
         await interaction_or_message.edit(
-            content=event.construct_content(),
+            content=event.construct_content(preview=False),
             embeds=embeds,
             files=event.get_files(),
             attachments=[],
@@ -222,7 +222,7 @@ class EditFieldModal(discord.ui.Modal):
             if type(field.value) == list:
                 value = ", ".join(field.value)
             else:
-                str(field.value)
+                value = str(field.value)
 
         self.input = discord.ui.InputText(
             label=field.name.value,
@@ -470,7 +470,7 @@ class PaperEvent():
         if preview:
             content += f"# {self.construct_thread_title()}\n    "
         if description:
-            content += "\n".join(f"{line}" for line in description.splitlines())
+            content += description
         if not preview:
             content += f"\n\nDanke an {self.author.mention} für's Posten!"
         return f"{content}"
