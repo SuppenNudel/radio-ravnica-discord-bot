@@ -252,7 +252,7 @@ class RemindMe(commands.Cog):
         for guild in self.bot.guilds:
             filter_date = datetime.now(tz=timezone)
             filter = (notion.NotionFilterBuilder()
-                    .add_date_filter(property_name=DB_FIELD_DATE, value=filter_date.strftime("%Y-%m-%d %H:%M"), condition=notion.DateCondition.ON_OR_BEFORE)
+                    .add_date_filter(property_name=DB_FIELD_DATE, value=filter_date, condition=notion.DateCondition.ON_OR_BEFORE)
                     .add_text_filter(property_name=DB_FIELD_GUILD, value=str(guild.id), condition=notion.TextCondition.EQUALS)
                     .build())
             entries = notion.get_all_entries(DB_ID_REMIND_ME, filter=filter)

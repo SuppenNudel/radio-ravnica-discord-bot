@@ -16,10 +16,10 @@ notion = Client(auth=notion_token, logger=logging.getLogger())
 # Enums for different property types
 class TextCondition(Enum):
     EQUALS = "equals"
+    NOT_EQUAL = "does_not_equal"
     CONTAINS = "contains"
     STARTS_WITH = "starts_with"
     ENDS_WITH = "ends_with"
-
 
 class NumberCondition(Enum):
     EQUALS = "equals"
@@ -83,10 +83,10 @@ class NotionFilterBuilder:
         })
         return self
 
-    def add_date_filter(self, property_name: str, condition: DateCondition, value: str):
+    def add_date_filter(self, property_name: str, condition: DateCondition, value: datetime):
         self.filters.append({
             "property": property_name,
-            "date": {condition.value: value}
+            "date": {condition.value: str(value)}
         })
         return self
 

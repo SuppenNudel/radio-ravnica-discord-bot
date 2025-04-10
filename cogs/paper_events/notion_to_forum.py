@@ -50,7 +50,7 @@ class PaperEventsNotionToForum(commands.Cog):
 
     @tasks.loop(minutes=5)
     async def check(self): # checks for entries that need to be posted on discord        
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.now()
         filter = (
             notion.NotionFilterBuilder()
             .add_date_filter("Start (und Ende)", notion.DateCondition.ON_OR_AFTER, today)

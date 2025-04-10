@@ -33,33 +33,55 @@ class Coordinates():
         self.lat = coordinates['lat']
 
 class Location():
-    def __init__(self, geocode_result, place_details):#:type:Literal['geocode', 'places']):
+    def __init__(self):
+        self.country = None
+        self.state = None
+        self.city = None
+        self.county = None
+        self.street = None
+        self.street_number = None
+        self.formatted_address = None
+        self.coord = None
+        self.types = None
+        self.name = None
+        self.gmaps_url = None
+        self.url = None
+
+    def __str__(self):
+        if self.city:
+            return f"{self.name} {self.city['long_name']}"
+
+    @classmethod
+    def from_geocode_result(cls, geocode_result, place_details) -> "Location":#:type:Literal['geocode', 'places']):
+        location = Location()    
         # if type == 'geocode':
         for obj in geocode_result['address_components']:
             types = obj.get('types', [])
             if 'country' in types:
-                self.country = obj
+                location.country = obj
             elif 'administrative_area_level_1' in types:
-                self.state = obj
+                location.state = obj
             elif 'locality' in types:
-                self.city = obj
+                location.city = obj
             elif 'administrative_area_level_3' in types:
-                self.county = obj # Landkreis
+                location.county = obj # Landkreis
             elif 'route' in types:
-                self.street = obj
+                location.street = obj
             elif 'street_number' in types:
-                self.street_number = obj
+                location.street_number = obj
         # elif type == 'places':
         #     self.name = geocode_result['name']
-        self.formatted_address:str = geocode_result['formatted_address']
-        self.coord:Coordinates = Coordinates(geocode_result['geometry']['location'])
-        self.types = geocode_result['types']
-        self.get_static_map()
+        location.formatted_address:str = geocode_result['formatted_address']
+        location.coord:Coordinates = Coordinates(geocode_result['geometry']['location'])
+        location.types = geocode_result['types']
+        location.get_static_map()
         if place_details:
             # self.phone_number = place_details['international_phone_number']
-            self.name = place_details['name']
-            self.gmaps_url = place_details['url']
-            self.url = place_details['website'] if 'website' in place_details else None
+            location.name = place_details['name']
+            location.gmaps_url = place_details['url']
+            location.url = place_details['website'] if 'website' in place_details else None
+        
+        return location
 
     def get_area_and_tag_name(self):
         country_short = self.country['short_name']
@@ -122,12 +144,12 @@ def get_location(location:str, language="de", details=False) -> Location:
         # not found
         raise Exception(f"No location found for {location}")
     if len(geocode_results) > 1:
-        locations = [Location(geocode_result, 'geocode') for geocode_result in geocode_results]
+        locations = [Location.from_geocode_result(geocode_results, 'geocode') for geocode_result in geocode_results]
         raise Exception(f"Multiple locations found for {location}", locations)
     # location_coords = geocode_results[0]["geometry"]["location"]
     if details:
         place_details = gmaps.place(place_id=geocode_results[0]['place_id'])['result']
-    return Location(geocode_results[0], place_details)
+    return Location.from_geocode_result(geocode_results[0], place_details)
 
 if __name__ == "__main__":
     search_string = "Battlebear kaiserslautern"

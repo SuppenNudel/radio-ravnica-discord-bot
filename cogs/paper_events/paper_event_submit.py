@@ -5,8 +5,8 @@ import discord
 from modules import notion, env, gmaps
 import modules.paper_events_common as pe_common
 import traceback
+from datetime import datetime
 
-CHANNEL_PAPER_EVENTS_ID = env.CHANNEL_PAPER_EVENTS_ID
 EVENT_DATABASE_ID = env.EVENT_DATABASE_ID
 DEBUG = env.DEBUG
 
@@ -19,29 +19,6 @@ def check_factory(user):
         elif type(m) == discord.Interaction:
             return m.user == user and isinstance(m.channel, discord.DMChannel)
     return check
-
-class SubmitButton(discord.ui.Button):
-    """Custom button for submitting the tournament."""
-    def __init__(self):
-        super().__init__(label="Turnier einsenden", style=discord.ButtonStyle.primary, disabled=True)
-
-    async def callback(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-        """Handles the submission when clicked."""
-        view: EditTourneyView = self.view  # Get the parent view
-        view.disable_all_items()
-        view.stop()
-        await interaction.followup.edit_message(view.message.id, view=view)
-
-        # Ensure all mandatory fields are filled
-        if not all(field.value for field in view.event.fields.values() if field.mandatory):
-            await interaction.response.send_message("Not all mandatory fields are filled!", ephemeral=True)
-            return
-        
-        if type(interaction.channel) == discord.DMChannel:
-            await view.send_forum_post(interaction)
-        else:
-            raise Exception("interaction.channel is not a DMChannel")  
 
 class FieldSelect(discord.ui.Select):
     """Custom select menu handling field selection."""
@@ -57,15 +34,15 @@ class FieldSelect(discord.ui.Select):
     def get_options(self):
         """Generates the options dynamically based on field status."""
         return [
-            discord.SelectOption(label=field.label(self.fields), value=field.name.name, emoji=field.custom_icon, description=field.description)
+            discord.SelectOption(label=field.label(self.fields), value=field.name.name, emoji=field.icon, description=field.description)
             for field in self.fields.values()
         ]
 
     async def callback(self, interaction: discord.Interaction):
         response_message = await interaction.response.send_message("Anfrage erhalten, einen Augeblick... ⏳")
-        if not self.view and not type(self.view) == EditTourneyView:
+        if not self.view and not type(self.view) == pe_common.EditTourneyView:
             raise Exception("view is None")
-        view:EditTourneyView = self.view
+        view:pe_common.EditTourneyView = self.view
         self.view.disable_all_items()
         self.view.stop()
         await interaction.followup.edit_message(view.message.id, view=view)
@@ -118,94 +95,7 @@ class FieldSelect(discord.ui.Select):
             log.error(traceback.format_exc())
             await user.send(f"Da ist etwas schief gegangen: {repr(e)}")
         finally:
-            await user.send(view=EditTourneyView(view.event))
-
-class EditTourneyView(discord.ui.View):
-    def __init__(self, event:pe_common.PaperEvent):
-        super().__init__()
-        self.event = event
-        self.select_menu = FieldSelect(self.event.fields)
-
-        # Submit Button
-        self.submit_button = SubmitButton()
-        self.add_item(self.select_menu)
-        self.add_item(self.submit_button)
-        self.add_cancel_button(self)
-
-        self.update_submit_button()
-
-    def add_cancel_button(self, view: discord.ui.View):
-        cancel_button = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.red)
-
-        # Define the cancel button's behavior
-        async def cancel_button_callback(interaction: discord.Interaction):
-            # Optionally, disable the cancel button
-            view.disable_all_items()
-            view.stop()
-            await interaction.response.edit_message(view=view)            
-            await self.event.author.send("Erstellung der Veranstaltung abgebrochen.")
-
-        cancel_button.callback = cancel_button_callback
-        view.add_item(cancel_button)
-
-    async def send_forum_post(self, interaction:discord.Interaction):
-        guild = self.event.guild
-        forum_channel = await discord.utils.get_or_fetch(guild, "channel", CHANNEL_PAPER_EVENTS_ID, default=None)
-
-        if not isinstance(forum_channel, discord.ForumChannel):
-            await interaction.followup.send(content="This is not a forum channel!")
-            return
-        
-        thread = await self.event.create_and_send_thread(forum_channel)
-        notion_result = self.save_tourney_in_notion(thread)
-
-        await interaction.followup.send(f"Forum Post erstellt: {thread.jump_url}\n[Notion Eintrag]({notion_result['public_url']}) erstellt")
-
-
-    def update_submit_button(self):
-        """Enable or disable the submit button based on mandatory field completion."""
-        all_mandatory_filled = all(field.value for field in self.event.fields.values() if field.mandatory)
-        at_least_one_conditional_filled = self.event.fields[pe_common.FieldName.TITLE].value or self.event.fields[pe_common.FieldName.TYPE].value
-        is_valid = all_mandatory_filled and at_least_one_conditional_filled
-        self.submit_button.disabled = not is_valid
-
-    def save_tourney_in_notion(self, thread):
-        event:pe_common.PaperEvent = self.event
-        payload = notion.NotionPayloadBuilder()
-        image:str|None = event.fields[pe_common.FieldName.IMAGE].value
-        if image:
-            payload.add_file("Cover Bild", file_url=image, file_name="Cover Image")
-
-        pe_common.FieldName.IMAGE
-        payload.add_title("Event Titel", event.build_title())
-        payload.add_checkbox("For Test", DEBUG)
-        payload.add_text("Author", event.author.display_name if event.author.display_name else event.author.name)
-        payload.add_text("Author ID", str(event.author.id))
-        if event.fields[pe_common.FieldName.TYPE].value:
-            payload.add_select("Event Typ", event.fields[pe_common.FieldName.TYPE].value[0])
-        if event.fields[pe_common.FieldName.FORMATS].value:
-            payload.add_multiselect("Format(e)", event.fields[pe_common.FieldName.FORMATS].value)
-        payload.add_date(
-            "Start (und Ende)",
-            start=event.fields[pe_common.FieldName.START].value,
-            end=event.fields[pe_common.FieldName.END].value
-        )
-        payload.add_text("Freitext", event.fields[pe_common.FieldName.DESCRIPTION].value or "")
-        if event.fields[pe_common.FieldName.FEE].value:
-            payload.add_number("Gebühr", event.fields[pe_common.FieldName.FEE].value)
-        location:gmaps.Location = event.fields[pe_common.FieldName.LOCATION].value
-        payload.add_text("Name des Ladens", location.name or "")
-        payload.add_text("Stadt", location.city['long_name'])
-        payload.add_relation("(Bundes)land", location.get_area_page_id())
-        if event.fields[pe_common.FieldName.URL].value:
-            payload.add_url("URL", event.fields[pe_common.FieldName.URL].value)
-        payload.add_text("Server ID", str(thread.guild.id))
-        payload.add_text("Thread ID", str(thread.id))
-        return notion.add_to_database(database_id=EVENT_DATABASE_ID, payload=payload.build())
-    async def on_timeout(self):
-        self.disable_all_items()
-        self.stop()
-        await self.message.edit(view=self)
+            await user.send(view=pe_common.EditTourneyView(view.event))
 
 class PaperEventSubmit(Cog):
     def __init__(self, bot:Bot):
@@ -213,6 +103,36 @@ class PaperEventSubmit(Cog):
 
     @Cog.listener()
     async def on_ready(self):
+        # reconnect edit views
+        filter = (
+            notion.NotionFilterBuilder()
+            .add_date_filter("Start (und Ende)", notion.DateCondition.ON_OR_AFTER, datetime.now())
+            .add_text_filter("Server ID", notion.TextCondition.EQUALS if DEBUG else notion.TextCondition.NOT_EQUAL, "1314528348319514684")
+            .build()
+            )
+        upcoming_events = notion.get_all_entries(EVENT_DATABASE_ID, filter=filter)
+        
+        for event in upcoming_events:
+            event_entry = notion.Entry(event)
+            server_id = int(event_entry.get_text_property("Server ID"))
+            author_id = int(event_entry.get_text_property("Author ID"))
+            thread_id = int(event_entry.get_text_property("Thread ID"))
+            try:
+                guild = await discord.utils.get_or_fetch(self.bot, "guild", server_id)
+                author = await discord.utils.get_or_fetch(guild, "member", author_id)
+                paper_event = pe_common.PaperEvent(guild, author)
+                thread:discord.Thread = await discord.utils.get_or_fetch(guild, "channel", thread_id)
+                paper_event.thread = thread
+
+                paper_event.fill_fields_from_notion_entry(event_entry)
+
+                # thread does not have get_message method, so we need to fetch the message
+                message:discord.Message = await thread.fetch_message(thread_id)
+                view = pe_common.EditPostView(paper_event)
+                await message.edit(view=view)
+
+            except discord.NotFound as e:
+                log.error(f"Didn't find guild or author {e}")
         log.debug(self.__class__.__name__ + " is ready")
 
     # Weitere Checks https://gist.github.com/Painezor/eb2519022cd2c907b56624105f94b190
@@ -231,7 +151,7 @@ class PaperEventSubmit(Cog):
             )
             
             await ctx.send_response(f"Lass uns zusammen in den Direktnachrichten das Turnier erstellen: {direct_message.jump_url}", ephemeral=True)
-            await user.send("Was möchtest du bearbeiten?", view=EditTourneyView(pe_common.PaperEvent(ctx.guild, user)))
+            await user.send(view=pe_common.EditTourneyView(pe_common.PaperEvent(ctx.guild, user)))
         except discord.Forbidden:
             await ctx.send_response("Ich konnte dich nicht direkt anschreiben! Bitte erlaube Direktnachrichten von Mitgliedern des Servers.", ephemeral=True)
 
