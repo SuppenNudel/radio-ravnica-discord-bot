@@ -262,7 +262,17 @@ class SubmitButton(discord.ui.Button):
 
         all_mandatory_filled = all(field.value for field in event.fields.values() if field.mandatory)
         at_least_one_conditional_filled = event.fields[FieldName.TITLE].value or event.fields[FieldName.TYPE].value
-        is_valid = all_mandatory_filled and at_least_one_conditional_filled
+        end_is_earlier = False
+        start = event.fields[FieldName.START].value
+        end = event.fields[FieldName.END].value
+        if start and end:
+            if type(start) == datetime and type(end) == datetime:
+                if end < start:
+                    end_is_earlier = True
+                    self.label += "  (Ende ist vor Start)"
+            else:
+                raise ValueError("One of start or end is not of type datetime")
+        is_valid = all_mandatory_filled and at_least_one_conditional_filled and not end_is_earlier
         self.disabled = not is_valid
 
     async def callback(self, interaction: discord.Interaction):
