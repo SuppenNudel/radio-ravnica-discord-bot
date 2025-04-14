@@ -991,7 +991,7 @@ class SpelltableTournamentManager(Cog):
                 # await message.edit(view=view) # to update the buttons status (enabled/disabled)
                 active_tournaments[message_path] = tournament
                 message = await tournament.message
-                link_log.info(f"Turnier wurde geladen: {message.jump_url}")
+                link_log.info(f"Turnier wurde geladen: {message.jump_url} <@{tournament.organizer_id}>")
             except discord.errors.NotFound:
                 file_path = TOURNAMENTS_FOLDER+"/"+(message_path.replace("/", "_"))+".json"
                 log.warning(f"Turnier konnte nicht geladen werden, weil vermutlich der entprechende Channel gelöscht wurde. Lösche Datei {file_path}")
