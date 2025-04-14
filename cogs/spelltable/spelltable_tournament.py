@@ -302,7 +302,8 @@ class SpelltableTournament(Serializable):
 
     async def update_pairings(self, round):
         new_embed = format_pairings(round)
-        pairings_message = await get_round_message(round, self, pairings_messages)
+        pairings_message:discord.Message = await get_round_message(round, self, pairings_messages)
+        link_log.info(f"updating pairings {pairings_message.jump_url} sent by {pairings_message.author}")
         await pairings_message.edit(embed=new_embed)
 
         await save_tournament(self)
