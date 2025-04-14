@@ -615,6 +615,7 @@ class ConfirmDropModal(discord.ui.Modal):
     async def callback(self, interaction: discord.Interaction):
         if self.drop_input.value != "DROP":
             await interaction.respond("Turnier ausscheidung fehlgeschlagen", ephemeral=True)
+            return
         self.player.dropped = True
         
         # update matchups, i.e. strike through dropped player
