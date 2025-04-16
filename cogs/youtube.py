@@ -76,12 +76,13 @@ class Youtube(commands.Cog):
                 latest_content = await self.get_latest_content(yt_channel, content_type)
                 if not latest_content:
                     continue
-                log.debug(f"https://www.youtube.com/watch?v={latest_content['videoId']} is the latest {content_type}")
+                # log.debug(f"https://www.youtube.com/watch?v={latest_content['videoId']} is the latest {content_type}")
                 if content_cache and not content_cache['videoId'] == latest_content['videoId']:
-                    log.debug("it is new, going to post")
+                    log.info(f"going to post https://www.youtube.com/watch?v={latest_content['videoId']} as {content_type}")
                     await self.post_video(yt_channel, content_type, latest_content)
                 else:
-                    log.debug("it has been posted already")
+                    pass
+                    # log.debug("it has been posted already")
                 yt_channel.content[content_type] = latest_content
 
 def setup(bot:Bot):
