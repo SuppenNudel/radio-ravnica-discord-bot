@@ -77,7 +77,7 @@ def generate_image(data, filename, font_path="arial.ttf"):
     for row in data["rows"]:
         x_offset = padding
         for col, value in enumerate(row):
-            align = "left" if data["headers"][col].lower() in ["name", "spieler", "player", "spieler 1", "spieler 2", "Match Ergebnis (S-N-U)".lower()] else "center"
+            align = "left" if data["headers"][col].lower() in ["name", "spieler", "player", "spieler 1", "gegner", "spieler 2", "Match Ergebnis (S-N-U)".lower()] else "center"
             text, strike_through = value if isinstance(value, tuple) else (value, False)
             draw_cell(x_offset, y_offset, str(text), cell_widths[col], align=align, strike_through=strike_through)
             x_offset += cell_widths[col]

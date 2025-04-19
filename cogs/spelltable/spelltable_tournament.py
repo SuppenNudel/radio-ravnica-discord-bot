@@ -12,6 +12,7 @@ from enum import StrEnum, auto
 from modules.serializable import Serializable
 import logging
 from typing import Literal
+import traceback
 
 link_log = logging.getLogger("link_logger")
 
@@ -282,7 +283,8 @@ class SpelltableTournament(Serializable):
                     message_standings = await interaction.followup.send(file=file, content=content)
                     current_round.message_id_standings = message_standings.id
                 except Exception as e:
-                    log.error(e, f"Tried sending followup with content={content}, file={file}")
+                    log.error(e)
+                    log.error(f"Tried sending followup with content={content}, file={file}")
         else:
             start_next_round_view = await StartNextRoundView.create(current_round, self)
             content = f"Platzierungen nach der {self.swiss_tournament.current_round().round_number}. Runde"
@@ -303,7 +305,7 @@ class SpelltableTournament(Serializable):
     async def update_pairings(self, round):
         pairings_message:discord.Message = await get_round_message(round, self, "pairings")
         link_log.info(f"updating pairings {pairings_message.jump_url} sent by {pairings_message.author}")
-        image = await pairings_to_image(self)
+        image = await pairings_expanded_image(self)
         file = discord.File(image, filename=image)
         await pairings_message.edit(file=file, attachments=[])
 
@@ -313,14 +315,14 @@ class SpelltableTournament(Serializable):
         round = self.swiss_tournament.pair_players()
         await interaction.followup.send(f"Berechne Paarungen für Runde {round.round_number} ...", ephemeral=True)
         reportMatchView = await ReportMatchView.create(round, self)
-        image = await pairings_to_image(self)
+        image = await pairings_expanded_image(self)
         file = discord.File(image, filename=image)
         new_pairings_message:discord.message.Message = await interaction.followup.send(content=f"Paarungen für die {round.round_number}. Runde ", file=file, view=reportMatchView)
         pairings_messages[round] = new_pairings_message
         round.message_id_pairings = new_pairings_message.id
         await save_tournament(self)
 
-async def pairings_to_image(tournament:SpelltableTournament) -> str:
+async def pairings_summary_image(tournament:SpelltableTournament) -> str:
     round = tournament.swiss_tournament.current_round()
     id = await tournament.get_id()
 
@@ -350,6 +352,49 @@ async def pairings_to_image(tournament:SpelltableTournament) -> str:
     filename = f'tournaments/{id.replace("/", "_")}_pairings_round_{round.round_number}.png'
     table_to_image.generate_image(data, filename, "beleren.ttf")
     return filename
+
+async def pairings_expanded_image(tournament: SpelltableTournament) -> str:
+    round = tournament.swiss_tournament.current_round()
+    id = await tournament.get_id()
+
+    rows = []
+
+    for match in round.matches:
+        # Handle BYE
+        if match.is_bye():
+            player = match.player1 or match.player2
+            if player:
+                rows.append([(player.name, player.dropped), "BYE", "2 - 0"])
+            continue
+
+        # Normal match
+        p1, p2 = match.player1, match.player2
+        if not (p1 and p2):
+            continue
+
+        if match.is_finished():
+            win_p1, win_p2, draws = match.wins.values()
+            score_p1 = f"{win_p1} - {win_p2}" + (f" - {draws}" if draws else "")
+            score_p2 = f"{win_p2} - {win_p1}" + (f" - {draws}" if draws else "")
+        else:
+            score_p1 = score_p2 = "Ausstehend"
+
+        # Add both player perspectives
+        rows.append([(p1.name, p1.dropped), p2.name, score_p1])
+        rows.append([(p2.name, p2.dropped), p1.name, score_p2])
+
+    # Sort rows by player name (first element of the tuple in column 0)
+    rows.sort(key=lambda row: row[0][0].lower())
+
+    data = {
+        "headers": ["Spieler", "Gegner", "Match Ergebnis (S-N-U)"],
+        "rows": rows
+    }
+
+    filename = f'tournaments/{id.replace("/", "_")}_pairings_round_{round.round_number}_expanded.png'
+    table_to_image.generate_image(data, filename, "beleren.ttf")
+    return filename
+
 
 async def image_from_standings(tournament:SpelltableTournament) -> str:
     round = tournament.swiss_tournament.current_round()
@@ -429,16 +474,33 @@ class StartNextRoundView(discord.ui.View):
     
     @discord.ui.button(label="Nächte Runde", style=discord.ButtonStyle.success, emoji="➡️")
     async def next_round_button(self, button: discord.ui.Button, interaction: discord.Interaction):
-        if interaction.user.id != self.tournament.organizer_id:
-            await interaction.respond("Nur der Turn Organisator darf dies tun.", ephemeral=True)
-            return
-        await interaction.response.defer()
-        previous_pairings_message = await get_round_message(self.previous_round, self.tournament, "pairings")
-        previous_standings_message = await get_round_message(self.previous_round, self.tournament, "standings")
-        await previous_pairings_message.edit(view=None)
-        await previous_standings_message.edit(view=None)
+        try:
+            if interaction.user.id != self.tournament.organizer_id:
+                await interaction.respond("Nur der Turn Organisator darf dies tun.", ephemeral=True)
+                return
+            await interaction.response.defer()
+            previous_pairings_message = await get_round_message(self.previous_round, self.tournament, "pairings")
+            previous_standings_message = await get_round_message(self.previous_round, self.tournament, "standings")
 
-        await self.tournament.next_round(interaction)
+            image = await image_from_standings(self.tournament)
+            file = discord.File(image, filename=image)
+            await previous_pairings_message.edit(attachments=[], file=file, view=None) #content=previous_pairings_message.content, view=None, attachments=previous_pairings_message.attachments)
+
+            image = await pairings_expanded_image(self.tournament)
+            file = discord.File(image, filename=image)
+            await previous_standings_message.edit(attachments=[], file=file, view=None)
+
+            await self.tournament.next_round(interaction)
+        except Exception as e:
+            tourney_message = await self.tournament.message
+
+            tb = traceback.format_exc()
+            short_tb = tb[-1900:]  # Reserve room for code block markdown (10 characters)
+            error_str = f"Beim Nächste Runde Erstellen für das Turnier {tourney_message.jump_url} ist ein Fehler aufgetreten:"
+            organizer = await self.tournament.organizer
+            print(short_tb)
+            await organizer.send(f"{error_str}\n```{short_tb}```")
+            log.error(error_str, exc_info=True)#, stack_info=True)
 
 members:dict[int, discord.Member] = {}
 
@@ -555,6 +617,7 @@ class KickPlayerModal(discord.ui.Modal):
         self.add_item(self.kick_input)
 
     async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer()
         user_id = None
         user_name = None
         user_to_kick = None
