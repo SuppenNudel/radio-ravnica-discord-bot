@@ -110,6 +110,7 @@ class SpelltableTournament(Serializable):
         self.waitlist:list[int] = []
         self.guild = guild
         self.max_rounds = None
+        self.days_per_match = 7
 
         if IS_DEBUG:
             for user_id in test_participants:
@@ -201,7 +202,8 @@ class SpelltableTournament(Serializable):
             "channel_id": message.channel.id,
             "max_participants": self.max_participants,
             "max_rounds": self.max_rounds,
-            "tournament": self.swiss_tournament
+            "tournament": self.swiss_tournament,
+            "days_per_match": self.days_per_match
         }
     
     async def check_waitlist(self, participants):
@@ -251,22 +253,26 @@ class SpelltableTournament(Serializable):
         if organizer:
             embed.set_author(name=organizer.display_name, icon_url=organizer.avatar.url if organizer.avatar else None)
         if self.time:
-            embed.add_field(name="Start", value=discord.utils.format_dt(self.time, "F")+"\n"+discord.utils.format_dt(self.time, 'R'), inline=False)
+            date_format_character = "D" if self.days_per_match else "F"
+            embed.add_field(name="Start", value=discord.utils.format_dt(self.time, date_format_character)+"\n"+discord.utils.format_dt(self.time, 'R'), inline=True)
 
         participants = self.get_users_by_state(ParticipationState.PARTICIPATE)
         rec_round_count = swiss_mtg.recommended_rounds(len(participants))
         if self.max_rounds:
             current_round_count = min(self.max_rounds, rec_round_count)
-            embed.add_field(name="Anzahl Runden", value=f"Abhängig von der Spielerzahl. Aber Maximal {self.max_rounds}\nAktuell: {current_round_count}", inline=False)
+            embed.add_field(name="Anzahl Runden", value=f"Abhängig von der Spielerzahl. Aber Maximal {self.max_rounds}\nAktuell: {current_round_count}", inline=True)
         else:
-            embed.add_field(name="Anzahl Runden", value=f"Abhängig von der Spielerzahl.\nAktuell: {rec_round_count}", inline=False)
+            embed.add_field(name="Anzahl Runden", value=f"Abhängig von der Spielerzahl.\nAktuell: {rec_round_count}", inline=True)
+        
+        embed.add_field(name=f"Tage pro Runde", value=f"{self.days_per_match if self.days_per_match > 0 else 'Wird am Stück gespielt'}", inline=True)
 
         waitlist = self.waitlist
         tentative = self.get_users_by_state(ParticipationState.TENTATIVE)
         # declined = self.get_users_by_state(ParticipationState.DECLINE)
 
-        embed.add_field(name=f"✅ Teilnehmer ({len(participants)}{f'/{self.max_participants}' if self.max_participants else ''})", value="\n".join([f"<@{p}>" for p in participants]), inline=True)
-        embed.add_field(name=f"⌚ Nachrücker ({len(waitlist)})", value="\n".join([f"<@{p}>" for p in waitlist]), inline=True)
+        embed.add_field(name=f"✅ Teilnehmer ({len(participants)}{f'/{self.max_participants}' if self.max_participants else ''})", value="\n".join([f"<@{p}>" for p in participants]), inline=False)
+        if self.max_participants:
+            embed.add_field(name=f"⌚ Nachrücker ({len(waitlist)})", value="\n".join([f"<@{p}>" for p in waitlist]), inline=True)
         # embed.add_field(name="\u200B", value="\u200B", inline=False)
         embed.add_field(name=f"❓ Vielleicht ({len(tentative)})", value="\n".join([f"<@{p}>" for p in tentative]), inline=True)
         # embed.add_field(name=f"❌ Abgelehnt ({len(declined)})", value="\n".join([f"<@{p}>" for p in declined]), inline=True)
@@ -925,6 +931,8 @@ class EditTournamentView(discord.ui.View):
         super().__init__()
         self.tournament = tournament
         self.channel = channel
+
+        self.days_per_match_callback.label = "Turnier am Stück spielen" if self.tournament.days_per_match else "Eine Woche pro Runde"
     
     @classmethod
     async def create(cls, tournament:SpelltableTournament, channel:discord.TextChannel):
@@ -978,13 +986,33 @@ class EditTournamentView(discord.ui.View):
             label="Maximal Runden (0 für empfohlene Anzahl)",
             placeholder="Wieviele Runden maximal gespielt werden sollen",
             required=True,
-            value=str(self.tournament.max_participants) if self.tournament.max_participants else "",
+            value=str(self.tournament.max_rounds) if self.tournament.max_rounds else "",
         )
 
         def parse(input_value):
             return int(input_value)
 
         await interaction.response.send_modal(EnterTextModal(input, "max_rounds", self.tournament, self, parse))
+
+    @discord.ui.button(label="Tage pro Runde", style=discord.ButtonStyle.primary, emoji="📆")
+    async def days_per_match_callback(self, button:discord.ui.Button, interaction:discord.Interaction):
+        # is toggle
+        if self.tournament.days_per_match:
+            self.tournament.days_per_match = 0
+        else:
+            self.tournament.days_per_match = 7
+        view = await EditTournamentView.create(self.tournament, self.channel)
+        await interaction.response.edit_message(embed=await self.tournament.to_embed(), view=view)
+
+        # input = discord.ui.InputText(
+        #     label="Tage pro Runde",
+        #     placeholder="Wie viele Tage man für seine Runde Zeit hat. 0 für Turnier wird am Stück ausgetragen",
+        #     required=True,
+        #     value=self.tournament.days_per_match if self.tournament.days_per_match else "",
+        #     style=discord.InputTextStyle.long,
+        # )
+
+        # await interaction.response.send_modal(EnterTextModal(input, "days_per_match", self.tournament, self))
 
     @discord.ui.button(label="Abschicken", style=discord.ButtonStyle.success, emoji="✅")
     async def submit_callback(self, button:discord.ui.Button, interaction:discord.Interaction):
