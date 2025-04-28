@@ -270,7 +270,9 @@ class SpelltableTournament(Serializable):
         tentative = self.get_users_by_state(ParticipationState.TENTATIVE)
         # declined = self.get_users_by_state(ParticipationState.DECLINE)
 
-        embed.add_field(name=f"✅ Teilnehmer ({len(participants)}{f'/{self.max_participants}' if self.max_participants else ''})", value="\n".join([f"<@{p}>" for p in participants]), inline=False)
+        embed.add_field(name="\u200b", value="\u200b", inline=False)
+
+        embed.add_field(name=f"✅ Teilnehmer ({len(participants)}{f'/{self.max_participants}' if self.max_participants else ''})", value="\n".join([f"<@{p}>" for p in participants]), inline=True)
         if self.max_participants:
             embed.add_field(name=f"⌚ Nachrücker ({len(waitlist)})", value="\n".join([f"<@{p}>" for p in waitlist]), inline=True)
         # embed.add_field(name="\u200B", value="\u200B", inline=False)
