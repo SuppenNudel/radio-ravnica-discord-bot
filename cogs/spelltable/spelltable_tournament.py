@@ -944,11 +944,11 @@ class EditTournamentView(discord.ui.View):
 
         await interaction.response.send_modal(EnterTextModal(input, "description", self.tournament, self))
           
-    @discord.ui.button(label="Zeit", style=discord.ButtonStyle.primary, emoji="🕑")
+    @discord.ui.button(label="Startzeit/-datum", style=discord.ButtonStyle.primary, emoji="🕑")
     async def time_callback(self, button:discord.ui.Button, interaction:discord.Interaction):
         input = discord.ui.InputText(
-            label="Start",
-            placeholder="Die Startzeit für das Turnier",
+            label="Startzeit/-datum",
+            placeholder="Die/Das Startzeit/-datum für das Turnier",
             required=True,
             value=str(self.tournament.time) if self.tournament.time else "",
         )
