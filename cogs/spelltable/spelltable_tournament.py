@@ -83,6 +83,19 @@ class ParticipationState(StrEnum):
     TENTATIVE = auto()
     DECLINE = auto()
 
+async def use_custom_try(purpose:str, func, tournament:"SpelltableTournament"):
+    try:
+        await func()  # Execute the passed function
+    except Exception as e:
+        tourney_message = await tournament.message
+        tb = traceback.format_exc()
+        short_tb = tb[-1900:]  # Reserve room for code block markdown (10 characters)
+        error_str = f"Beim {purpose} für das Turnier {tourney_message.jump_url} ist ein Fehler aufgetreten:"
+        organizer = await tournament.organizer
+        print(short_tb)
+        await organizer.send(f"{error_str}\n```{short_tb}```")
+        log.error(error_str, exc_info=True)#, stack_info=True)
+
 class SpelltableTournament(Serializable):
     def __init__(self, guild:discord.Guild, title:str, organizer_id:int):
         self.title = title
@@ -293,12 +306,10 @@ class SpelltableTournament(Serializable):
             if message_standings:
                 await message_standings.edit(content=content, view=start_next_round_view, attachments=[], file=file)
             else:
-                try:
+                async def do_the_thing():
                     message_standings = await interaction.followup.send(content=content, view=start_next_round_view, file=file)
                     current_round.message_id_standings = message_standings.id
-                except Exception as e:
-                    log.error(e, f"Tried sending followup with content={content}, view={start_next_round_view}, file={file}")
-
+                await use_custom_try("Plazierungen Senden", do_the_thing, self)
 
         await save_tournament(self)
 
@@ -312,15 +323,18 @@ class SpelltableTournament(Serializable):
         await save_tournament(self)
     
     async def next_round(self, interaction:discord.Interaction):
-        round = self.swiss_tournament.pair_players()
-        await interaction.followup.send(f"Berechne Paarungen für Runde {round.round_number} ...", ephemeral=True)
-        reportMatchView = await ReportMatchView.create(round, self)
-        image = await pairings_expanded_image(self)
-        file = discord.File(image, filename=image)
-        new_pairings_message:discord.message.Message = await interaction.followup.send(content=f"Paarungen für die {round.round_number}. Runde ", file=file, view=reportMatchView)
-        pairings_messages[round] = new_pairings_message
-        round.message_id_pairings = new_pairings_message.id
-        await save_tournament(self)
+        async def do_the_thing():
+            round = self.swiss_tournament.pair_players()
+            await interaction.followup.send(f"Berechne Paarungen für Runde {round.round_number} ...", ephemeral=True)
+            reportMatchView = await ReportMatchView.create(round, self)
+            image = await pairings_expanded_image(self)
+            file = discord.File(image, filename=image)
+            new_pairings_message:discord.message.Message = await interaction.followup.send(content=f"Paarungen für die {round.round_number}. Runde ", file=file, view=reportMatchView)
+            pairings_messages[round] = new_pairings_message
+            round.message_id_pairings = new_pairings_message.id
+            await save_tournament(self)
+    
+        await use_custom_try("Nächste Runde Erstellen", do_the_thing, self)
 
 async def pairings_summary_image(tournament:SpelltableTournament) -> str:
     round = tournament.swiss_tournament.current_round()
@@ -474,7 +488,7 @@ class StartNextRoundView(discord.ui.View):
     
     @discord.ui.button(label="Nächte Runde", style=discord.ButtonStyle.success, emoji="➡️")
     async def next_round_button(self, button: discord.ui.Button, interaction: discord.Interaction):
-        try:
+        async def do_the_thing():
             if interaction.user.id != self.tournament.organizer_id:
                 await interaction.respond("Nur der Turn Organisator darf dies tun.", ephemeral=True)
                 return
@@ -491,16 +505,8 @@ class StartNextRoundView(discord.ui.View):
             await previous_standings_message.edit(attachments=[], file=file, view=None)
 
             await self.tournament.next_round(interaction)
-        except Exception as e:
-            tourney_message = await self.tournament.message
 
-            tb = traceback.format_exc()
-            short_tb = tb[-1900:]  # Reserve room for code block markdown (10 characters)
-            error_str = f"Beim Nächste Runde Erstellen für das Turnier {tourney_message.jump_url} ist ein Fehler aufgetreten:"
-            organizer = await self.tournament.organizer
-            print(short_tb)
-            await organizer.send(f"{error_str}\n```{short_tb}```")
-            log.error(error_str, exc_info=True)#, stack_info=True)
+        await use_custom_try("Nächste Runde Erstellen", do_the_thing, self.tournament)
 
 members:dict[int, discord.Member] = {}
 
