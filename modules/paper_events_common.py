@@ -188,11 +188,12 @@ async def edit_event_post(event:"PaperEvent", interaction_or_message:discord.Int
     gmaps_embed = event.construct_gmaps_embed()
     if gmaps_embed:
         embeds.append(gmaps_embed)
+    files = event.get_files()
     if type(interaction_or_message) == discord.Interaction:
         await interaction_or_message.response.edit_message(
-            content=event.construct_content(preview=False),
+            content=event.construct_content(preview=True),
             embeds=embeds,
-            files=event.get_files(),
+            files=files,
             attachments=[],
             view=view
             )
@@ -203,7 +204,7 @@ async def edit_event_post(event:"PaperEvent", interaction_or_message:discord.Int
         await interaction_or_message.edit(
             content=event.construct_content(preview=False),
             embeds=embeds,
-            files=event.get_files(),
+            files=files,
             attachments=[],
             view=view
             )
@@ -452,13 +453,16 @@ class PaperEvent():
             event_type_list = self.fields[FieldName.TYPE].value
             type = event_type_list[0] if event_type_list else f"<{FieldName.TYPE.value}>"
             return f"{format} {type}"
-    
+        
     def get_files(self):
         files = []
         location:gmaps.Location|None = self.fields[FieldName.LOCATION].value
         if location:
             files.append(discord.File(location.file_path, filename=location.file_name))
-        # ics.create_ics_file(file_name, event_name, start_datetime, end_datetime:datetime, description=None, location=None)
+        title = self.build_title()
+        ics_file = ics.create_ics_file(f"{title}.ics", title, self.fields[FieldName.START].value, self.fields[FieldName.END].value, description=self.fields[FieldName.DESCRIPTION].value, location=location.formatted_address if location else None)
+        if ics_file:
+            files.append(discord.File(ics_file, filename=ics_file))
         return files
     
     def construct_thread_title(self):
