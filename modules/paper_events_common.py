@@ -356,7 +356,7 @@ class EditPostView(discord.ui.View):
     async def confirm_callback(self, button:discord.ui.Button, interaction:discord.Interaction):
         if not interaction.user:
             return
-        if self.event.author != interaction.user:
+        if self.event.author != interaction.user and not any(role.name == "Moderator" for role in interaction.user.roles):
             await interaction.respond("Du bist nicht Author dieses Posts!", ephemeral=True)
             return
         # send PM to edit
