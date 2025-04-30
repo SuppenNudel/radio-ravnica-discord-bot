@@ -773,7 +773,7 @@ class ReportMatchView(discord.ui.View):
     
     @discord.ui.button(label="Spieler rauswerfen", style=discord.ButtonStyle.danger, emoji="🚷")
     async def kick_button(self, button: discord.ui.Button, interaction: discord.Interaction):
-        if interaction.user.id != self.tournament.organizer_id:
+        if interaction.user.id != self.tournament.organizer_id and not any(role.name == "Moderator" for role in interaction.user.roles):
             await interaction.respond("Du bist nicht der Turnierorganisator!", ephemeral=True)
             return
         await interaction.response.send_modal(KickPlayerModal(self.tournament))
@@ -865,7 +865,7 @@ class ParticipationView(discord.ui.View):
 
     @discord.ui.button(label="Bearbeiten", style=discord.ButtonStyle.primary, emoji="✏️")
     async def edit_button(self, button: discord.ui.Button, interaction: discord.Interaction):
-        if interaction.user.id != self.tournament.organizer_id:
+        if interaction.user.id != self.tournament.organizer_id and not any(role.name == "Moderator" for role in interaction.user.roles):
             await interaction.response.send_message("Du bist nicht der Turnierorganisator!", ephemeral=True)
             return
         
@@ -880,7 +880,7 @@ class ParticipationView(discord.ui.View):
 
     @discord.ui.button(label="Spieler rauswerfen", style=discord.ButtonStyle.danger, emoji="🚷")
     async def kick_button(self, button:discord.ui.Button, interaction:discord.Interaction):
-        if interaction.user.id != self.tournament.organizer_id:
+        if interaction.user.id != self.tournament.organizer_id and not any(role.name == "Moderator" for role in interaction.user.roles):
             await interaction.respond("Du bist nicht der Turnierorganisator!", ephemeral=True)
             return
         await interaction.response.send_modal(KickPlayerModal(self.tournament))
@@ -890,7 +890,7 @@ class ParticipationView(discord.ui.View):
         if type(interaction.user) != discord.Member:
             await interaction.respond("Du bist kein Mitglied auf diesem Server!", ephemeral=True)
             return
-        if interaction.user.id != self.tournament.organizer_id:
+        if interaction.user.id != self.tournament.organizer_id and not any(role.name == "Moderator" for role in interaction.user.roles):
             await interaction.respond("Du bist nicht der Turnierorganisator!", ephemeral=True)
             return
         await interaction.respond("Starte Turnier...", ephemeral=True)
