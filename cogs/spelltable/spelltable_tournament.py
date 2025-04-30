@@ -268,16 +268,26 @@ class SpelltableTournament(Serializable):
 
         waitlist = self.waitlist
         tentative = self.get_users_by_state(ParticipationState.TENTATIVE)
-        # declined = self.get_users_by_state(ParticipationState.DECLINE)
 
         embed.add_field(name="\u200b", value="\u200b", inline=False)
 
-        embed.add_field(name=f"✅ Teilnehmer ({len(participants)}{f'/{self.max_participants}' if self.max_participants else ''})", value="\n".join([f"<@{p}>" for p in participants]), inline=True)
+        await self.guild.chunk()
+
+        participant_members = [self.guild.get_member(uid) for uid in participants]
+        # Filter out None values if some IDs weren't found
+        participant_members = [m for m in participant_members if m is not None]
+
+        embed.add_field(name=f"✅ Teilnehmer ({len(participants)}{f'/{self.max_participants}' if self.max_participants else ''})", value="\n".join([p.mention for p in participant_members]), inline=True)
         if self.max_participants:
-            embed.add_field(name=f"⌚ Nachrücker ({len(waitlist)})", value="\n".join([f"<@{p}>" for p in waitlist]), inline=True)
-        # embed.add_field(name="\u200B", value="\u200B", inline=False)
-        embed.add_field(name=f"❓ Vielleicht ({len(tentative)})", value="\n".join([f"<@{p}>" for p in tentative]), inline=True)
-        # embed.add_field(name=f"❌ Abgelehnt ({len(declined)})", value="\n".join([f"<@{p}>" for p in declined]), inline=True)
+            waitlist_members = [self.guild.get_member(uid) for uid in waitlist]
+            # Filter out None values if some IDs weren't found
+            waitlist_members = [m for m in waitlist_members if m is not None]
+            embed.add_field(name=f"⌚ Nachrücker ({len(waitlist)})", value="\n".join([p.mention for p in waitlist_members]), inline=True)
+        
+        tentative_members = [self.guild.get_member(uid) for uid in tentative]
+        # Filter out None values if some IDs weren't found
+        tentative_members = [m for m in tentative_members if m is not None]
+        embed.add_field(name=f"❓ Vielleicht ({len(tentative)})", value="\n".join([p.mention for p in tentative_members]), inline=True)
         return embed
 
     async def update_standings(self, interaction:discord.Interaction):
@@ -337,7 +347,9 @@ class SpelltableTournament(Serializable):
             reportMatchView = await ReportMatchView.create(round, self)
             image = await pairings_expanded_image(self)
             file = discord.File(image, filename=image)
-            new_pairings_message:discord.message.Message = await interaction.followup.send(content=f"Paarungen für die {round.round_number}. Runde ", file=file, view=reportMatchView)
+            new_pairings_message = await interaction.followup.send(content=f"Paarungen für die {round.round_number}. Runde", file=file, view=reportMatchView)
+            if not isinstance(new_pairings_message, discord.Message):
+                raise TypeError("Expected a discord.Message, but got None or an invalid type.")
             pairings_messages[round] = new_pairings_message
             round.message_id_pairings = new_pairings_message.id
             await save_tournament(self)
@@ -1062,9 +1074,6 @@ class SpelltableTournamentManager(Cog):
         global active_tournaments
         for message_path, tournament in loaded_tournaments.items():
             try:
-                # BOT.add_view(view) # Reattach buttons
-                # message = await tournament.message
-                # await message.edit(view=view) # to update the buttons status (enabled/disabled)
                 active_tournaments[message_path] = tournament
                 tournament_message = await tournament.message
 
