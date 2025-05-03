@@ -281,17 +281,17 @@ class SpelltableTournament(Serializable):
             if member:
                 participant_members.append(member)
 
-        embed.add_field(name=f"✅ Teilnehmer ({len(participants)}{f'/{self.max_participants}' if self.max_participants else ''})", value="\n".join([f"{p.mention} - {p.display_name}" for p in participant_members]), inline=True)
+        embed.add_field(name=f"✅ Teilnehmer ({len(participants)}{f'/{self.max_participants}' if self.max_participants else ''})", value="\n".join([f"{p.display_name}" for p in participant_members]), inline=True)
         if self.max_participants:
             waitlist_members = [self.guild.get_member(uid) for uid in waitlist]
             # Filter out None values if some IDs weren't found
             waitlist_members = [m for m in waitlist_members if m is not None]
-            embed.add_field(name=f"⌚ Nachrücker ({len(waitlist)})", value="\n".join([f"{p.mention} - {p.display_name}" for p in waitlist_members]), inline=True)
+            embed.add_field(name=f"⌚ Nachrücker ({len(waitlist)})", value="\n".join([f"{p.display_name}" for p in waitlist_members]), inline=True)
         
         tentative_members = [self.guild.get_member(uid) for uid in tentative]
         # Filter out None values if some IDs weren't found
         tentative_members = [m for m in tentative_members if m is not None]
-        embed.add_field(name=f"❓ Vielleicht ({len(tentative)})", value="\n".join([f"{p.mention} - {p.display_name}" for p in tentative_members]), inline=True)
+        embed.add_field(name=f"❓ Vielleicht ({len(tentative)})", value="\n".join([f"{p.display_name}" for p in tentative_members]), inline=True)
         return embed
 
     async def get_message(self, message_id) -> discord.Message|None:
