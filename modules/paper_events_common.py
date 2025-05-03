@@ -482,12 +482,12 @@ class PaperEvent():
         description:str|None = self.fields[FieldName.DESCRIPTION].value
         content = ""
         if preview:
-            content += f"# {self.construct_thread_title()}\n    "
+            content += f"# {self.construct_thread_title()}\n"
         if description:
             content += description
         if not preview:
             content += f"\n\nDanke an {self.author.mention} für's Posten!"
-        return f"{content}"
+        return content
 
     def construct_gmaps_embed(self) -> discord.Embed|None:
         location:gmaps.Location|None = self.fields[FieldName.LOCATION].value

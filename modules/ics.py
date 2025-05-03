@@ -13,7 +13,7 @@ def create_ics_file(file_name, event_name, start_datetime, end_datetime:datetime
     event.name = event_name
     event.begin = start_datetime
     event.end = end_datetime
-    if end_datetime == start_datetime:
+    if end_datetime and end_datetime == start_datetime:
         event.end = end_datetime.replace(hour=end_datetime.hour + 1)
     if start_datetime and not end_datetime:
         event.end = start_datetime.replace(hour=start_datetime.hour + 1)
