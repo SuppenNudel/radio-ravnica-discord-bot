@@ -357,11 +357,46 @@ class SpelltableTournament(Serializable):
             reportMatchView = await ReportMatchView.create(round, self)
             pairings_image = await pairings_to_image(self)
             pairings_file = discord.File(pairings_image, filename=pairings_image)
-            new_pairings_message = await interaction.followup.send(content=f"Paarungen für die {round.round_number}. Runde:\n\n{self.get_pairings()}", file=pairings_file, view=reportMatchView)
+            try:
+                new_pairings_message = await interaction.followup.send(content=f"Paarungen für die {round.round_number}. Runde:\n\n{self.get_pairings()}", file=pairings_file, view=reportMatchView)
+            except discord.errors.HTTPException as e:
+                log.error(f"Failed to send pairings message: {e}")
+                await interaction.followup.send("Fehler beim Senden der Paarungen. Bitte versuche es später erneut.", ephemeral=True)
+                return
+
             if not isinstance(new_pairings_message, discord.Message):
                 raise TypeError("Expected a discord.Message, but got None or an invalid type.")
             round.message_id_pairings = new_pairings_message.id
             await save_tournament(self)
+
+            # message players direcly
+            for match in round.matches:
+                try:
+                    user1 = await self.guild.fetch_member(match.player1.player_id)
+                except discord.NotFound:
+                    user1 = None
+                if match.is_bye():
+                    # bye
+                    if user1:
+                        try:
+                            await user1.send(f"Du hast ein BYE in der {round.round_number}. Runde im Turnier `{self.title}`: {new_pairings_message.jump_url}")
+                        except discord.Forbidden:
+                            log.error(f"Could not send message to {user1.display_name} ({user1.id})")
+                else:
+                    try:
+                        user2 = await BOT.get_or_fetch_user(match.player2.player_id)
+                    except discord.NotFound:
+                        user2 = None
+                    if user1:
+                        try:
+                            await user1.send(f"Du spielst gegen <@{match.player2.player_id}> in der {round.round_number}. Runde im Turnier `{self.title}`: {new_pairings_message.jump_url}")
+                        except discord.Forbidden:
+                            log.error(f"Could not send message to {user1.display_name} ({user1.id})")
+                    if user2:
+                        try:
+                            await user2.send(f"Du spielst gegen <@{match.player1.player_id}> in der {round.round_number}. Runde im Turnier `{self.title}`: {new_pairings_message.jump_url}")
+                        except discord.Forbidden:
+                            log.error(f"Could not send message to {user2.display_name} ({user2.id})")
     
         await use_custom_try("Nächste Runde Erstellen", do_the_thing, self)
     
