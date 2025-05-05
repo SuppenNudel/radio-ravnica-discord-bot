@@ -357,13 +357,50 @@ class SpelltableTournament(Serializable):
             reportMatchView = await ReportMatchView.create(round, self)
             pairings_image = await pairings_to_image(self)
             pairings_file = discord.File(pairings_image, filename=pairings_image)
-            new_pairings_message = await interaction.followup.send(content=f"Paarungen für die {round.round_number}. Runde", file=pairings_file, view=reportMatchView)
+            new_pairings_message = await interaction.followup.send(content=f"Paarungen für die {round.round_number}. Runde:\n\n{self.get_pairings()}", file=pairings_file, view=reportMatchView)
             if not isinstance(new_pairings_message, discord.Message):
                 raise TypeError("Expected a discord.Message, but got None or an invalid type.")
             round.message_id_pairings = new_pairings_message.id
             await save_tournament(self)
     
         await use_custom_try("Nächste Runde Erstellen", do_the_thing, self)
+    
+    def get_pairings(self, round=None) -> str:
+        if round is None:
+            round = self.swiss_tournament.current_round()
+
+        matchups:dict[str, str] = {}
+        for match in round.matches:
+            # Handle BYE
+            if match.is_bye():
+                player = match.player1 or match.player2
+                if player:
+                    mention = f"<@{player.player_id}>"
+                    if player.dropped:
+                        mention = f"~~{mention}~~"
+                    matchups[player.name] = f"{mention} hat ein BYE"
+                continue
+
+            # Normal match
+            p1, p2 = match.player1, match.player2
+            if not (p1 and p2):
+                continue
+            
+            mention_p1 = f"<@{p1.player_id}>"
+            if p1.dropped:
+                mention = f"~~{mention_p1}~~"
+            
+            mention_p2 = f"<@{p2.player_id}>"
+            if p2.dropped:
+                mention = f"~~{mention_p2}~~"
+            
+            matchups[p1.name] = f"{mention_p1} vs {mention_p2}"
+            matchups[p2.name] = f"{mention_p2} vs {mention_p1}"
+
+        for_message = "\n".join(matchups[name] for name in sorted(matchups, key=str.lower))
+
+        return for_message
+    
 
 async def pairings_to_image(tournament: SpelltableTournament, round=None) -> str:
     if round is None:
@@ -393,8 +430,8 @@ async def pairings_to_image(tournament: SpelltableTournament, round=None) -> str
             score_p1 = score_p2 = "Ausstehend"
 
         # Add both player perspectives
-        rows.append([(p1.name, p1.dropped), p2.name, score_p1])
-        rows.append([(p2.name, p2.dropped), p1.name, score_p2])
+        rows.append([(p1.name, p1.dropped), (p2.name, p2.dropped), score_p1])
+        rows.append([(p2.name, p2.dropped), (p1.name, p1.dropped), score_p2])
 
     # Sort rows by player name (first element of the tuple in column 0)
     rows.sort(key=lambda row: row[0][0].lower())
@@ -730,51 +767,6 @@ class ReportMatchView(discord.ui.View):
             return
         await interaction.response.send_modal(KickPlayerModal(self.tournament))
 
-
-def format_pairings(round:swiss_mtg.Round) -> Embed:
-    # bye_pairings = [f"<@{match.player1.player_id}> bekommt das Bye" for match in round.matches if match.is_bye()]
-    
-    results = []
-    for match in round.matches:
-        if match.is_finished():
-            if match.is_bye():
-                win, loss, draw = 2, 0, 0
-            else:
-                win, loss, draw = match.wins.values()
-            results.append(f"{win} - {loss} - {draw}")
-        else:
-            results.append("Ausstehend")
-    embed = Embed(
-        title=f"Paarungen für die {round.round_number}. Runde",
-        # description=f"Die Spieler wurden zufällig gepaart. Viel Erfolg!\n\n{'\n'.join(bye_pairings)}",
-        color=Color.from_rgb(37, 88, 79),
-        fields=[
-            discord.EmbedField(
-                name="Spieler 1",
-                value="\n".join([
-                    f"{'~~' if match.player1 and match.player1.dropped else ''}<@{match.player1.player_id}>{'~~' if match.player1 and match.player1.dropped else ''}"
-                    for match in round.matches
-                ]),
-                inline=True
-            ),
-            discord.EmbedField(
-                name="Spieler 2",
-                value="\n".join([
-                    f"{'~~' if match.player2 and match.player2.dropped else ''}<@{match.player2.player_id}>{'~~' if match.player2 and match.player2.dropped else ''}" 
-                    if match.player2 else "BYE" 
-                    for match in round.matches
-                ]),
-                inline=True
-            ),
-            discord.EmbedField(
-                name="Match Ergebnis (S-N-U)",
-                value="\n".join(results),
-                inline=True
-            ),
-        ]
-    )
-    return embed
-
 class ParticipationView(discord.ui.View):
     def __init__(self):
         raise RuntimeError("Use 'await ParticipationView.create(...)' instead")
@@ -1044,7 +1036,7 @@ class SpelltableTournamentManager(Cog):
                         # pairings have been posted
                         view = await ReportMatchView.create(current_round, tournament)
                         message = await tournament.get_message(current_round.message_id_pairings)
-                        await message.edit(view=view)
+                        await message.edit(view=view, content=f"Paarungen für die {current_round.round_number}. Runde:\n\n{tournament.get_pairings()}")
                 else:
                     view = await ParticipationView.create(tournament)
                     await tournament_message.edit(view=view)
