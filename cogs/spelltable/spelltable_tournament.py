@@ -89,7 +89,7 @@ async def use_custom_try(purpose:str, func, tournament:"SpelltableTournament"):
     except Exception as e:
         tourney_message = await tournament.message
         tb = traceback.format_exc()
-        short_tb = tb[-1900:]  # Reserve room for code block markdown (10 characters)
+        short_tb = tb[-1500:]  # Reserve room for code block markdown (10 characters)
         error_str = f"Beim {purpose} für das Turnier {tourney_message.jump_url} ist ein Fehler aufgetreten:"
         organizer = await tournament.organizer
         print(short_tb)
@@ -352,13 +352,19 @@ class SpelltableTournament(Serializable):
     
     async def next_round(self, interaction:discord.Interaction):
         async def do_the_thing():
+            previous_round = self.swiss_tournament.current_round()
             round = self.swiss_tournament.pair_players()
             await interaction.followup.send(f"Berechne Paarungen für Runde {round.round_number} ...", ephemeral=True)
             reportMatchView = await ReportMatchView.create(round, self)
             pairings_image = await pairings_to_image(self)
             pairings_file = discord.File(pairings_image, filename=pairings_image)
             try:
-                new_pairings_message = await interaction.followup.send(content=f"Paarungen für die {round.round_number}. Runde:\n\n{self.get_pairings()}", file=pairings_file, view=reportMatchView)
+                new_pairings_message:discord.Message = await interaction.followup.send(content=f"Paarungen für die {round.round_number}. Runde:\n\n{self.get_pairings()}", file=pairings_file, view=reportMatchView)
+                await new_pairings_message.pin()
+
+                if previous_round:
+                    previous_pairings_message = await new_pairings_message.channel.fetch_message(previous_round.message_id_pairings)
+                    await previous_pairings_message.unpin()
             except discord.errors.HTTPException as e:
                 log.error(f"Failed to send pairings message: {e}")
                 await interaction.followup.send("Fehler beim Senden der Paarungen. Bitte versuche es später erneut.", ephemeral=True)
