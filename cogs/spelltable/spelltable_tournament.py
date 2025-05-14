@@ -343,7 +343,7 @@ class SpelltableTournament(Serializable):
 
     async def update_pairings(self, round:swiss_mtg.Round):
         pairings_message:discord.Message = await self.get_message(round.message_id_pairings)
-        link_log.info(f"updating pairings {pairings_message.jump_url} sent by {pairings_message.author}")
+        link_log.info(f"updating pairings {pairings_message.jump_url}")
         pairings_image = await pairings_to_image(self)
         pairings_file = discord.File(pairings_image, filename=pairings_image)
         await pairings_message.edit(file=pairings_file, attachments=[])
@@ -390,7 +390,7 @@ class SpelltableTournament(Serializable):
                             log.error(f"Could not send message to {user1.display_name} ({user1.id})")
                 else:
                     try:
-                        user2 = await BOT.get_or_fetch_user(match.player2.player_id)
+                        user2 = await self.guild.fetch_member(match.player2.player_id)
                     except discord.NotFound:
                         user2 = None
                     if user1:
@@ -623,14 +623,16 @@ class ReportMatchModal(discord.ui.Modal):
             await interaction.respond(f"Dein Match Resultat {int(self.p1_score.value)}-{int(self.p2_score.value)}-{int(self.draw_score.value) if self.draw_score.value else 0} ist invalide: {e}", ephemeral=True)
             return
 
+        msg_text = f"Match result submitted: {self.player1_user.mention} vs {self.player2_user.mention} → {self.p1_score.value}-{self.p2_score.value}-{self.draw_score.value if self.draw_score.value else 0}"
         await interaction.response.send_message(
-            f"Match result submitted: **{self.player1_user.mention}** vs **{self.player2_user.mention}** → {self.p1_score.value}-{self.p2_score.value}-{self.draw_score.value if self.draw_score.value else 0}",
+            msg_text,
             ephemeral=True
         )
 
         if IS_DEBUG:
             swiss_mtg.simulate_remaining_matches(self.tournament.swiss_tournament)
 
+        link_log.info(f"{msg_text} in {interaction.message.jump_url}")
         await self.tournament.update_pairings(self.round)
         await self.tournament.update_standings(interaction)
         # TODO Enable "Runde beenden" Button (only usable by TO/Manager)
@@ -658,6 +660,13 @@ class ConfirmKickView(discord.ui.View):
             # tournament registration is still going on
             await self.tournament.user_state(self.user_to_kick.id, ParticipationState.DECLINE)
         orig_response = await interaction.original_response()
+        if self.tournament.swiss_tournament:
+            message_id_pairings = self.tournament.swiss_tournament.current_round().message_id_pairings
+            pairings_message:discord.Message = await self.tournament.get_message(message_id_pairings)
+            link_log.info(f"User {self.user_to_kick.mention} was kicked from tournament {pairings_message.jump_url}")
+        else:
+            tourney_message = await self.tournament.message
+            link_log.info(f"User {self.user_to_kick.mention} was kicked from tournament {tourney_message.jump_url}")
         await orig_response.edit(content=f"{self.user_to_kick.mention} wurde aus dem Turnier entfernt", view=None)
 
 class KickPlayerModal(discord.ui.Modal):
@@ -736,6 +745,9 @@ class ConfirmDropModal(discord.ui.Modal):
         # update standings, i.e. strike through dropped player
         await self.tournament.update_standings(interaction)
 
+        message_pairings = await self.tournament.get_message(current_round.message_id_pairings)
+
+        link_log.info(f"User {interaction.user.mention} dropped from tournament {message_pairings.jump_url}")
         await interaction.response.send_message("Du wurdest aus dem Turnier entfernt", ephemeral=True)
 
 async def simulate_on_not_playing(tournament:SpelltableTournament, round:swiss_mtg.Round, interaction:discord.Interaction):
