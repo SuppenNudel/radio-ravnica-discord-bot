@@ -226,7 +226,7 @@ class SpelltableTournament(Serializable):
         participants = self.get_users_by_state(ParticipationState.PARTICIPATE)
         if state == ParticipationState.PARTICIPATE and self.max_participants and len(participants) >= self.max_participants:
             self.waitlist.append(userid)
-            message_str = f"Das Tunier ist bereits voll. Du wurdest auf die Liste der Nachrücker gesetzt.\nWird ein Platz frei, wirst du automatisch nachgerückt und benachrichtigt."
+            message_str = f"Das Turnier ist bereits voll. Du wurdest auf die Liste der Nachrücker gesetzt.\nWird ein Platz frei, wirst du automatisch nachgerückt und benachrichtigt."
         else:
             if state != ParticipationState.DECLINE:
                 self.users[userid] = state
@@ -307,6 +307,7 @@ class SpelltableTournament(Serializable):
             return
         message_standings = await self.get_message(current_round.message_id_standings)
         if current_round.round_number >= self.swiss_tournament.rounds_count:
+            # letzte Runde
             swiss_mtg.sort_players_by_standings(self.swiss_tournament.players)
             winner = None
             for player in self.swiss_tournament.players:
@@ -337,7 +338,7 @@ class SpelltableTournament(Serializable):
                 async def do_the_thing():
                     message_standings = await interaction.followup.send(content=content, view=start_next_round_view, file=standings_file)
                     current_round.message_id_standings = message_standings.id
-                await use_custom_try("Plazierungen Senden", do_the_thing, self)
+                await use_custom_try("Platzierungen Senden", do_the_thing, self)
 
         await save_tournament(self)
 
@@ -786,14 +787,14 @@ class ReportMatchView(discord.ui.View):
                 the_match = match
                 break
         if not the_match:
-            await interaction.response.send_message("Du bist nicht Teilnehmer in diesem Turnier", ephemeral=True)
+            await interaction.respond("Du bist kein Teilnehmer in diesem Turnier.", ephemeral=True)
             
             if IS_DEBUG:
                 await simulate_on_not_playing(self.tournament, self.round, interaction)
             return
         
         if the_match.is_bye():
-            await interaction.response.send_message("Du hast diese Runde ein Bye", ephemeral=True)
+            await interaction.respond("Du hast diese Runde ein Bye", ephemeral=True)
 
             if IS_DEBUG:
                 await simulate_on_not_playing(self.tournament, self.round, interaction)
@@ -805,7 +806,7 @@ class ReportMatchView(discord.ui.View):
     async def drop_button(self, button: discord.ui.Button, interaction: discord.Interaction):
         player = self.tournament.swiss_tournament.player_by_id(interaction.user.id)
         if not player:
-            await interaction.response.send_message("Du bist nicht Teilnehmer in diesem Turnier", ephemeral=True)
+            await interaction.respond("Du bist kein Teilnehmer in diesem Turnier.", ephemeral=True)
             return
         if not player in self.tournament.swiss_tournament.get_active_players():
             await interaction.respond("Du bist bereits aus diesem Turnier ausgetreten", ephemeral=True)
@@ -816,7 +817,7 @@ class ReportMatchView(discord.ui.View):
     @discord.ui.button(label="Spieler rauswerfen", style=discord.ButtonStyle.danger, emoji="🚷")
     async def kick_button(self, button: discord.ui.Button, interaction: discord.Interaction):
         if interaction.user.id != self.tournament.organizer_id and not any(role.name == "Moderator" for role in interaction.user.roles):
-            await interaction.respond("Du bist nicht der Turnierorganisator!", ephemeral=True)
+            await interaction.respond("Du bist nicht der Turnier-Organisator!", ephemeral=True)
             return
         await interaction.response.send_modal(KickPlayerModal(self.tournament))
 
@@ -863,7 +864,7 @@ class ParticipationView(discord.ui.View):
     @discord.ui.button(label="Bearbeiten", style=discord.ButtonStyle.primary, emoji="✏️")
     async def edit_button(self, button: discord.ui.Button, interaction: discord.Interaction):
         if interaction.user.id != self.tournament.organizer_id and not any(role.name == "Moderator" for role in interaction.user.roles):
-            await interaction.response.send_message("Du bist nicht der Turnierorganisator!", ephemeral=True)
+            await interaction.respond("Du bist nicht der Turnier-Organisator!", ephemeral=True)
             return
         
         message = await self.tournament.message
@@ -873,12 +874,12 @@ class ParticipationView(discord.ui.View):
             view = await EditTournamentView.create(self.tournament, message.channel)
             await interaction.respond(view=view, ephemeral=True)
         else:
-            await interaction.response.send_message("Turnier Nachricht nicht gefunden", ephemeral=True)
+            await interaction.respond("Turnier Nachricht nicht gefunden", ephemeral=True)
 
     @discord.ui.button(label="Spieler rauswerfen", style=discord.ButtonStyle.danger, emoji="🚷")
     async def kick_button(self, button:discord.ui.Button, interaction:discord.Interaction):
         if interaction.user.id != self.tournament.organizer_id and not any(role.name == "Moderator" for role in interaction.user.roles):
-            await interaction.respond("Du bist nicht der Turnierorganisator!", ephemeral=True)
+            await interaction.respond("Du bist nicht der Turnier-Organisator!", ephemeral=True)
             return
         await interaction.response.send_modal(KickPlayerModal(self.tournament))
 
@@ -888,7 +889,7 @@ class ParticipationView(discord.ui.View):
             await interaction.respond("Du bist kein Mitglied auf diesem Server!", ephemeral=True)
             return
         if interaction.user.id != self.tournament.organizer_id and not any(role.name == "Moderator" for role in interaction.user.roles):
-            await interaction.respond("Du bist nicht der Turnierorganisator!", ephemeral=True)
+            await interaction.respond("Du bist nicht der Turnier-Organisator!", ephemeral=True)
             return
         await interaction.respond("Starte Turnier...", ephemeral=True)
         
@@ -896,7 +897,7 @@ class ParticipationView(discord.ui.View):
         if message:
             await message.edit(view=None)
         else:
-            await interaction.response.send_message("Turnier Nachricht nicht gefunden", ephemeral=True)
+            await interaction.respond("Turnier Nachricht nicht gefunden", ephemeral=True)
             return
         
         players = []
@@ -1041,7 +1042,7 @@ class EditTournamentView(discord.ui.View):
             await interaction.edit_original_response(content="Turnier wurde bearbeitet", embed=None, view=None)
         else:
             if not type(interaction.channel) == discord.TextChannel:
-                await interaction.response.send_message("Threads can only be created in text channels.", ephemeral=True)
+                await interaction.respond("Threads können nur in Textkanälen erstellt werden.", ephemeral=True)
                 return
             # create
             thread = await interaction.channel.create_thread(name=self.tournament.title, type=discord.ChannelType.public_thread)
@@ -1112,7 +1113,7 @@ class SpelltableTournamentManager(Cog):
         max_teilnehmer:Option(int, description="Maximale Anzahl an Teilnehmern", required=False, default=None),
     ):
         if type(ctx.channel) != discord.TextChannel:
-            await ctx.respond("Dieser Befehl kann nur in einem Textkanal verwendet werden.", ephemeral=True)
+            await ctx.respond("Dieser Befehl kann nur in einem Textkanal ausgeführt werden.", ephemeral=True)
             return
         if type(ctx.author) != discord.Member:
             await ctx.respond("Du bist kein Mitglied dieses Servers!", ephemeral=True)
