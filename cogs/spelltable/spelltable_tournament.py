@@ -1085,11 +1085,17 @@ class SpelltableTournamentManager(Cog):
                             view = await StartNextRoundView.create(current_round, tournament)
                         else:
                             view = None
+                            
+                        if message.channel.archived:
+                            await message.channel.edit(archived=False)
                         await message.edit(view=view)
                     if current_round.message_id_pairings:
                         # pairings have been posted
                         view = await ReportMatchView.create(current_round, tournament)
                         message = await tournament.get_message(current_round.message_id_pairings)
+                        
+                        if message.channel.archived:
+                            await message.channel.edit(archived=False)
                         await message.edit(view=view, content=f"Paarungen für die {current_round.round_number}. Runde:\n\n{tournament.get_pairings()}")
                 else:
                     view = await ParticipationView.create(tournament)
