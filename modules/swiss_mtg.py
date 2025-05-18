@@ -348,26 +348,45 @@ class SwissTournament(Serializable):
                 round.matches.append(Match(active_players[i], None))
         return round
 
-    def swiss_pairing(self, round_number, players):
+    def swiss_pairing(self, round_number, players:list[tuple[Player, int]]):
         """
         Pair players using min-weight maximum matching while prioritizing fair top-table matchups.
         
         :param round_number: The current round number.
         :return: Round object with the matches.
         """
+        round = Round(round_number)
+
         # Retrieve all previous matches to prevent rematches
         past_matches: list[Match] = [match for round in self.rounds for match in round.matches]
         previous_matches = {frozenset({match.player1, match.player2}) for match in past_matches}
         
+        unpaired_players = players[:]
+
+        # Handle odd number of players: assign a bye to the lowest-ranked player who hasn't had one yet
+        if len(unpaired_players) % 2 != 0:
+            # Iterate through the unpaired players in reverse order (lowest-ranked first)
+            bye_player = None
+            for p, points in reversed(unpaired_players):
+                if not p.had_bye():
+                    bye_player = p
+                    break
+
+            if bye_player:
+                # Remove the bye player from the unpaired players list
+                unpaired_players = [(p, points) for p, points in unpaired_players if p != bye_player]
+                round.matches.append(Match(bye_player, None))
+            else:
+                raise ValueError("No eligible player for a bye.")
 
         # Create a graph to hold the possible pairings and weights
         G = nx.Graph()
 
         # Build the graph with weighted edges based on score differences, avoiding rematches
-        for i in range(len(players)):
-            for j in range(i + 1, len(players)):
-                p1, score1 = players[i]
-                p2, score2 = players[j]
+        for i in range(len(unpaired_players)):
+            for j in range(i + 1, len(unpaired_players)):
+                p1, score1 = unpaired_players[i]
+                p2, score2 = unpaired_players[j]
                 
                 # Prevent rematches
                 if frozenset({p1, p2}) in previous_matches:
@@ -381,22 +400,23 @@ class SwissTournament(Serializable):
 
                 G.add_edge(p1, p2, weight=-weight)  # Negate weight since networkx maximizes weight
 
-        round = Round(round_number)
 
         # Find optimal pairings using the max weight matching
         matching = nx.max_weight_matching(G, maxcardinality=True)
+
+        # Remove paired players from unpaired_players
+        for p1, p2 in matching:
+            if p1 and p2:
+                unpaired_players = [(p, points) for p, points in unpaired_players if p != p1 and p != p2]
+            pass
+
+        # Create Match objects for the pairings
         match_objects = [Match(p1, p2) for p1, p2 in matching]
         round.matches.extend(match_objects)
 
-        # Handle odd number of players (assign a bye to the lowest-ranked player who hasn't had one yet)
-        unpaired = set(p[0] for p in players) - set(x for pair in matching for x in pair)
-        bye_candidates = [p for p in unpaired if not p.had_bye()]
-        
-        # Find the lowest-ranked player who has not yet received a bye
-        if bye_candidates:
-            bye = min(bye_candidates, key=lambda p: next(points for pid, points in players if pid == p))  # Assign the lowest-ranked eligible player
-            round.matches.append(Match(bye, None))  # Append the bye as a match with 'None'
-
+        # Check if any players are left unpaired
+        if unpaired_players:
+            raise ValueError(f"Some players are left unpaired: {unpaired_players}")
         return round
     
     def pair_players(self) -> Round:
