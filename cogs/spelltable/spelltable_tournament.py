@@ -236,7 +236,8 @@ class SpelltableTournament(Serializable):
         await save_tournament(self)
         message = await self.message
         if message:
-            await message.edit(embed=await self.to_embed())
+            embed = await self.to_embed()
+            await message.edit(embed=embed)
         else:
             raise Exception("Message not found")
         return message_str
@@ -273,7 +274,7 @@ class SpelltableTournament(Serializable):
 
         await self.guild.chunk()
 
-        participant_members = []
+        participant_members:list[discord.User] = []
         for uid in participants:
             member = self.guild.get_member(uid)
             if not member:
@@ -533,10 +534,10 @@ class StartNextRoundView(discord.ui.View):
     async def join_button_id(cls, round:swiss_mtg.Round, tournament:SpelltableTournament):
         return f"start_next_round_{await tournament.get_id()}_{round.round_number}"
     
-    @discord.ui.button(label="Nächte Runde", style=discord.ButtonStyle.success, emoji="➡️")
+    @discord.ui.button(label="Nächste Runde", style=discord.ButtonStyle.success, emoji="➡️")
     async def next_round_button(self, button: discord.ui.Button, interaction: discord.Interaction):
         async def do_the_thing():
-            if interaction.user.id != self.tournament.organizer_id:
+            if interaction.user.id != self.tournament.organizer_id and not any(role.name == "Moderator" for role in interaction.user.roles):
                 await interaction.respond("Nur der Turn Organisator darf dies tun.", ephemeral=True)
                 return
             await interaction.response.defer()
