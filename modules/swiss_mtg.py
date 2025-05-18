@@ -218,8 +218,8 @@ class Match(Serializable):
 
     def __repr__(self):
         if self.player2 is None:
-            return f"Bye for {self.player1.name}"
-        text = f"Match between {self.player1.name} and {self.player2.name}"
+            return f"Bye for {self.player1.name} ({self.player1.calculate_match_points()})"
+        text = f"Match between {self.player1.name} ({self.player1.calculate_match_points()}) and {self.player2.name} ({self.player2.calculate_match_points()})"
         if self.is_finished():
             win_string = "-".join(map(str, self.wins.values()))
             winner = self.get_winner()
@@ -478,7 +478,7 @@ def main():
     # 0 means no player will drop out
     # 1 means a random player will drop each round
     # 0.5 means a random player will drop every other round
-    RANDOM_DROP_RATE = 0.1
+    RANDOM_DROP_RATE = 0
 
     # Step 1: Initialize players
     players = [Player(f"Player {player_id+1}", player_id) for player_id in range(PLAYER_COUNT)]
@@ -487,7 +487,7 @@ def main():
     tournament = SwissTournament(players)
 
     # Step 3: Play multiple rounds (simulate rounds in a Swiss system)
-    for round_num in range(tournament.rounds):
+    for round_num in range(tournament.rounds_count):
         play_round(tournament, RANDOM_DROP_RATE)
 
 if __name__ == "__main__":
