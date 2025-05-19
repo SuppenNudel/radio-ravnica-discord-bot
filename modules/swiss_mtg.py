@@ -64,15 +64,18 @@ class Player(Serializable):
     def has_played_against(self, opponent):
         return any(match.get_opponent_of(self) == opponent for match in self.match_history)
 
-    def get_finished_matches(self):
+    def get_finished_matches(self) -> list["Match"]:
         return [match for match in self.match_history if match.is_finished()]
     
     def get_finished_non_bye_matches(self):
         return [match for match in self.match_history if match.is_finished() and not match.is_bye()]
 
-    def calculate_match_points(self):
+    def calculate_match_points(self, up_to_round:int|None=None):
         match_points = 0
         for match in self.get_finished_matches():
+            # Skip matches beyond the specified round number
+            if up_to_round is not None and match.round_number > up_to_round:
+                continue
             if match.get_winner() == self:
                 match_points += 3
             elif match.is_draw():
@@ -127,7 +130,8 @@ class Player(Serializable):
         return max(ogwp, 0.33)
 
 class Match(Serializable):
-    def __init__(self, player1:Player, player2:Player|None):
+    def __init__(self, player1:Player, player2:Player|None, round_number:int):
+        self.round_number = round_number
         if player1 is None:
             raise ValueError("player1 can not be None.")
         self.wins:dict[Player|None|str, int] = {player1: 0, player2: 0, "draws": 0}
@@ -150,7 +154,7 @@ class Match(Serializable):
         }
     
     @classmethod
-    def deserialize(cls, match_data, players:dict[int, Player]):#
+    def deserialize(cls, match_data, players:dict[int, Player], round_number:int):#
         wins:dict[str, int] = match_data['wins']
         draws:int = wins.pop('draws')
         p1:tuple[str, int] = wins.popitem()
@@ -162,7 +166,7 @@ class Match(Serializable):
 
         player1 = players[int(p1[0])]
         player2 = players[int(p2[0])] if p2 else None
-        match = Match(player1, player2)
+        match = Match(player1, player2, round_number)
         if p2 and (p1[1] or p2[1] or draws):
             match.set_result(p1[1], p2[1], draws)
         return match
@@ -248,7 +252,7 @@ class Round(Serializable):
     @classmethod
     def deserialize(cls, round_data, players:dict[int, Player]):
         round = Round(round_data['round_number'])
-        round.matches = [Match.deserialize(match, players) for match in round_data['matches']]
+        round.matches = [Match.deserialize(match, players, round.round_number) for match in round_data['matches']]
         if 'message_pairings' in round_data:
             message = int(round_data['message_pairings'])
             round.message_id_pairings = message
@@ -342,12 +346,12 @@ class SwissTournament(Serializable):
         round = Round(round_number)
         for i in range(0, len(active_players), 2):
             if i + 1 < len(active_players):  # Check if there is a next player to form a pair
-                round.matches.append(Match(active_players[i], active_players[i + 1]))
+                round.matches.append(Match(active_players[i], active_players[i + 1], round_number))
             else:
                 # Handle odd number of players, unpaired player gets a bye
                 if active_players[i].had_bye():
                     raise ValueError("Player already had a bye.")
-                round.matches.append(Match(active_players[i], None))
+                round.matches.append(Match(active_players[i], None, round_number))
         return round
 
     def swiss_pairing(self, round_number, players:list[tuple[Player, int]]):
@@ -377,7 +381,7 @@ class SwissTournament(Serializable):
             if bye_player:
                 # Remove the bye player from the unpaired players list
                 unpaired_players = [(p, points) for p, points in unpaired_players if p != bye_player]
-                round.matches.append(Match(bye_player, None))
+                round.matches.append(Match(bye_player, None, round_number))
             else:
                 raise ValueError("No eligible player for a bye.")
 
@@ -413,7 +417,7 @@ class SwissTournament(Serializable):
             pass
 
         # Create Match objects for the pairings
-        match_objects = [Match(p1, p2) for p1, p2 in matching]
+        match_objects = [Match(p1, p2, round_number) for p1, p2 in matching]
         round.matches.extend(match_objects)
 
         # Check if any players are left unpaired

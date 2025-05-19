@@ -339,10 +339,10 @@ class SpelltableTournament(Serializable):
     async def update_pairings(self, round:swiss_mtg.Round):
         pairings_message:discord.Message = await self.get_message(round.message_id_pairings)
         link_log.info(f"updating pairings {pairings_message.jump_url}")
-        pairings_image = await pairings_to_image(self)
+        pairings_image = await pairings_to_image(self, round)
         pairings_file = discord.File(pairings_image, filename=pairings_image)
         if pairings_message:
-            await pairings_message.edit(file=pairings_file, attachments=[], content="Paarungen aktualisiert." or "Kein Inhalt verfügbar.")
+            await pairings_message.edit(file=pairings_file, attachments=[], content=pairings_message.content or "Kein Inhalt verfügbar.")
         else:
             raise Exception("Pairings message not found.")
 
@@ -448,7 +448,7 @@ class SpelltableTournament(Serializable):
         return for_message
     
 
-async def pairings_to_image(tournament: SpelltableTournament, round=None) -> str:
+async def pairings_to_image(tournament: SpelltableTournament, round:swiss_mtg.Round|None=None) -> str:
     if round is None:
         round = tournament.swiss_tournament.current_round()
     id = await tournament.get_id()
@@ -460,7 +460,8 @@ async def pairings_to_image(tournament: SpelltableTournament, round=None) -> str
         if match.is_bye():
             player = match.player1 or match.player2
             if player:
-                rows.append([(f"{player.name} ({player.calculate_match_points()-3})", player.dropped), "BYE", "2 - 0"])
+                p_mp = player.calculate_match_points(round.round_number-1)
+                rows.append([(f"{player.name} ({p_mp})", player.dropped), "BYE", "2 - 0"])
             continue
 
         # Normal match
@@ -476,8 +477,10 @@ async def pairings_to_image(tournament: SpelltableTournament, round=None) -> str
             score_p1 = score_p2 = "Ausstehend"
 
         # Add both player perspectives
-        rows.append([(p1.name, p1.dropped), (p2.name, p2.dropped), score_p1])
-        rows.append([(p2.name, p2.dropped), (p1.name, p1.dropped), score_p2])
+        p1_mp = p1.calculate_match_points(round.round_number-1)
+        p2_mp = p2.calculate_match_points(round.round_number-1)
+        rows.append([(f"{p1.name} ({p1_mp})", p1.dropped), (f"{p2.name} ({p2_mp})", p2.dropped), score_p1])
+        rows.append([(f"{p2.name} ({p2_mp})", p2.dropped), (f"{p1.name} ({p1_mp})", p1.dropped), score_p2])
 
     # Sort rows by player name (first element of the tuple in column 0)
     rows.sort(key=lambda row: row[0][0].lower())
@@ -1136,7 +1139,11 @@ class SpelltableTournamentManager(Cog):
                         if current_round.round_number < tournament.swiss_tournament.rounds_count:
                             view = await StartNextRoundView.create(current_round, tournament)
                         else:
-                            view = None
+                            # Tournament is concluded
+                            view = await FinishTournamentView.create(tournament)
+                            standings_message = await tournament.get_message(current_round.message_id_standings)
+                            if standings_message:
+                                await standings_message.edit(view=view)
                             
                         if message.channel.archived:
                             await message.channel.edit(archived=False)
