@@ -307,39 +307,24 @@ class SpelltableTournament(Serializable):
             # as long as the current round has not concluded, don't post standings
             return
         message_standings = await self.get_message(current_round.message_id_standings)
+
+        content = f"Platzierungen nach der {self.swiss_tournament.current_round().round_number}. Runde"
+        standings_image = await standings_to_image(self)
+        standings_file = discord.File(standings_image, filename=standings_image)
+
         if current_round.round_number >= self.swiss_tournament.rounds_count:
             # letzte Runde
-            swiss_mtg.sort_players_by_standings(self.swiss_tournament.players)
-            winner = None
-            for player in self.swiss_tournament.players:
-                if not player.dropped:
-                    winner = player
-                    break
-            content = f"Finales Ergebnis!\nHerzlichen Glückwunsch <@{winner.player_id}> für den Sieg"
-
-            standings_image = await standings_to_image(self)
-            standings_file = discord.File(standings_image, filename=standings_image)
-            if message_standings:
-                await message_standings.edit(file=standings_file, attachments=[], content=content or "Kein Inhalt verfügbar.")
-            else:
-                try:
-                    message_standings = await interaction.followup.send(file=standings_file, content=content or "Kein Inhalt verfügbar.")
-                    current_round.message_id_standings = message_standings.id
-                except Exception as e:
-                    log.error(e)
-                    log.error(f"Tried sending followup with content={content}, file={standings_file}")
+            view = await FinishTournamentView.create(self)
         else:
-            start_next_round_view = await StartNextRoundView.create(current_round, self)
-            content = f"Platzierungen nach der {self.swiss_tournament.current_round().round_number}. Runde"
-            standings_image = await standings_to_image(self)
-            standings_file = discord.File(standings_image, filename=standings_image)
-            if message_standings:
-                await message_standings.edit(content=content or "Kein Inhalt verfügbar.", view=start_next_round_view, attachments=[], file=standings_file)
-            else:
-                async def do_the_thing():
-                    message_standings = await interaction.followup.send(content=content or "Kein Inhalt verfügbar.", view=start_next_round_view, file=standings_file)
-                    current_round.message_id_standings = message_standings.id
-                await use_custom_try("Platzierungen Senden", do_the_thing, self)
+            view = await StartNextRoundView.create(current_round, self)
+
+        if message_standings:
+            await message_standings.edit(content=content, view=view, attachments=[], file=standings_file)
+        else:
+            async def do_the_thing():
+                message_standings = await interaction.followup.send(content=content, view=view, file=standings_file)
+                current_round.message_id_standings = message_standings.id
+            await use_custom_try("Platzierungen Senden", do_the_thing, self)
 
         await save_tournament(self)
 
@@ -434,14 +419,17 @@ class SpelltableTournament(Serializable):
             
             mention_p1 = f"<@{p1.player_id}>"
             if p1.dropped:
-                mention = f"~~{mention_p1}~~"
+                mention_p1 = f"~~{mention_p1}~~"
             
             mention_p2 = f"<@{p2.player_id}>"
             if p2.dropped:
-                mention = f"~~{mention_p2}~~"
+                mention_p2 = f"~~{mention_p2}~~"
             
             matchups[p1.name] = f"{mention_p1} vs {mention_p2}"
             matchups[p2.name] = f"{mention_p2} vs {mention_p1}"
+
+        if not matchups:
+            return "Keine Paarungen verfügbar. Ein Neustart des Bots, sollte den Fehler beheben. <@356120044754698252>" # pings NudelForce
 
         for_message = "\n".join(matchups[name] for name in sorted(matchups, key=str.lower))
 
@@ -562,6 +550,52 @@ class StartNextRoundView(discord.ui.View):
                 await previous_standings_message.edit(attachments=[], file=standings_file, view=await StartNextRoundView.create(self.previous_round, self.tournament))
 
         await use_custom_try("Nächste Runde Erstellen", do_the_thing, self.tournament)
+
+class FinishTournamentView(discord.ui.View):
+    def __init__(self):
+        raise RuntimeError("Use 'await FinishTournamentView.create(...)' instead")
+
+    async def _init(self, tournament: SpelltableTournament):
+        super().__init__(timeout=None)
+        self.tournament = tournament
+
+    @classmethod
+    async def create(cls, tournament: SpelltableTournament):
+        instance = object.__new__(cls)
+        await instance._init(tournament)
+        return instance
+
+    @discord.ui.button(label="Turnier abschließen", style=discord.ButtonStyle.success, emoji="🏆")
+    async def finish_button(self, button: discord.ui.Button, interaction: discord.Interaction):
+        if interaction.user.id != self.tournament.organizer_id:
+            await interaction.respond("Nur der Turnier-Organisator darf dies tun.", ephemeral=True)
+            return
+
+        swiss_mtg.sort_players_by_standings(self.tournament.swiss_tournament.players)
+        winner = None
+        for player in self.tournament.swiss_tournament.players:
+            if not player.dropped:
+                winner = player
+                break
+
+        if winner:
+            content = f"🎉 Das Turnier ist abgeschlossen! 🎉\nHerzlichen Glückwunsch an <@{winner.player_id}> für den großartigen Sieg! 🏆\nVielen Dank an alle Teilnehmer für ein spannendes und unterhaltsames Turnier! 🎊"
+
+            # Remove views from the last round pairings and standings messages
+            current_round = self.tournament.swiss_tournament.current_round()
+            pairings_message = await self.tournament.get_message(current_round.message_id_pairings)
+            standings_message = await self.tournament.get_message(current_round.message_id_standings)
+
+            if pairings_message:
+                await pairings_message.edit(view=None)
+            if standings_message:
+                await standings_message.edit(view=None)
+
+            await interaction.response.send_message(content, ephemeral=False)
+            link_log.info(f"Turnier abgeschlossen: `{self.tournament.title}`, Gewinner: <@{winner.player_id}>")
+        else:
+            await interaction.respond("Kein Gewinner gefunden. Das sollte nicht passieren.", ephemeral=True)
+
 
 members:dict[int, discord.Member] = {}
 
@@ -1119,8 +1153,7 @@ class SpelltableTournamentManager(Cog):
     async def erstelle_turnier(
         self,
         ctx:ApplicationContext,
-        titel:Option(str, description="Der Titel, den das Turnier tragen soll"),
-        max_teilnehmer:Option(int, description="Maximale Anzahl an Teilnehmern", required=False, default=None),
+        titel:Option(str, description="Der Titel, den das Turnier tragen soll")
     ):
         if type(ctx.channel) != discord.TextChannel:
             await ctx.respond("Dieser Befehl kann nur in einem Textkanal ausgeführt werden.", ephemeral=True)
@@ -1131,14 +1164,19 @@ class SpelltableTournamentManager(Cog):
         if ctx.guild is None:
             await ctx.respond("Dieser Befehl kann nur in einem Server verwendet werden.", ephemeral=True)
             return
+        
+        # Defer the interaction response to avoid timeout
+        await ctx.defer(ephemeral=True)
+
         tournament = SpelltableTournament(ctx.guild, titel, ctx.author.id)
         tournament.max_participants = max_teilnehmer
         tournament.organizer = ctx.author
         view = await EditTournamentView.create(tournament, ctx.channel)
-        await ctx.respond(
+        await ctx.followup.send(
             embed=await tournament.to_embed(),
             view=view,
-            ephemeral=True)
+            ephemeral=True
+        )
 
 def setup(bot:Bot):
     bot.add_cog(SpelltableTournamentManager(bot))
