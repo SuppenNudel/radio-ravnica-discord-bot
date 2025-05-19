@@ -71,3 +71,5 @@ if __name__ == "__main__":
 # - put the .ics files in the tmp folder
 # - put google maps image into the tmp folder
 # - put the event icon.png into the tmp folder
+# - remove optional parameter "max_players" from tournament creation
+# - put match points in paranthesis in pairings
