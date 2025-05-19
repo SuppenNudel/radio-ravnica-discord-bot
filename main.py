@@ -52,7 +52,7 @@ async def on_ready():
 if __name__ == "__main__":
     os.makedirs("tmp", exist_ok=True)
     if IS_DEBUG:
-        bot.load_extension('cogs.paper_events.paper_event_submit')
+        bot.load_extension('cogs.spelltable.spelltable_tournament')
         # bot.load_extension('cogs.arena_daily_deals')
     else:
         bot.load_cogs(subdirectories=True, ignored_cogs=["ping", "hack", "notion_to_forum"])
@@ -64,3 +64,10 @@ if __name__ == "__main__":
     #     shuffle=True
     )
     bot.run(os.getenv("TOKEN"))
+
+# TODO
+# - put concluded tournament json files into concluded tournaments folder
+# - put the swiss tournament images in the tmp folder
+# - put the .ics files in the tmp folder
+# - put google maps image into the tmp folder
+# - put the event icon.png into the tmp folder
