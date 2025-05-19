@@ -171,16 +171,13 @@ class Match(Serializable):
             match.set_result(p1[1], p2[1], draws)
         return match
     
-    def is_finished(self, best_of=3):
+    def is_finished(self):
         player1_wins = self.wins[self.player1]
         player2_wins = self.wins[self.player2]
-        if player1_wins + player2_wins > best_of:
-            # too many games
-            return False
-        if player1_wins > best_of / 2 or player2_wins > best_of / 2 or sum(self.wins.values()) >= best_of:
+        if player1_wins or player2_wins or self.wins['draws']:
             return True
-        # too few games
-        return False
+        else:
+            return False
 
     def get_opponent_of(self, player:Player):
         if player == self.player1:
@@ -206,8 +203,6 @@ class Match(Serializable):
         self.wins[self.player1] = player1_wins
         self.wins[self.player2] = player2_wins
         self.wins['draws'] = draws
-        if not self.is_finished():
-            raise ValueError("Inkorrekte Anzahl an Games")
 
     def is_bye(self):
         return self.player2 is None

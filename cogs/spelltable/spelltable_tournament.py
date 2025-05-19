@@ -290,6 +290,7 @@ class SpelltableTournament(Serializable):
             if member:
                 participant_members.append(member)
 
+        participant_members.sort(key=lambda member: member.display_name.lower())
         embed.add_field(name=f"✅ Teilnehmer ({len(participants)}{f'/{self.max_participants}' if self.max_participants else ''})", value="\n".join([f"{p.display_name}" for p in participant_members]), inline=True)
         if self.max_participants:
             waitlist_members = [self.guild.get_member(uid) for uid in waitlist]
