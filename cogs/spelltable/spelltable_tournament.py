@@ -301,7 +301,7 @@ class SpelltableTournament(Serializable):
             return await tourney_message.channel.fetch_message(message_id)
         return None
 
-    async def update_standings(self, interaction:discord.Interaction):
+    async def update_standings(self, interaction: discord.Interaction):
         current_round = self.swiss_tournament.current_round()
         if not current_round.is_concluded():
             # as long as the current round has not concluded, don't post standings
@@ -320,10 +320,10 @@ class SpelltableTournament(Serializable):
             standings_image = await standings_to_image(self)
             standings_file = discord.File(standings_image, filename=standings_image)
             if message_standings:
-                await message_standings.edit(file=standings_file, attachments=[], content=content)
+                await message_standings.edit(file=standings_file, attachments=[], content=content or "Kein Inhalt verfügbar.")
             else:
                 try:
-                    message_standings = await interaction.followup.send(file=standings_file, content=content)
+                    message_standings = await interaction.followup.send(file=standings_file, content=content or "Kein Inhalt verfügbar.")
                     current_round.message_id_standings = message_standings.id
                 except Exception as e:
                     log.error(e)
@@ -334,10 +334,10 @@ class SpelltableTournament(Serializable):
             standings_image = await standings_to_image(self)
             standings_file = discord.File(standings_image, filename=standings_image)
             if message_standings:
-                await message_standings.edit(content=content, view=start_next_round_view, attachments=[], file=standings_file)
+                await message_standings.edit(content=content or "Kein Inhalt verfügbar.", view=start_next_round_view, attachments=[], file=standings_file)
             else:
                 async def do_the_thing():
-                    message_standings = await interaction.followup.send(content=content, view=start_next_round_view, file=standings_file)
+                    message_standings = await interaction.followup.send(content=content or "Kein Inhalt verfügbar.", view=start_next_round_view, file=standings_file)
                     current_round.message_id_standings = message_standings.id
                 await use_custom_try("Platzierungen Senden", do_the_thing, self)
 
@@ -348,7 +348,10 @@ class SpelltableTournament(Serializable):
         link_log.info(f"updating pairings {pairings_message.jump_url}")
         pairings_image = await pairings_to_image(self)
         pairings_file = discord.File(pairings_image, filename=pairings_image)
-        await pairings_message.edit(file=pairings_file, attachments=[])
+        if pairings_message:
+            await pairings_message.edit(file=pairings_file, attachments=[], content="Paarungen aktualisiert." or "Kein Inhalt verfügbar.")
+        else:
+            raise Exception("Pairings message not found.")
 
         await save_tournament(self)
     
