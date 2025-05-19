@@ -460,7 +460,7 @@ class PaperEvent():
         if location:
             files.append(discord.File(location.file_path, filename=location.file_name))
         title = self.build_title()
-        ics_file = ics.create_ics_file(f"{title}.ics", title, self.fields[FieldName.START].value, self.fields[FieldName.END].value, description=self.fields[FieldName.DESCRIPTION].value, location=location.formatted_address if location else None)
+        ics_file = ics.create_ics_file(f"tmp/{title}.ics", title, self.fields[FieldName.START].value, self.fields[FieldName.END].value, description=self.fields[FieldName.DESCRIPTION].value, location=location.formatted_address if location else None)
         if ics_file:
             files.append(discord.File(ics_file, filename=ics_file))
         return files

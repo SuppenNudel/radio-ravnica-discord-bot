@@ -295,6 +295,7 @@ class SwissTournament(Serializable):
         self.rounds_count = rounds_count
         self.players:list[Player] = players
         self.rounds:list[Round] = []
+        self.winner:Player|None = None
 
     def get_active_players(self):
         return [player for player in self.players if not player.dropped]
@@ -304,6 +305,7 @@ class SwissTournament(Serializable):
             "rounds_count": self.rounds_count,
             "players": self.players,
             "rounds": self.rounds,
+            "winner": self.winner
         }
     
     def current_round(self) -> Round:

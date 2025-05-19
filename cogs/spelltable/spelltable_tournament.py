@@ -65,6 +65,8 @@ class CustomJSONEncoder(json.JSONEncoder):
 async def save_tournament(tournament: "SpelltableTournament"):
     # Ensure the directory exists
     os.makedirs(TOURNAMENTS_FOLDER, exist_ok=True)
+    concluded_folder = os.path.join(TOURNAMENTS_FOLDER, "concluded")
+    os.makedirs(concluded_folder, exist_ok=True)
 
     # Convert tournament ID (slashes to underscores) for filename
     tournament_id = await tournament.get_id()
@@ -75,6 +77,12 @@ async def save_tournament(tournament: "SpelltableTournament"):
     try:
         with open(file_path, "w") as file:
             json.dump(serialized, file, cls=CustomJSONEncoder, indent=4)
+        
+        # If the tournament is concluded, move the file to the concluded folder
+        if tournament.swiss_tournament and tournament.swiss_tournament.winner:
+            concluded_path = os.path.join(concluded_folder, filename)
+            os.rename(file_path, concluded_path)
+            print(f"Tournament {tournament_id} has been concluded and moved to {concluded_path}")
     except Exception as e:
         print(f"Error saving tournament {tournament_id}: {e}")
 
@@ -358,6 +366,10 @@ class SpelltableTournament(Serializable):
             except discord.errors.HTTPException as e:
                 log.error(f"Failed to send pairings message: {e}")
                 await interaction.followup.send("Fehler beim Senden der Paarungen. Bitte versuche es später erneut.", ephemeral=True)
+                previous_standings_message = await self.get_message(previous_round.message_id_standings)
+                standings_image = await standings_to_image(self, previous_round)
+                standings_file = discord.File(standings_image, filename=standings_image)
+                await previous_standings_message.edit(attachments=[], file=standings_file, view=await StartNextRoundView.create(previous_round, self))
                 return
 
             if not isinstance(new_pairings_message, discord.Message):
@@ -448,7 +460,7 @@ async def pairings_to_image(tournament: SpelltableTournament, round=None) -> str
         if match.is_bye():
             player = match.player1 or match.player2
             if player:
-                rows.append([(player.name, player.dropped), "BYE", "2 - 0"])
+                rows.append([(f"{player.name} ({player.calculate_match_points()-3})", player.dropped), "BYE", "2 - 0"])
             continue
 
         # Normal match
@@ -475,7 +487,7 @@ async def pairings_to_image(tournament: SpelltableTournament, round=None) -> str
         "rows": rows
     }
 
-    filename = f'tournaments/{id.replace("/", "_")}_pairings_round_{round.round_number}_expanded.png'
+    filename = f'tmp/{id.replace("/", "_")}_pairings_round_{round.round_number}_expanded.png'
     table_to_image.generate_image(data, filename, "beleren.ttf")
     return filename
 
@@ -501,7 +513,7 @@ async def standings_to_image(tournament:SpelltableTournament, round=None) -> str
         "rows": rows
     }
     id = await tournament.get_id()
-    filename = f'tournaments/{id.replace("/", "_")}_standings_round_{round.round_number}.png'
+    filename = f'tmp/{id.replace("/", "_")}_standings_round_{round.round_number}.png'
     table_to_image.generate_image(data, filename, "beleren.ttf")
 
     return filename
@@ -593,6 +605,8 @@ class FinishTournamentView(discord.ui.View):
 
             await interaction.response.send_message(content, ephemeral=False)
             link_log.info(f"Turnier abgeschlossen: `{self.tournament.title}`, Gewinner: <@{winner.player_id}>")
+            self.tournament.swiss_tournament.winner = winner
+            await save_tournament(self.tournament)
         else:
             await interaction.respond("Kein Gewinner gefunden. Das sollte nicht passieren.", ephemeral=True)
 
@@ -1169,7 +1183,6 @@ class SpelltableTournamentManager(Cog):
         await ctx.defer(ephemeral=True)
 
         tournament = SpelltableTournament(ctx.guild, titel, ctx.author.id)
-        tournament.max_participants = max_teilnehmer
         tournament.organizer = ctx.author
         view = await EditTournamentView.create(tournament, ctx.channel)
         await ctx.followup.send(
