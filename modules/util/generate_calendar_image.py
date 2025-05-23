@@ -88,15 +88,15 @@ def generate_vertical_calendar_landscape_with_grids(year, highlight_range=None, 
                     draw.rectangle([x_offset, y_offset, x_offset + COLUMN_WIDTH, y_offset + ROW_HEIGHT], fill=WEEKEND_COLOR)
 
             # Highlight the day if it's in the range
-            if is_highlighted and not is_weekend:
-                if highlight_style == "full":
-                    # Full-day highlight
+            if is_highlighted:
+                if highlight_style == "full" and not is_weekend:
+                    # Full-day highlight for weekdays
                     draw.rectangle([x_offset, y_offset, x_offset + COLUMN_WIDTH, y_offset + ROW_HEIGHT], fill="#ffff99")
                 elif highlight_style == "line":
-                    # Vertical line highlight
+                    # Vertical line highlight (applies to all days in the range, including weekends)
                     draw.line(
                         [(x_offset + COLUMN_WIDTH // 2, y_offset), (x_offset + COLUMN_WIDTH // 2, y_offset + ROW_HEIGHT)],
-                        fill="#ffff99",
+                        fill="#666666",  # Darker color for line mode
                         width=2,
                     )
 
