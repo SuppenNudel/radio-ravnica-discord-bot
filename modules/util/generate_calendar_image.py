@@ -7,7 +7,7 @@ locale.setlocale(locale.LC_TIME, "de_DE")
 
 # Constants
 LANDSCAPE_WIDTH = 1600
-LANDSCAPE_HEIGHT = 1100
+# LANDSCAPE_HEIGHT = 1200 doesn't do anything anymore
 MARGIN = 50
 COLUMN_WIDTH = (LANDSCAPE_WIDTH - 2 * MARGIN) // 12
 ROW_HEIGHT = 30
@@ -25,11 +25,39 @@ HEADER_COLOR = "#d0e0ff"
 def get_weekday_abbr(d):
     return d.strftime('%a')[:2]
 
-# Generate vertical calendar with grids
-def generate_vertical_calendar_landscape_with_grids(year):
-    img = Image.new("RGB", (LANDSCAPE_WIDTH, LANDSCAPE_HEIGHT), BG_COLOR)
+def calculate_image_height():
+    """
+    Calculate the required height of the image dynamically based on the number of rows
+    and ensure consistent padding around the calendar grid.
+    """
+    max_rows = 31  # Maximum number of rows for any month (31 days max)
+    grid_height = HEADER_HEIGHT + max_rows * ROW_HEIGHT  # Height of the calendar grid
+    total_height = 2 * MARGIN + grid_height  # Add padding (MARGIN) to the top and bottom
+    return total_height
+
+def generate_vertical_calendar_landscape_with_grids(year, highlight_range=None, highlight_style="full"):
+    """
+    Generate a vertical calendar with grids for the given year.
+    Optionally highlight all days within a specified date range.
+
+    :param year: The year for the calendar.
+    :param highlight_range: A tuple of two dates (start_date, end_date) to highlight.
+    :param highlight_style: The style of highlighting ("full" for full-day highlight, "line" for vertical line).
+    :return: An Image object of the calendar.
+    """
+    # Dynamically calculate the required image height
+    dynamic_height = calculate_image_height()
+
+    # Create the image with the calculated height
+    img = Image.new("RGB", (LANDSCAPE_WIDTH, dynamic_height), BG_COLOR)
     draw = ImageDraw.Draw(img)
     font = ImageFont.truetype(FONT_PATH, FONT_SIZE)
+
+    # Parse the highlight range
+    highlight_start, highlight_end = highlight_range if highlight_range else (None, None)
+
+    # Calculate the bottom of the frame
+    frame_bottom = MARGIN + HEADER_HEIGHT + 31 * ROW_HEIGHT
 
     # Draw vertical grid lines for each month
     for month in range(1, 13):
@@ -44,28 +72,71 @@ def generate_vertical_calendar_landscape_with_grids(year):
 
         # Draw each day
         current_day = date(year, month, 1)
+        row_count = 0
         while current_day.month == month:
             is_weekend = current_day.weekday() >= 5
+            is_highlighted = highlight_start and highlight_end and highlight_start <= current_day <= highlight_end
             day_text = f"{current_day.day:2} {get_weekday_abbr(current_day)}"
+
+            # Highlight weekends
             if is_weekend:
-                draw.rectangle([x_offset, y_offset, x_offset + COLUMN_WIDTH, y_offset + ROW_HEIGHT], fill=WEEKEND_COLOR)
+                if is_highlighted and highlight_style == "full":
+                    # Darker color for weekends in the highlight range (only in "full" mode)
+                    draw.rectangle([x_offset, y_offset, x_offset + COLUMN_WIDTH, y_offset + ROW_HEIGHT], fill="#ffcc66")
+                else:
+                    # Regular weekend highlight
+                    draw.rectangle([x_offset, y_offset, x_offset + COLUMN_WIDTH, y_offset + ROW_HEIGHT], fill=WEEKEND_COLOR)
+
+            # Highlight the day if it's in the range
+            if is_highlighted and not is_weekend:
+                if highlight_style == "full":
+                    # Full-day highlight
+                    draw.rectangle([x_offset, y_offset, x_offset + COLUMN_WIDTH, y_offset + ROW_HEIGHT], fill="#ffff99")
+                elif highlight_style == "line":
+                    # Vertical line highlight
+                    draw.line(
+                        [(x_offset + COLUMN_WIDTH // 2, y_offset), (x_offset + COLUMN_WIDTH // 2, y_offset + ROW_HEIGHT)],
+                        fill="#ffff99",
+                        width=2,
+                    )
+
+            # Draw the day text
             draw.text((x_offset + 5, y_offset + 5), day_text, fill=TEXT_COLOR, font=font)
             y_offset += ROW_HEIGHT
             current_day += timedelta(days=1)
+            row_count += 1
 
         # Draw vertical grid line for the current month
-        draw.line([(x_offset, MARGIN), (x_offset, LANDSCAPE_HEIGHT - MARGIN)], fill=TEXT_COLOR, width=1)
+        draw.line([(x_offset, MARGIN), (x_offset, MARGIN + HEADER_HEIGHT + row_count * ROW_HEIGHT)], fill=TEXT_COLOR, width=1)
 
     # Draw horizontal grid lines for each row
-    for row in range(0, LANDSCAPE_HEIGHT - MARGIN, ROW_HEIGHT):
-        y = MARGIN + HEADER_HEIGHT + row
+    for row in range(31 + 1):  # Include one extra line for the bottom border
+        y = MARGIN + HEADER_HEIGHT + row * ROW_HEIGHT
+        if y > frame_bottom:
+            break  # Stop drawing rows if they exceed the calculated frame height
         draw.line([(MARGIN, y), (LANDSCAPE_WIDTH - MARGIN, y)], fill=TEXT_COLOR, width=1)
 
+    # Draw vertical grid lines for the outer border
+    for month in range(13):  # Include one extra line for the right border
+        x = MARGIN + month * COLUMN_WIDTH
+        if x > LANDSCAPE_WIDTH - MARGIN:
+            break  # Stop drawing columns if they exceed the available width
+        draw.line([(x, MARGIN), (x, frame_bottom)], fill=TEXT_COLOR, width=1)
+
     # Draw the outer border
-    draw.rectangle([MARGIN, MARGIN, LANDSCAPE_WIDTH - MARGIN, LANDSCAPE_HEIGHT - MARGIN], outline=TEXT_COLOR, width=2)
+    draw.rectangle([MARGIN, MARGIN, LANDSCAPE_WIDTH - MARGIN, frame_bottom], outline=TEXT_COLOR, width=2)
 
     return img
 
-# Generate German landscape calendar with grids for 2025
-calendar_with_grids = generate_vertical_calendar_landscape_with_grids(2025)
-calendar_with_grids.show()
+# Define the date range to highlight
+highlight_start = date(2025, 3, 10)
+highlight_end = date(2025, 3, 20)
+
+# Generate the calendar with highlighted days
+calendar_with_highlights = generate_vertical_calendar_landscape_with_grids(2025, highlight_range=(highlight_start, highlight_end))
+calendar_with_highlights.show()
+
+calendar_with_highlights = generate_vertical_calendar_landscape_with_grids(
+    2025, highlight_range=(highlight_start, highlight_end), highlight_style="line"
+)
+calendar_with_highlights.show()

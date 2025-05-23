@@ -8,6 +8,7 @@ from modules import swiss_mtg
 from modules import env
 import logging
 from datetime import datetime, timedelta
+from modules.util import pdf_to_image
 
 from cogs.spelltable.tournament_model import TOURNAMENTS_FOLDER, SpelltableTournament, get_member, load_tournaments, active_tournaments
 from cogs.spelltable.common_views import FinishTournamentView, KickPlayerModal, ParticipationState, ReportMatchView, StartNextRoundView, next_round
@@ -139,7 +140,7 @@ import pytz
 timezone = pytz.timezone("Europe/Berlin")
 
 async def generate_tournament_message(tournaments: list[SpelltableTournament]) -> str:
-    now = datetime.now(tz=timezone)
+    # now = datetime.now(tz=timezone)
 
     # Helper to calculate end date (5 weeks after start)
     def calc_end(start, tournament:SpelltableTournament):
@@ -378,8 +379,10 @@ class SpelltableTournamentManager(Cog):
                 log.warning(f"Turnier konnte nicht geladen werden, weil vermutlich der entprechende Channel gelöscht wurde. Lösche Datei {file_path}")
                 os.remove(file_path)
         
-        # tourney_list_message = await generate_tournament_message(list(active_tournaments.values()))
-        # await guild.get_channel(1315427456232063028).send(tourney_list_message)
+        tourney_list_message = await generate_tournament_message(list(active_tournaments.values()))
+        calendar_img = pdf_to_image.calendar_image(datetime.now().year)
+        calendar_file = discord.File(calendar_img, filename=calendar_img)
+        await guild.get_channel(1315427456232063028).send(tourney_list_message, file=calendar_file)
 
         log.debug(self.__class__.__name__ + " is ready")
 
