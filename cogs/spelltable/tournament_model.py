@@ -409,7 +409,7 @@ class SpelltableTournament(Serializable):
         }
         id = await self.get_id()
         filename = f'tmp/{id.replace("/", "_")}_standings_round_{round.round_number}.png'
-        table_to_image.generate_image(data, filename, "beleren.ttf")
+        table_to_image.generate_image(data, filename, "assets/beleren.ttf")
 
         return filename
     
@@ -457,5 +457,5 @@ class SpelltableTournament(Serializable):
         }
 
         filename = f'tmp/{id.replace("/", "_")}_pairings_round_{round.round_number}_expanded.png'
-        table_to_image.generate_image(data, filename, "beleren.ttf")
+        table_to_image.generate_image(data, filename, "assets/beleren.ttf")
         return filename
