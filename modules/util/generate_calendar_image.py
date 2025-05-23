@@ -1,9 +1,13 @@
+import os
 from PIL import Image, ImageDraw, ImageFont
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 import locale
+
+import pytz
 
 # Set locale to German for month and weekday names
 locale.setlocale(locale.LC_TIME, "de_DE")
+timezone = pytz.timezone("Europe/Berlin")
 
 # Constants
 LANDSCAPE_WIDTH = 1600
@@ -35,7 +39,7 @@ def calculate_image_height():
     total_height = 2 * MARGIN + grid_height  # Add padding (MARGIN) to the top and bottom
     return total_height
 
-def generate_vertical_calendar_landscape_with_grids(year, events=None, highlight_style="full"):
+def generate_calendar(year, tournaments:list["SpelltableTournament"]=None, highlight_style="full"):
     """
     Generate a vertical calendar with grids for the given year.
     Optionally highlight multiple events with date ranges and titles.
@@ -54,7 +58,7 @@ def generate_vertical_calendar_landscape_with_grids(year, events=None, highlight
     font = ImageFont.truetype(FONT_PATH, FONT_SIZE)
 
     # Parse the events
-    events = events or []
+    tournaments = tournaments or []
 
     # Calculate the bottom of the frame
     frame_bottom = MARGIN + HEADER_HEIGHT + 31 * ROW_HEIGHT
@@ -71,7 +75,7 @@ def generate_vertical_calendar_landscape_with_grids(year, events=None, highlight
         y_offset += HEADER_HEIGHT
 
         # Draw each day
-        current_day = date(year, month, 1)
+        current_day = datetime(year, month, 1, tzinfo=timezone)
         row_count = 0
         while current_day.month == month:
             is_weekend = current_day.weekday() >= 5
@@ -82,10 +86,10 @@ def generate_vertical_calendar_landscape_with_grids(year, events=None, highlight
                 draw.rectangle([x_offset, y_offset, x_offset + COLUMN_WIDTH, y_offset + ROW_HEIGHT], fill=WEEKEND_COLOR)
 
             # Check if the current day is part of any event
-            for event in events:
-                start_date = event["start_date"]
-                end_date = event["end_date"]
-                title = event["title"]
+            for tournament in tournaments:
+                start_date = tournament.time
+                end_date = tournament.calc_end()
+                title = tournament.title
 
                 if start_date <= current_day <= end_date:
                     if highlight_style == "full":
@@ -130,18 +134,38 @@ def generate_vertical_calendar_landscape_with_grids(year, events=None, highlight
     # Draw the outer border
     draw.rectangle([MARGIN, MARGIN, LANDSCAPE_WIDTH - MARGIN, frame_bottom], outline=TEXT_COLOR, width=2)
 
-    return img
+    # Save the image to the tmp/ directory
+    os.makedirs("tmp", exist_ok=True)  # Ensure the tmp/ directory exists
+    file_path = f"tmp/calendar_{year}.png"
+    img.save(file_path)
 
-# Define a list of events
-events = [
-    {"start_date": date(2025, 3, 17), "end_date": date(2025, 3, 28), "title": "Event 1"},
-    {"start_date": date(2025, 4, 5), "end_date": date(2025, 4, 14), "title": "Event 2"},
-    {"start_date": date(2025, 10, 24), "end_date": date(2025, 11, 10), "title": "Event 3"},
-]
+    return file_path
 
-# Generate the calendar with highlighted events
-calendar_with_highlights = generate_vertical_calendar_landscape_with_grids(2025, events=events, highlight_style="full")
-calendar_with_highlights.show()
 
-calendar_with_highlights = generate_vertical_calendar_landscape_with_grids(2025, events=events, highlight_style="line")
-calendar_with_highlights.show()
+if __name__ == "__main__":
+    class SpelltableTournament():
+        def __init__(self, title, time):
+            self.title = title
+            self.description = None
+            self.time:datetime = time
+            self.days_per_match = 7
+
+        def calc_end(self):
+            start = self.time
+            days_per_match = self.days_per_match
+            if days_per_match:
+                round_count = 5
+                return start + timedelta(days=days_per_match*round_count)
+            else:
+                return start
+
+    # Create a list of tournaments
+    tournaments = [
+        SpelltableTournament("Event 1 mit einem langen Titel", datetime(2025, 3, 20, tzinfo=timezone)),
+        # SpelltableTournament(date(2025, 4, 5), date(2025, 4, 14), "Event 2"),
+        # SpelltableTournament(date(2025, 10, 24), date(2025, 11, 10), "Event 3"),
+    ]
+
+    # Generate the calendar with highlighted tournaments
+    calendar_path = generate_calendar(2025, tournaments=tournaments, highlight_style="full")
+    print(f"Calendar saved at: {calendar_path}")
