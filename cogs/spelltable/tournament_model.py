@@ -1,6 +1,6 @@
 
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from ezcord import log
 import json
 import logging
@@ -250,6 +250,15 @@ class SpelltableTournament(Serializable):
             return current_round_count, f"Abhängig von der Spielerzahl. Aber Maximal {self.max_rounds}\nAktuell: {current_round_count}"
         else:
             return rec_round_count, f"Abhängig von der Spielerzahl.\nAktuell: {rec_round_count}"
+
+    def calc_end(self):
+        start = self.time
+        days_per_match = self.days_per_match
+        if days_per_match:
+            round_count, text = self.calc_round_count_and_text()
+            return start + timedelta(days=days_per_match*round_count)
+        else:
+            return start
 
     async def to_embed(self):
         embed = discord.Embed(

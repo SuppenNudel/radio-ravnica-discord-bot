@@ -8,7 +8,7 @@ from modules import swiss_mtg
 from modules import env
 import logging
 from datetime import datetime, timedelta
-from modules.util import pdf_to_image
+from modules.util import generate_calendar_image
 
 from cogs.spelltable.tournament_model import TOURNAMENTS_FOLDER, SpelltableTournament, get_member, load_tournaments, active_tournaments
 from cogs.spelltable.common_views import FinishTournamentView, KickPlayerModal, ParticipationState, ReportMatchView, StartNextRoundView, next_round
@@ -19,7 +19,6 @@ IS_DEBUG = env.DEBUG
 BOT = None
 
 EMOJI_PATTERN = re.compile("[\U0001F300-\U0001F6FF\U0001F900-\U0001F9FF\U0001FA70-\U0001FAFF\U0001F600-\U0001F64F]+", flags=re.UNICODE)
-
 
 class ParticipationView(discord.ui.View):
     def __init__(self):
@@ -142,15 +141,6 @@ timezone = pytz.timezone("Europe/Berlin")
 async def generate_tournament_message(tournaments: list[SpelltableTournament]) -> str:
     # now = datetime.now(tz=timezone)
 
-    # Helper to calculate end date (5 weeks after start)
-    def calc_end(start, tournament:SpelltableTournament):
-        days_per_match = tournament.days_per_match
-        if days_per_match:
-            round_count, text = tournament.calc_round_count_and_text()
-            return start + timedelta(days=days_per_match*round_count)
-        else:
-            return None
-
     # Sort tournaments by start date, placing those with `time=None` first
     tournaments = sorted(
         tournaments,
@@ -163,7 +153,7 @@ async def generate_tournament_message(tournaments: list[SpelltableTournament]) -
 
     for tourney in tournaments:
         start = tourney.time
-        end = calc_end(start, tourney) if start else None
+        end = tourney.calc_end() if start else None
         if tourney.swiss_tournament:
             ongoing.append((tourney, end))
         else:
@@ -171,7 +161,7 @@ async def generate_tournament_message(tournaments: list[SpelltableTournament]) -
 
     async def format_tournament(t:SpelltableTournament, end):
         organizer = await t.organizer
-        end = calc_end(t.time, t)
+        end = t.calc_end()
         t_message = await t.message
         return (
             f"> 🏆 **{t.title}** {t_message.jump_url}\n"
@@ -380,7 +370,7 @@ class SpelltableTournamentManager(Cog):
                 os.remove(file_path)
         
         tourney_list_message = await generate_tournament_message(list(active_tournaments.values()))
-        calendar_img = pdf_to_image.calendar_image(datetime.now().year)
+        calendar_img = generate_calendar_image.generate_calendar(2025, list(active_tournaments.values()))
         calendar_file = discord.File(calendar_img, filename=calendar_img)
         await guild.get_channel(1315427456232063028).send(tourney_list_message, file=calendar_file)
 
