@@ -38,8 +38,8 @@ def parse_date(user_time_input) -> datetime | None:
     response = model.generate_content(prompt)
     response_date = response.text.strip()
     log.debug(f"Gemini Response: {response_date}")
-    parsed_date = dateparser.parse(response_date, settings=settings , languages=["de"])
-    log.debug(f"Parsed by dateparser after gemini: '{user_time_input}' -> {parsed_date}")
+    parsed_date = dateparser.parse(response_date, settings=settings)
+    log.debug(f"Parsed by dateparser after gemini: '{response_date}' -> {parsed_date}")
 
     log.debug(f"using {MODEL} {user_time_input} -> {parsed_date}")
 
