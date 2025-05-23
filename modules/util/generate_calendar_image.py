@@ -35,13 +35,13 @@ def calculate_image_height():
     total_height = 2 * MARGIN + grid_height  # Add padding (MARGIN) to the top and bottom
     return total_height
 
-def generate_vertical_calendar_landscape_with_grids(year, highlight_range=None, highlight_style="full"):
+def generate_vertical_calendar_landscape_with_grids(year, events=None, highlight_style="full"):
     """
     Generate a vertical calendar with grids for the given year.
-    Optionally highlight all days within a specified date range.
+    Optionally highlight multiple events with date ranges and titles.
 
     :param year: The year for the calendar.
-    :param highlight_range: A tuple of two dates (start_date, end_date) to highlight.
+    :param events: A list of events, where each event is a dictionary with 'start_date', 'end_date', and 'title'.
     :param highlight_style: The style of highlighting ("full" for full-day highlight, "line" for vertical line).
     :return: An Image object of the calendar.
     """
@@ -53,8 +53,8 @@ def generate_vertical_calendar_landscape_with_grids(year, highlight_range=None, 
     draw = ImageDraw.Draw(img)
     font = ImageFont.truetype(FONT_PATH, FONT_SIZE)
 
-    # Parse the highlight range
-    highlight_start, highlight_end = highlight_range if highlight_range else (None, None)
+    # Parse the events
+    events = events or []
 
     # Calculate the bottom of the frame
     frame_bottom = MARGIN + HEADER_HEIGHT + 31 * ROW_HEIGHT
@@ -75,30 +75,34 @@ def generate_vertical_calendar_landscape_with_grids(year, highlight_range=None, 
         row_count = 0
         while current_day.month == month:
             is_weekend = current_day.weekday() >= 5
-            is_highlighted = highlight_start and highlight_end and highlight_start <= current_day <= highlight_end
             day_text = f"{current_day.day:2} {get_weekday_abbr(current_day)}"
 
-            # Highlight weekends
+            # Highlight weekends (draw this first to avoid overwriting event highlights)
             if is_weekend:
-                if is_highlighted and highlight_style == "full":
-                    # Darker color for weekends in the highlight range (only in "full" mode)
-                    draw.rectangle([x_offset, y_offset, x_offset + COLUMN_WIDTH, y_offset + ROW_HEIGHT], fill="#ffcc66")
-                else:
-                    # Regular weekend highlight
-                    draw.rectangle([x_offset, y_offset, x_offset + COLUMN_WIDTH, y_offset + ROW_HEIGHT], fill=WEEKEND_COLOR)
+                draw.rectangle([x_offset, y_offset, x_offset + COLUMN_WIDTH, y_offset + ROW_HEIGHT], fill=WEEKEND_COLOR)
 
-            # Highlight the day if it's in the range
-            if is_highlighted:
-                if highlight_style == "full" and not is_weekend:
-                    # Full-day highlight for weekdays
-                    draw.rectangle([x_offset, y_offset, x_offset + COLUMN_WIDTH, y_offset + ROW_HEIGHT], fill="#ffff99")
-                elif highlight_style == "line":
-                    # Vertical line highlight (applies to all days in the range, including weekends)
-                    draw.line(
-                        [(x_offset + COLUMN_WIDTH // 2, y_offset), (x_offset + COLUMN_WIDTH // 2, y_offset + ROW_HEIGHT)],
-                        fill="#666666",  # Darker color for line mode
-                        width=2,
-                    )
+            # Check if the current day is part of any event
+            for event in events:
+                start_date = event["start_date"]
+                end_date = event["end_date"]
+                title = event["title"]
+
+                if start_date <= current_day <= end_date:
+                    if highlight_style == "full":
+                        # Highlight the event range
+                        color = "#ffcc66" if is_weekend else "#ffff99"  # Darker color for weekends in the range
+                        draw.rectangle([x_offset, y_offset, x_offset + COLUMN_WIDTH, y_offset + ROW_HEIGHT], fill=color)
+                    elif highlight_style == "line":
+                        # Highlight with a vertical line
+                        draw.line(
+                            [(x_offset + COLUMN_WIDTH // 2, y_offset), (x_offset + COLUMN_WIDTH // 2, y_offset + ROW_HEIGHT)],
+                            fill="#666666",  # Darker color for line mode
+                            width=2,
+                        )
+
+                    # Add the event title on the first day of the event
+                    if current_day == start_date:
+                        draw.text((x_offset + 5, y_offset + 15), title, fill=TEXT_COLOR, font=font)
 
             # Draw the day text
             draw.text((x_offset + 5, y_offset + 5), day_text, fill=TEXT_COLOR, font=font)
@@ -128,15 +132,16 @@ def generate_vertical_calendar_landscape_with_grids(year, highlight_range=None, 
 
     return img
 
-# Define the date range to highlight
-highlight_start = date(2025, 3, 10)
-highlight_end = date(2025, 3, 20)
+# Define a list of events
+events = [
+    {"start_date": date(2025, 3, 17), "end_date": date(2025, 3, 28), "title": "Event 1"},
+    {"start_date": date(2025, 4, 5), "end_date": date(2025, 4, 14), "title": "Event 2"},
+    {"start_date": date(2025, 10, 24), "end_date": date(2025, 11, 10), "title": "Event 3"},
+]
 
-# Generate the calendar with highlighted days
-calendar_with_highlights = generate_vertical_calendar_landscape_with_grids(2025, highlight_range=(highlight_start, highlight_end))
+# Generate the calendar with highlighted events
+calendar_with_highlights = generate_vertical_calendar_landscape_with_grids(2025, events=events, highlight_style="full")
 calendar_with_highlights.show()
 
-calendar_with_highlights = generate_vertical_calendar_landscape_with_grids(
-    2025, highlight_range=(highlight_start, highlight_end), highlight_style="line"
-)
+calendar_with_highlights = generate_vertical_calendar_landscape_with_grids(2025, events=events, highlight_style="line")
 calendar_with_highlights.show()
