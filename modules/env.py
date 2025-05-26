@@ -1,12 +1,35 @@
 import os
 import json
-from dotenv import load_dotenv
+from dotenv import load_dotenv, dotenv_values
+from pathlib import Path
 
 load_dotenv()
+# load_dotenv("config.env")
 
-def get_int_from_env(key:str) -> int:
-    value = os.getenv(key)
-    return int(value)
+CONFIG_PATH = Path("config.env")
+config = dotenv_values(dotenv_path=CONFIG_PATH)
+
+def save_to_env(key, value):
+    config[key] = value
+    lines = CONFIG_PATH.read_text().splitlines() if CONFIG_PATH.exists() else []
+    updated = False
+    for i, line in enumerate(lines):
+        if line.startswith(f"{key}="):
+            lines[i] = f"{key}={value}"
+            updated = True
+            break
+    if not updated:
+        lines.append(f"{key}={value}")
+    CONFIG_PATH.write_text("\n".join(lines) + "\n")
+
+def get_int_from_env(key:str, env_values=None) -> int:
+    if env_values:
+        value = env_values.get(key)
+    else:
+        value = os.getenv(key)
+    if value:
+        return int(value)
+    return None
 
 def get_bool_from_env(key: str, default: bool = False) -> bool:
     value = os.getenv(key, str(default)).lower()  # Default to 'false' if key is not found
@@ -25,3 +48,7 @@ EVENT_DATABASE_ID:str = os.getenv("EVENT_DATABASE_ID")
 AREA_DATABASE_ID = os.getenv("AREA_DATABASE_ID")
 CHANNEL_PAPER_EVENTS_ID = get_int_from_env("CHANNEL_PAPER_EVENTS")
 GMAPS_TOKEN = os.getenv("GMAPS_TOKEN")
+
+SPELLTABLE_CALENDAR_CHANNEL_ID = get_int_from_env("SPELLTABLE_CALENDAR_CHANNEL_ID")
+SPELLTABLE_CALENDAR_MESSAGE_ID = get_int_from_env("SPELLTABLE_CALENDAR_MESSAGE_ID", config)
+CREATE_TOURNAMENT_COMMAND_ID = get_int_from_env("CREATE_TOURNAMENT_COMMAND_ID")

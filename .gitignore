@@ -172,3 +172,4 @@ event.ics
 tmp/
 tournaments/
 test_participants*
+*.env

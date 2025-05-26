@@ -1,7 +1,7 @@
 import discord
 import logging
 from modules import swiss_mtg
-from cogs.spelltable.tournament_model import SpelltableTournament, get_member, use_custom_try, ParticipationState
+from cogs.spelltable.tournament_model import SpelltableTournament, get_member, use_custom_try, ParticipationState, update_tournament_message
 from modules import env
 from ezcord import log
 
@@ -51,6 +51,7 @@ class FinishTournamentView(discord.ui.View):
             link_log.info(f"Turnier abgeschlossen: `{self.tournament.title}`, Gewinner: <@{winner.player_id}>")
             self.tournament.swiss_tournament.winner = winner
             await self.tournament.save_tournament()
+            await update_tournament_message(guild=self.tournament.guild)
         else:
             await interaction.respond("Kein Gewinner gefunden. Das sollte nicht passieren.", ephemeral=True)
 

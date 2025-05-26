@@ -7,10 +7,8 @@ import os, re
 from modules import swiss_mtg
 from modules import env
 import logging
-from datetime import datetime, timedelta
-from modules.util import generate_calendar_image
 
-from cogs.spelltable.tournament_model import TOURNAMENTS_FOLDER, SpelltableTournament, get_member, load_tournaments, active_tournaments
+from cogs.spelltable.tournament_model import TOURNAMENTS_FOLDER, SpelltableTournament, get_member, load_tournaments, active_tournaments, update_tournament_message
 from cogs.spelltable.common_views import FinishTournamentView, KickPlayerModal, ParticipationState, ReportMatchView, StartNextRoundView, next_round
 
 link_log = logging.getLogger("link_logger")
@@ -43,6 +41,8 @@ class ParticipationView(discord.ui.View):
         message = await self.tournament.user_state(interaction.user.id, ParticipationState.PARTICIPATE)
         if message:
             await interaction.respond(message, ephemeral=True)
+        
+        await update_tournament_message(self.tournament.guild)
 
     # no use - either participate or tentative
     # @discord.ui.button(label="Warteliste", style=discord.ButtonStyle.primary, emoji="⌚")
@@ -54,11 +54,13 @@ class ParticipationView(discord.ui.View):
     async def tentative_button(self, button: discord.ui.Button, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         await self.tournament.user_state(interaction.user.id, ParticipationState.TENTATIVE)
+        await update_tournament_message(self.tournament.guild)
 
     @discord.ui.button(label="Absagen", style=discord.ButtonStyle.danger, emoji="❌")
     async def leave_button(self, button: discord.ui.Button, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         await self.tournament.user_state(interaction.user.id, ParticipationState.DECLINE)
+        await update_tournament_message(self.tournament.guild)
 
     @discord.ui.button(label="Bearbeiten", style=discord.ButtonStyle.primary, emoji="✏️")
     async def edit_button(self, button: discord.ui.Button, interaction: discord.Interaction):
@@ -81,6 +83,7 @@ class ParticipationView(discord.ui.View):
             await interaction.respond("Du bist nicht der Turnier-Organisator!", ephemeral=True)
             return
         await interaction.response.send_modal(KickPlayerModal(self.tournament))
+        await update_tournament_message(self.tournament.guild)
 
     @discord.ui.button(label="Starte Turnier", style=discord.ButtonStyle.primary, emoji="▶️")
     async def start_button(self, button: discord.ui.Button, interaction: discord.Interaction):
@@ -110,6 +113,8 @@ class ParticipationView(discord.ui.View):
         self.tournament.swiss_tournament = swiss_tournament
         await next_round(self.tournament, interaction)
 
+        await update_tournament_message(guild=self.tournament.guild)
+
 class EnterTextModal(discord.ui.Modal):
     def __init__(self, input:discord.ui.InputText, key, tournament:SpelltableTournament, view:"EditTournamentView", parse=None):
         super().__init__(title="Bearbeite Turnier")
@@ -133,78 +138,27 @@ class EnterTextModal(discord.ui.Modal):
 
         setattr(self.tournament, self.key, new_value)
         
+        self.view.submit_button.disabled = not bool(self.tournament.time)
         await interaction.edit_original_response(embed=await self.tournament.to_embed(), view=self.view)
-
-import pytz
-timezone = pytz.timezone("Europe/Berlin")
-
-async def generate_tournament_message(tournaments: list[SpelltableTournament]) -> str:
-    # now = datetime.now(tz=timezone)
-
-    # Sort tournaments by start date, placing those with `time=None` first
-    tournaments = sorted(
-        tournaments,
-        key=lambda tournament: tournament.time if tournament.time is not None else datetime.min
-    )
-
-    # Separate ongoing and upcoming
-    ongoing = []
-    upcoming = []
-
-    for tourney in tournaments:
-        start = tourney.time
-        end = tourney.calc_end() if start else None
-        if tourney.swiss_tournament:
-            ongoing.append((tourney, end))
-        else:
-            upcoming.append((tourney, end))
-
-    async def format_tournament(t:SpelltableTournament, end):
-        organizer = await t.organizer
-        end = t.calc_end()
-        t_message = await t.message
-        return (
-            f"> 🏆 **{t.title}** {t_message.jump_url}\n"
-            f"> 🗓️ **Start:** {discord.utils.format_dt(t.time, "F") if t.time else 'TBD'}\n"
-            f"> 🗓️ **Ende:** {discord.utils.format_dt(end, "F") if end else 'TBD'}\n"
-            # f"> 🗂 **Format:** {t['format']}\n"
-            f"> 👥 **Organisator:** {organizer.mention}"
-        )
-
-    # Build message parts
-    msg = "## 🧙‍♂️ **RR Discord Turniere – Laufende & Geplante**\n\n"
-
-    msg += "### 🔥 **Aktuell laufende Turniere**\n"
-    if ongoing:
-        for tourney, end in ongoing:
-            msg += await format_tournament(tourney, end) + "\n\n"
-    else:
-        msg += "> _No tournaments are currently active._\n\n"
-
-    msg += "### 🗓️ **Geplante Turniere**\n"
-    if upcoming:
-        for tourney, end in upcoming:
-            msg += await format_tournament(tourney, end) + "\n\n"
-    else:
-        msg += "> _Keine Turniere bisher geplant._\n\n"
-
-    msg += "---\n💬 Möchtest du auch ein Turnier erstellen? Verwende den Befehl </erstelle_turnier:1373740873120219288>!"
-
-    return msg
 
 class EditTournamentView(discord.ui.View):
     def __init__(self):
         raise RuntimeError("Use 'await EditTournamentView.create(...)' instead")
 
-    async def _init(self, tournament:SpelltableTournament, channel:discord.TextChannel):
+    async def _init(self, tournament: SpelltableTournament, channel: discord.TextChannel):
         super().__init__()
         self.tournament = tournament
         self.channel = channel
 
-        self.days_per_match_callback.label = "Turnier am Stück spielen" if self.tournament.days_per_match else "Eine Woche pro Runde"
-    
+        # Dynamically set the disabled state of the "Abschicken" button
+        self.submit_button.disabled = not bool(self.tournament.time)
+
+        self.days_per_match_callback.label = (
+            "Turnier am Stück spielen" if self.tournament.days_per_match else "Eine Woche pro Runde"
+        )
+
     @classmethod
-    async def create(cls, tournament:SpelltableTournament, channel:discord.TextChannel):
+    async def create(cls, tournament: SpelltableTournament, channel: discord.TextChannel):
         instance = object.__new__(cls)
         await instance._init(tournament, channel)
         return instance
@@ -284,34 +238,41 @@ class EditTournamentView(discord.ui.View):
         # await interaction.response.send_modal(EnterTextModal(input, "days_per_match", self.tournament, self))
 
     @discord.ui.button(label="Abschicken", style=discord.ButtonStyle.success, emoji="✅")
-    async def submit_callback(self, button:discord.ui.Button, interaction:discord.Interaction):
+    async def submit_button(self, button: discord.ui.Button, interaction: discord.Interaction):
         await interaction.response.defer()
         self.disable_all_items()
         await interaction.edit(view=self)
-        #  save into database
-        participationView = await ParticipationView.create(self.tournament)
-        
+        # Save into database
+        participation_view = await ParticipationView.create(self.tournament)
+
         existing_message = await self.tournament.message
         if existing_message:
-            # edit
+            # Edit existing message
             await self.tournament.save_tournament()
-            await existing_message.edit(embed=await self.tournament.to_embed(), view=participationView)
+            await existing_message.edit(embed=await self.tournament.to_embed(), view=participation_view)
             await interaction.edit_original_response(content="Turnier wurde bearbeitet", embed=None, view=None)
         else:
-            if not type(interaction.channel) == discord.TextChannel:
+            if not isinstance(interaction.channel, discord.TextChannel):
                 await interaction.respond("Threads können nur in Textkanälen erstellt werden.", ephemeral=True)
                 return
-            # create
-            thread = await interaction.channel.create_thread(name=self.tournament.title, type=discord.ChannelType.public_thread)
+            # Create new thread
+            thread = await interaction.channel.create_thread(
+                name=self.tournament.title, type=discord.ChannelType.public_thread
+            )
             organizer = await self.tournament.organizer
-            await interaction.channel.send(f"{organizer.mention} hat ein Turnier erstellt. Macht doch mit! :) {thread.mention}")
-            message = await thread.send(embed=await self.tournament.to_embed(), view=participationView)
+            await interaction.channel.send(
+                f"{organizer.mention} hat ein Turnier erstellt. Macht doch mit! :) {thread.mention}"
+            )
+            message = await thread.send(embed=await self.tournament.to_embed(), view=participation_view)
             self.tournament.message = message
-            await message.edit(view=participationView)            
+            await message.edit(view=participation_view)
             active_tournaments[await self.tournament.get_id()] = self.tournament
             await self.tournament.save_tournament()
-            await interaction.followup.send(f"Prima! Das Turnier `{self.tournament.title}` wurde erstellt: {message.jump_url}", ephemeral=True)
+            await interaction.followup.send(
+                f"Prima! Das Turnier `{self.tournament.title}` wurde erstellt: {message.jump_url}", ephemeral=True
+            )
             link_log.info(f"Ein Turnier wurde erstellt: {message.jump_url}")
+            await update_tournament_message(guild=self.tournament.guild)
 
 class SpelltableTournamentManager(Cog):
     def __init__(self, bot:Bot):
@@ -368,11 +329,8 @@ class SpelltableTournamentManager(Cog):
                 file_path = TOURNAMENTS_FOLDER+"/"+(message_path.replace("/", "_"))+".json"
                 log.warning(f"Turnier konnte nicht geladen werden, weil vermutlich der entprechende Channel gelöscht wurde. Lösche Datei {file_path}")
                 os.remove(file_path)
-        
-        tourney_list_message = await generate_tournament_message(list(active_tournaments.values()))
-        calendar_img = generate_calendar_image.generate_calendar_month_column(2025, list(active_tournaments.values()))
-        calendar_file = discord.File(calendar_img, filename=calendar_img)
-        await guild.get_channel(1315427456232063028).send(tourney_list_message, file=calendar_file)
+
+        await update_tournament_message(guild)
 
         log.debug(self.__class__.__name__ + " is ready")
 

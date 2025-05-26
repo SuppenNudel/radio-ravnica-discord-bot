@@ -11,6 +11,9 @@ from modules import swiss_mtg, table_to_image
 from modules.serializable import Serializable
 from modules import env
 import os
+import pytz
+
+timezone = pytz.timezone("Europe/Berlin")
 
 class ParticipationState(StrEnum):
     PARTICIPATE = auto()
@@ -79,7 +82,81 @@ async def get_member(user_id, tournament:'SpelltableTournament') -> discord.Memb
                 return None
         raise Exception(f"User with ID {user_id} not found in guild {tournament.guild.id}.")
     
+async def generate_tournament_message(tournaments: list["SpelltableTournament"]) -> str:
+    # Sort tournaments by start date, placing those with `time=None` first
+    tournaments = sorted(
+        tournaments,
+        key=lambda tournament: tournament.time if tournament.time is not None else datetime.min.replace(tzinfo=timezone)
+    )
 
+    # Separate ongoing and upcoming
+    ongoing = []
+    upcoming = []
+
+    for tourney in tournaments:
+        start = tourney.time
+        end = tourney.calc_end() if start else None
+        if tourney.swiss_tournament:
+            ongoing.append((tourney, end))
+        else:
+            upcoming.append((tourney, end))
+
+    async def format_tournament(t:SpelltableTournament, end):
+        organizer = await t.organizer
+        t_message = await t.message
+
+        end_field = (
+            f"> 🗓️ **Ende:** {discord.utils.format_dt(end, 'F')}\n"
+            if end and end != t.time
+            else ""
+        )
+        return (
+            f"> 🏆 **{t.title}** {t_message.jump_url}\n"
+            f"> #️⃣ Format: {t_message.channel.parent.mention} ({t_message.channel.parent.name})\n"
+            f"> 🗓️ **Start:** {discord.utils.format_dt(t.time, "F") if t.time else 'TBD'}\n"
+            f"{end_field}"
+            f"> 👥 **Organisator:** {organizer.mention}"
+        )
+
+    # Build message parts
+    msg = "## 🧙‍♂️ **RR Discord Turniere**\n\n"
+
+    msg += "### 🗓️ **Geplante Turniere**\n"
+    if upcoming:
+        for tourney, end in upcoming:
+            msg += await format_tournament(tourney, end) + "\n\n"
+    else:
+        msg += "> _Keine Turniere bisher geplant._\n\n"
+
+    msg += "### 🔥 **Aktuell laufende Turniere**\n"
+    if ongoing:
+        for tourney, end in ongoing:
+            msg += await format_tournament(tourney, end) + "\n\n"
+    else:
+        msg += "> _No tournaments are currently active._\n\n"
+
+    msg += f"---\n💬 Möchtest du auch ein Turnier erstellen? Verwende den Befehl </erstelle_turnier:{env.CREATE_TOURNAMENT_COMMAND_ID}> im passenden Kanal und es wird ein Thread für das Turnier erstellt!"
+
+    return msg
+
+async def update_tournament_message(guild:discord.Guild):
+    tourney_list_message = await generate_tournament_message(list(active_tournaments.values()))
+    # calendar_img = generate_calendar_image.generate_calendar_month_column(2025, list(active_tournaments.values()))
+    # calendar_file = discord.File(calendar_img, filename=calendar_img)
+    calendar_message = None
+    if env.SPELLTABLE_CALENDAR_MESSAGE_ID:
+        channel:discord.TextChannel = guild.get_channel(env.SPELLTABLE_CALENDAR_CHANNEL_ID)
+        try:
+            calendar_message = await channel.fetch_message(env.SPELLTABLE_CALENDAR_MESSAGE_ID)
+        except discord.NotFound:
+            log.warning("Calendar message not found, creating a new one")
+
+    if calendar_message:
+        await calendar_message.edit(content=tourney_list_message)#, file=calendar_file)
+    else:
+        calendar_message = await guild.get_channel(env.SPELLTABLE_CALENDAR_CHANNEL_ID).send(tourney_list_message)#, file=calendar_file)
+        env.SPELLTABLE_CALENDAR_MESSAGE_ID = calendar_message.id
+        env.save_to_env("SPELLTABLE_CALENDAR_MESSAGE_ID", calendar_message.id)
 
 async def use_custom_try(purpose:str, func, tournament:"SpelltableTournament"):
     try:
@@ -93,7 +170,6 @@ async def use_custom_try(purpose:str, func, tournament:"SpelltableTournament"):
         print(short_tb)
         await organizer.send(f"{error_str}\n```{short_tb}```")
         log.error(f"{error_str}\n```{short_tb}```")
-
 
 class SpelltableTournament(Serializable):
     def __init__(self, guild:discord.Guild, title:str, organizer_id:int, bot:discord.Bot):
@@ -176,6 +252,7 @@ class SpelltableTournament(Serializable):
         tournament.users = {int(k): v for k, v in data["users"].items()}
         tournament.message_id = int(data["message_id"])
         tournament.channel_id = int(data["channel_id"])
+        tournament.days_per_match = int(data["days_per_match"])
         tournament.waitlist = data["waitlist"] if "waitlist" in data else []
 
         if "max_participants" in data and data["max_participants"]:
@@ -315,8 +392,6 @@ class SpelltableTournament(Serializable):
             tourney_message = await self.message
             return await tourney_message.channel.fetch_message(message_id)
         return None
-
-
 
     async def update_pairings(self, round:swiss_mtg.Round):
         pairings_message:discord.Message = await self.get_message(round.message_id_pairings)
