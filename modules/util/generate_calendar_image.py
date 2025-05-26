@@ -2,6 +2,7 @@ import os
 from PIL import Image, ImageDraw, ImageFont
 from datetime import date, datetime, timedelta
 import locale
+import calendar
 
 import pytz
 
@@ -50,13 +51,102 @@ def calculate_image_height_():
     total_height = 2 * MARGIN + grid_height  # Add padding (MARGIN) to the top and bottom
     return total_height
 
-def generate_calendar(tournaments: list["SpelltableTournament"]=[]):
+def generate_calendar(tournaments: list["SpelltableTournament"] = [], img_width=1300):
+    """
+    Generate a horizontal calendar where each row represents a month and each column represents a day.
+    """
     tournaments = tournaments or []
-    width = 2000
     height = calculate_image_height_()
-    img = Image.new("RGB", (width, height), BG_COLOR)
+    img = Image.new("RGB", (img_width, height), BG_COLOR)
     draw = ImageDraw.Draw(img)
     font = ImageFont.truetype(FONT_PATH, FONT_SIZE)
+
+    COLUMN_WIDTH = 40  # Width of each day column
+    DAYS_IN_MONTH = 31  # Maximum number of days in a month
+
+    max_width_months = 0
+    for month in range(1, 13):
+        month_name = date(2025, month, 1).strftime("%B")
+        bbox = draw.textbbox((0, 0), month_name, font=font)
+        width = bbox[2]
+        if width > max_width_months:
+            max_width_months = width
+
+    # Calculate image dimensions
+    total_width = (MARGIN * 2 + COLUMN_WIDTH * DAYS_IN_MONTH) + max_width_months
+    total_height = MARGIN * 2 + HEADER_HEIGHT + ROW_HEIGHT * 12
+
+    # Resize the image to fit the calendar
+    img = img.resize((total_width, total_height))
+    draw = ImageDraw.Draw(img)
+
+    # Draw the header row (days of the month)
+    for day in range(1, DAYS_IN_MONTH + 1):
+        x_offset = MARGIN + max_width_months + (day - 1) * COLUMN_WIDTH
+        draw.text((x_offset + 5, MARGIN), f"{day:2}", fill=TEXT_COLOR, font=font)
+
+    # Draw each month row
+    for month in range(1, 13):
+        y_offset = MARGIN + HEADER_HEIGHT + (month - 1) * ROW_HEIGHT
+
+        # Draw the month name
+        month_name = date(2025, month, 1).strftime("%B")
+        draw.text((MARGIN - 40, y_offset + 5), month_name, fill=TEXT_COLOR, font=font)
+
+        # Draw each day in the month
+        for day in range(1, DAYS_IN_MONTH + 1):
+            # Check if the day exists in the current month
+            if day > calendar.monthrange(2025, month)[1]:  # Get the number of days in the month
+                continue
+
+            x_offset = MARGIN + max_width_months + (day - 1) * COLUMN_WIDTH
+            current_day = datetime(2025, month, day, tzinfo=timezone)
+
+            # Highlight weekends
+            if current_day.weekday() >= 5:  # Saturday or Sunday
+                draw.rectangle(
+                    [x_offset, y_offset, x_offset + COLUMN_WIDTH, y_offset + ROW_HEIGHT],
+                    fill=WEEKEND_COLOR,
+                )
+
+            # Check if the current day is part of any tournament
+            for tournament in tournaments:
+                start_date = tournament.time
+                end_date = tournament.calc_end()
+                title = tournament.title
+
+                if start_date <= current_day <= end_date:
+                    # Highlight the tournament range
+                    draw.rectangle(
+                        [x_offset, y_offset, x_offset + COLUMN_WIDTH, y_offset + ROW_HEIGHT],
+                        fill="#ffcc66",
+                    )
+
+                    # Add the event title on the first day of the event
+                    if current_day == start_date:
+                        draw.text(
+                            (x_offset + 5, y_offset + 5),
+                            title,
+                            fill=TEXT_COLOR,
+                            font=font,
+                        )
+
+    # Draw grid lines
+    for day in range(DAYS_IN_MONTH + 1):  # Vertical lines
+        x = MARGIN + max_width_months + day * COLUMN_WIDTH
+        draw.line([(x, MARGIN), (x, total_height - MARGIN)], fill=TEXT_COLOR, width=1)
+
+    for month in range(13):  # Horizontal lines
+        y = MARGIN + HEADER_HEIGHT + month * ROW_HEIGHT
+        draw.line([(MARGIN, y), (total_width - MARGIN, y)], fill=TEXT_COLOR, width=1)
+
+    # Save the image to the tmp/ directory
+    os.makedirs("tmp", exist_ok=True)  # Ensure the tmp/ directory exists
+    file_path = f"tmp/calendar.png"
+    img.save(file_path)
+
+    return file_path
+
 
 def generate_calendar_month_column(year, tournaments:list["SpelltableTournament"]=[], highlight_style="full"):
     """
@@ -77,9 +167,6 @@ def generate_calendar_month_column(year, tournaments:list["SpelltableTournament"
     img = Image.new("RGB", (LANDSCAPE_WIDTH, dynamic_height), BG_COLOR)
     draw = ImageDraw.Draw(img)
     font = ImageFont.truetype(FONT_PATH, FONT_SIZE)
-
-    # Calculate the bottom of the frame
-    frame_bottom = MARGIN + HEADER_HEIGHT + 31 * ROW_HEIGHT
 
     # Draw vertical grid lines for each month
     for month in range(1, 13):
@@ -144,6 +231,9 @@ def generate_calendar_month_column(year, tournaments:list["SpelltableTournament"
         # Draw vertical grid line for the current month
         draw.line([(x_offset, MARGIN), (x_offset, MARGIN + HEADER_HEIGHT + row_count * ROW_HEIGHT)], fill=TEXT_COLOR, width=1)
 
+    # Calculate the bottom of the frame
+    frame_bottom = MARGIN + HEADER_HEIGHT + 31 * ROW_HEIGHT
+
     # Draw horizontal grid lines for each row
     for row in range(31 + 1):  # Include one extra line for the bottom border
         y = MARGIN + HEADER_HEIGHT + row * ROW_HEIGHT
@@ -194,5 +284,8 @@ if __name__ == "__main__":
     ]
 
     # Generate the calendar with highlighted tournaments
-    calendar_path = generate_calendar_month_column(2025, tournaments=tournaments, highlight_style="full")
-    print(f"Calendar saved at: {calendar_path}")
+    # calendar_path = generate_calendar_month_column(2025, tournaments=tournaments, highlight_style="full")
+    # print(f"Calendar saved at: {calendar_path}")
+
+    calendar_new = generate_calendar(tournaments)
+    print(f"Calendar saved at: {calendar_new}")
