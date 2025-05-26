@@ -133,7 +133,7 @@ async def generate_tournament_message(tournaments: list["SpelltableTournament"])
         for tourney, end in ongoing:
             msg += await format_tournament(tourney, end) + "\n\n"
     else:
-        msg += "> _No tournaments are currently active._\n\n"
+        msg += "> _Aktuell laufen keine Turniere._\n\n"
 
     msg += f"---\n💬 Möchtest du auch ein Turnier erstellen? Verwende den Befehl </erstelle_turnier:{env.CREATE_TOURNAMENT_COMMAND_ID}> im passenden Kanal und es wird ein Thread für das Turnier erstellt!"
 
@@ -187,6 +187,7 @@ class SpelltableTournament(Serializable):
         self.max_rounds = None
         self.days_per_match = 7
         self.bot:discord.Bot = bot
+        self.cancelled = None
 
         if env.DEBUG:
             for user_id in test_participants:
@@ -280,7 +281,8 @@ class SpelltableTournament(Serializable):
             "max_participants": self.max_participants,
             "max_rounds": self.max_rounds,
             "tournament": self.swiss_tournament,
-            "days_per_match": self.days_per_match
+            "days_per_match": self.days_per_match,
+            "cancelled": self.cancelled if self.cancelled else False
         }
     
     async def check_waitlist(self, participants):
@@ -444,8 +446,7 @@ class SpelltableTournament(Serializable):
 
         return for_message
     
-    
-    async def save_tournament(self):
+    async def save_tournament(self: "SpelltableTournament"):
         # Ensure the directory exists
         os.makedirs(TOURNAMENTS_FOLDER, exist_ok=True)
         concluded_folder = os.path.join(TOURNAMENTS_FOLDER, "concluded")
@@ -462,14 +463,15 @@ class SpelltableTournament(Serializable):
                 json.dump(serialized, file, cls=CustomJSONEncoder, indent=4)
             
             # If the tournament is concluded, move the file to the concluded folder
-            if self.swiss_tournament and self.swiss_tournament.winner:
+            if (self.swiss_tournament and self.swiss_tournament.winner) or self.cancelled:
                 concluded_path = os.path.join(concluded_folder, filename)
                 os.rename(file_path, concluded_path)
+                del active_tournaments[tournament_id]
                 print(f"Tournament {tournament_id} has been concluded and moved to {concluded_path}")
         except Exception as e:
             print(f"Error saving tournament {tournament_id}: {e}")
+        await update_tournament_message(self.guild)
 
-    
 
     async def standings_to_image(self, round=None) -> str:
         if round is None:
