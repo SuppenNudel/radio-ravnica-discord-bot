@@ -86,6 +86,7 @@ class Location():
     def get_area_and_tag_name(self):
         country_short = self.country['short_name']
         tag_name = "nicht DACH"
+        area_name = self.country['long_name']
         if country_short == 'DE':
             state = self.state
             state_short = state['short_name']
@@ -101,7 +102,15 @@ class Location():
         (area_name, tag_name) = self.get_area_and_tag_name()
         filter = notion.NotionFilterBuilder().add_text_filter("Name", notion.TextCondition.EQUALS, area_name).build()
         area_response = notion.get_all_entries(database_id=AREA_DATABASE_ID, filter=filter)
-        area_page_id = area_response[0]['id']
+        if not area_response:
+            payload = notion.NotionPayloadBuilder() \
+                .add_title("Name", area_name) \
+                .add_select("Type", "Land")
+            result = notion.add_to_database(database_id=AREA_DATABASE_ID, payload=payload.build())
+            entry = notion.Entry(result)
+            area_page_id = entry.id
+        else:
+            area_page_id = area_response[0]['id']
         return area_page_id
 
     def get_search_url(self):
@@ -147,11 +156,16 @@ def get_location(location:str, language="de", details=False) -> Location:
         locations = [Location.from_geocode_result(geocode_results, 'geocode') for geocode_result in geocode_results]
         raise Exception(f"Multiple locations found for {location}", locations)
     # location_coords = geocode_results[0]["geometry"]["location"]
+    place_details = None
     if details:
         place_details = gmaps.place(place_id=geocode_results[0]['place_id'])['result']
     return Location.from_geocode_result(geocode_results[0], place_details)
 
 if __name__ == "__main__":
+    boston = get_location("USA Boston")
+    page = boston.get_area_page_id()
+    exit()
+
     search_string = "Battlebear kaiserslautern"
     # get_places(search_string)
     # location = get_location(search_string)
