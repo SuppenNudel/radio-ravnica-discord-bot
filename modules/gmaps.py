@@ -124,7 +124,8 @@ class Location():
     def get_static_map(self):
         lng = self.coord.lng
         lat = self.coord.lat
-        map_url = f"https://maps.googleapis.com/maps/api/staticmap?center=50.6,11&zoom=6&size=600x640&markers=color:red%257label:S%7C{lat},{lng}&language=de&key={GMAPS_TOKEN}"
+        zoom = 6 if self.country['short_name'] in ['DE', 'AT', 'CH'] else 4
+        map_url = f"https://maps.googleapis.com/maps/api/staticmap?center=50.6,11&zoom={zoom}&size=600x640&markers=color:red%257label:S%7C{lat},{lng}&language=de&key={GMAPS_TOKEN}"
 
         response = requests.get(map_url)
         # Save the file locally
@@ -162,8 +163,8 @@ def get_location(location:str, language="de", details=False) -> Location:
     return Location.from_geocode_result(geocode_results[0], place_details)
 
 if __name__ == "__main__":
-    boston = get_location("USA Boston")
-    page = boston.get_area_page_id()
+    lucca = get_location("Via della Chiesa XXXII, 237, 55100 Lucca LU, Italien")
+    lucca.get_static_map()
     exit()
 
     search_string = "Battlebear kaiserslautern"
