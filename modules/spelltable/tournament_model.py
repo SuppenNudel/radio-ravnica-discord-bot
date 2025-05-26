@@ -106,14 +106,14 @@ async def generate_tournament_message(tournaments: list["SpelltableTournament"])
         t_message = await t.message
 
         end_field = (
-            f"> 🗓️ **Ende:** {discord.utils.format_dt(end, 'F')}\n"
+            f"> 🗓️ **Ende:** {discord.utils.format_dt(end, 'F')} ({discord.utils.format_dt(end, 'R')})\n"
             if end and end != t.time
             else ""
         )
         return (
             f"> 🏆 **{t.title}** {t_message.jump_url}\n"
             f"> #️⃣ Format: {t_message.channel.parent.mention} ({t_message.channel.parent.name})\n"
-            f"> 🗓️ **Start:** {discord.utils.format_dt(t.time, 'F') if t.time else 'TBD'}\n"
+            f"> 🗓️ **Start:** {discord.utils.format_dt(t.time, 'F') if t.time else 'TBD'} ({discord.utils.format_dt(t.time, 'R') if t.time else 'TBD'})\n"
             f"{end_field}"
             f"> 👥 **Organisator:** {organizer.mention}"
         )
