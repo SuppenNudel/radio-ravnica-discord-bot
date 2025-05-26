@@ -370,7 +370,7 @@ class SpelltableTournamentManager(Cog):
                 os.remove(file_path)
         
         tourney_list_message = await generate_tournament_message(list(active_tournaments.values()))
-        calendar_img = generate_calendar_image.generate_calendar(2025, list(active_tournaments.values()))
+        calendar_img = generate_calendar_image.generate_calendar_month_column(2025, list(active_tournaments.values()))
         calendar_file = discord.File(calendar_img, filename=calendar_img)
         await guild.get_channel(1315427456232063028).send(tourney_list_message, file=calendar_file)
 

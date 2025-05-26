@@ -10,11 +10,11 @@ locale.setlocale(locale.LC_TIME, "de_DE")
 timezone = pytz.timezone("Europe/Berlin")
 
 # Constants
-LANDSCAPE_WIDTH = 1600
+LANDSCAPE_WIDTH = 2500
 # LANDSCAPE_HEIGHT = 1200 doesn't do anything anymore
 MARGIN = 50
 COLUMN_WIDTH = (LANDSCAPE_WIDTH - 2 * MARGIN) // 12
-ROW_HEIGHT = 30
+ROW_HEIGHT = 50  # Increase the row height to accommodate two lines of text
 HEADER_HEIGHT = 40
 FONT_SIZE = 18
 FONT_PATH = "assets/beleren.ttf"
@@ -39,7 +39,26 @@ def calculate_image_height():
     total_height = 2 * MARGIN + grid_height  # Add padding (MARGIN) to the top and bottom
     return total_height
 
-def generate_calendar(year, tournaments:list["SpelltableTournament"]=None, highlight_style="full"):
+
+def calculate_image_height_():
+    """
+    Calculate the required height of the image dynamically based on the number of rows
+    and ensure consistent padding around the calendar grid.
+    """
+    max_rows = 12  # one row for each month
+    grid_height = HEADER_HEIGHT + max_rows * ROW_HEIGHT  # Height of the calendar grid
+    total_height = 2 * MARGIN + grid_height  # Add padding (MARGIN) to the top and bottom
+    return total_height
+
+def generate_calendar(tournaments: list["SpelltableTournament"]=[]):
+    tournaments = tournaments or []
+    width = 2000
+    height = calculate_image_height_()
+    img = Image.new("RGB", (width, height), BG_COLOR)
+    draw = ImageDraw.Draw(img)
+    font = ImageFont.truetype(FONT_PATH, FONT_SIZE)
+
+def generate_calendar_month_column(year, tournaments:list["SpelltableTournament"]=[], highlight_style="full"):
     """
     Generate a vertical calendar with grids for the given year.
     Optionally highlight multiple events with date ranges and titles.
@@ -49,6 +68,8 @@ def generate_calendar(year, tournaments:list["SpelltableTournament"]=None, highl
     :param highlight_style: The style of highlighting ("full" for full-day highlight, "line" for vertical line).
     :return: An Image object of the calendar.
     """
+    tournaments = tournaments or []
+
     # Dynamically calculate the required image height
     dynamic_height = calculate_image_height()
 
@@ -56,9 +77,6 @@ def generate_calendar(year, tournaments:list["SpelltableTournament"]=None, highl
     img = Image.new("RGB", (LANDSCAPE_WIDTH, dynamic_height), BG_COLOR)
     draw = ImageDraw.Draw(img)
     font = ImageFont.truetype(FONT_PATH, FONT_SIZE)
-
-    # Parse the events
-    tournaments = tournaments or []
 
     # Calculate the bottom of the frame
     frame_bottom = MARGIN + HEADER_HEIGHT + 31 * ROW_HEIGHT
@@ -108,8 +126,17 @@ def generate_calendar(year, tournaments:list["SpelltableTournament"]=None, highl
                     if current_day == start_date:
                         draw.text((x_offset + 5, y_offset + 15), title, fill=TEXT_COLOR, font=font)
 
-            # Draw the day text
-            draw.text((x_offset + 5, y_offset + 5), day_text, fill=TEXT_COLOR, font=font)
+            # Draw the day text (date and weekday under each other)
+            day_x_offset = x_offset + 5  # Add some padding from the left
+            day_y_offset = y_offset + 5  # Add some padding from the top
+
+            # Draw the day number
+            draw.text((day_x_offset, day_y_offset), f"{current_day.day:2}", fill=TEXT_COLOR, font=font)
+
+            # Draw the weekday abbreviation below the day number
+            weekday_y_offset = day_y_offset + font.getbbox("0")[3] + 5  # Add vertical spacing
+            draw.text((day_x_offset, weekday_y_offset), get_weekday_abbr(current_day), fill=TEXT_COLOR, font=font)
+
             y_offset += ROW_HEIGHT
             current_day += timedelta(days=1)
             row_count += 1
@@ -167,5 +194,5 @@ if __name__ == "__main__":
     ]
 
     # Generate the calendar with highlighted tournaments
-    calendar_path = generate_calendar(2025, tournaments=tournaments, highlight_style="full")
+    calendar_path = generate_calendar_month_column(2025, tournaments=tournaments, highlight_style="full")
     print(f"Calendar saved at: {calendar_path}")
