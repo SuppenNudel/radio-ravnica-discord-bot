@@ -1,7 +1,7 @@
 import discord
 import logging
 from modules import swiss_mtg
-from cogs.spelltable.tournament_model import SpelltableTournament, get_member, use_custom_try, ParticipationState, update_tournament_message
+from modules.spelltable.tournament_model import SpelltableTournament, get_member, use_custom_try, ParticipationState, update_tournament_message
 from modules import env
 from ezcord import log
 
