@@ -1,7 +1,7 @@
 import discord
 import logging
 from modules import swiss_mtg
-from cogs.spelltable.tournament_model import SpelltableTournament, get_member, use_custom_try, ParticipationState, update_tournament_message
+from modules.spelltable.tournament_model import SpelltableTournament, get_member, use_custom_try, ParticipationState
 from modules import env
 from ezcord import log
 
@@ -51,7 +51,6 @@ class FinishTournamentView(discord.ui.View):
             link_log.info(f"Turnier abgeschlossen: `{self.tournament.title}`, Gewinner: <@{winner.player_id}>")
             self.tournament.swiss_tournament.winner = winner
             await self.tournament.save_tournament()
-            await update_tournament_message(guild=self.tournament.guild)
         else:
             await interaction.respond("Kein Gewinner gefunden. Das sollte nicht passieren.", ephemeral=True)
 
@@ -208,6 +207,27 @@ class ConfirmKickView(discord.ui.View):
             link_log.info(f"User {self.user_to_kick.mention} was kicked from tournament {tourney_message.jump_url}")
         await orig_response.edit(content=f"{self.user_to_kick.mention} wurde aus dem Turnier entfernt", view=None)
 
+class CancelTournamentModal(discord.ui.Modal):
+    def __init__(self, tournament:SpelltableTournament):
+        super().__init__(title="Turnier abbrechen")
+        self.tournament = tournament
+
+        self.cancel_input = discord.ui.InputText(
+            label="Tippe einen Grund ein",
+            placeholder="z.B. Zu wenig Teilnehmer oder technische Probleme",
+            required=True,
+        )
+        self.add_item(self.cancel_input)
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_message("Das Turnier wird abgebrochen...", ephemeral=True)
+        tourney_message = await self.tournament.message
+        self.tournament.cancelled = self.cancel_input.value
+        cancel_message = await tourney_message.channel.send(f"🛑 Das Turnier `{self.tournament.title}` wurde abgebrochen:\n> {self.cancel_input.value}")
+        link_log.info(f"Turnier `{self.tournament.title}` {cancel_message.jump_url} wurde abgebrochen")
+        await interaction.message.edit(view=None)
+        await self.tournament.save_tournament()
+
 class KickPlayerModal(discord.ui.Modal):
     def __init__(self, tournament:SpelltableTournament):
         super().__init__(title="Spieler rauswerfen")
@@ -257,6 +277,7 @@ class KickPlayerModal(discord.ui.Modal):
                 await interaction.respond(f"Teilnehmer mit dem Namen `{user_name}` nicht gefunden.", ephemeral=True)
             else:
                 await interaction.respond(f"Unerwarteter Fehler.", ephemeral=True)
+        await self.tournament.save_tournament()
 
 class ReportMatchView(discord.ui.View):
     def __init__(self):
@@ -324,9 +345,16 @@ class ReportMatchView(discord.ui.View):
     @discord.ui.button(label="Spieler rauswerfen", style=discord.ButtonStyle.danger, emoji="🚷")
     async def kick_button(self, button: discord.ui.Button, interaction: discord.Interaction):
         if interaction.user.id != self.tournament.organizer_id and not any(role.name == "Moderator" for role in interaction.user.roles):
-            await interaction.respond("Du bist nicht der Turnier-Organisator!", ephemeral=True)
+            await interaction.respond("Nur der Turnier-Organisator oder ein Moderator darf dies tun.!", ephemeral=True)
             return
         await interaction.response.send_modal(KickPlayerModal(self.tournament))
+
+    @discord.ui.button(label="Turnier abbrechen", style=discord.ButtonStyle.danger, emoji="🛑")
+    async def cancel_button(self, button: discord.ui.Button, interaction: discord.Interaction):
+        if interaction.user.id != self.tournament.organizer_id and not any(role.name == "Moderator" for role in interaction.user.roles):
+            await interaction.respond("Nur der Turnier-Organisator oder ein Moderator darf dies tun!", ephemeral=True)
+            return
+        await interaction.response.send_modal(CancelTournamentModal(self.tournament))
 
 async def next_round(tournament:SpelltableTournament, interaction:discord.Interaction):
     async def do_the_thing():

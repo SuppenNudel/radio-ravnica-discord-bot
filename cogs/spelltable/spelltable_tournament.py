@@ -8,8 +8,9 @@ from modules import swiss_mtg
 from modules import env
 import logging
 
-from cogs.spelltable.tournament_model import TOURNAMENTS_FOLDER, SpelltableTournament, get_member, load_tournaments, active_tournaments, update_tournament_message
-from cogs.spelltable.common_views import FinishTournamentView, KickPlayerModal, ParticipationState, ReportMatchView, StartNextRoundView, next_round
+from modules.spelltable.tournament_model import TOURNAMENTS_FOLDER, SpelltableTournament, get_member, load_tournaments, active_tournaments, update_tournament_message
+from modules.spelltable.common_views import FinishTournamentView, KickPlayerModal, ParticipationState, ReportMatchView, StartNextRoundView, next_round
+from modules.spelltable import common_views
 
 link_log = logging.getLogger("link_logger")
 
@@ -41,8 +42,6 @@ class ParticipationView(discord.ui.View):
         message = await self.tournament.user_state(interaction.user.id, ParticipationState.PARTICIPATE)
         if message:
             await interaction.respond(message, ephemeral=True)
-        
-        await update_tournament_message(self.tournament.guild)
 
     # no use - either participate or tentative
     # @discord.ui.button(label="Warteliste", style=discord.ButtonStyle.primary, emoji="⌚")
@@ -54,13 +53,11 @@ class ParticipationView(discord.ui.View):
     async def tentative_button(self, button: discord.ui.Button, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         await self.tournament.user_state(interaction.user.id, ParticipationState.TENTATIVE)
-        await update_tournament_message(self.tournament.guild)
 
     @discord.ui.button(label="Absagen", style=discord.ButtonStyle.danger, emoji="❌")
     async def leave_button(self, button: discord.ui.Button, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         await self.tournament.user_state(interaction.user.id, ParticipationState.DECLINE)
-        await update_tournament_message(self.tournament.guild)
 
     @discord.ui.button(label="Bearbeiten", style=discord.ButtonStyle.primary, emoji="✏️")
     async def edit_button(self, button: discord.ui.Button, interaction: discord.Interaction):
@@ -83,7 +80,6 @@ class ParticipationView(discord.ui.View):
             await interaction.respond("Du bist nicht der Turnier-Organisator!", ephemeral=True)
             return
         await interaction.response.send_modal(KickPlayerModal(self.tournament))
-        await update_tournament_message(self.tournament.guild)
 
     @discord.ui.button(label="Starte Turnier", style=discord.ButtonStyle.primary, emoji="▶️")
     async def start_button(self, button: discord.ui.Button, interaction: discord.Interaction):
@@ -112,8 +108,15 @@ class ParticipationView(discord.ui.View):
         swiss_tournament = swiss_mtg.SwissTournament(players, max_rounds=self.tournament.max_rounds if self.tournament.max_rounds else None)
         self.tournament.swiss_tournament = swiss_tournament
         await next_round(self.tournament, interaction)
-
-        await update_tournament_message(guild=self.tournament.guild)
+    
+    
+    @discord.ui.button(label="Turnier abbrechen", style=discord.ButtonStyle.danger, emoji="🛑")
+    async def cancel_button(self, button: discord.ui.Button, interaction: discord.Interaction):
+        if interaction.user.id != self.tournament.organizer_id and not any(role.name == "Moderator" for role in interaction.user.roles):
+            await interaction.respond("Nur der Turnier-Organisator oder ein Moderator darf dies tun!", ephemeral=True)
+            return
+        
+        await interaction.response.send_modal(common_views.CancelTournamentModal(self.tournament))
 
 class EnterTextModal(discord.ui.Modal):
     def __init__(self, input:discord.ui.InputText, key, tournament:SpelltableTournament, view:"EditTournamentView", parse=None):
@@ -272,7 +275,6 @@ class EditTournamentView(discord.ui.View):
                 f"Prima! Das Turnier `{self.tournament.title}` wurde erstellt: {message.jump_url}", ephemeral=True
             )
             link_log.info(f"Ein Turnier wurde erstellt: {message.jump_url}")
-            await update_tournament_message(guild=self.tournament.guild)
 
 class SpelltableTournamentManager(Cog):
     def __init__(self, bot:Bot):
