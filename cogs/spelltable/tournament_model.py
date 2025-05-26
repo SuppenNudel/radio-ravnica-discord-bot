@@ -113,7 +113,7 @@ async def generate_tournament_message(tournaments: list["SpelltableTournament"])
         return (
             f"> 🏆 **{t.title}** {t_message.jump_url}\n"
             f"> #️⃣ Format: {t_message.channel.parent.mention} ({t_message.channel.parent.name})\n"
-            f"> 🗓️ **Start:** {discord.utils.format_dt(t.time, "F") if t.time else 'TBD'}\n"
+            f"> 🗓️ **Start:** {discord.utils.format_dt(t.time, 'F') if t.time else 'TBD'}\n"
             f"{end_field}"
             f"> 👥 **Organisator:** {organizer.mention}"
         )
