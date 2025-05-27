@@ -1,14 +1,8 @@
 import os
 from PIL import Image, ImageDraw, ImageFont
 from datetime import date, datetime, timedelta
-import locale
 import calendar
 from collections import defaultdict
-import pytz
-
-# Set locale to German for month and weekday names
-locale.setlocale(locale.LC_TIME, "de_DE")
-timezone = pytz.timezone("Europe/Berlin")
 
 MARGIN = 50
 ROW_HEIGHT = 20
@@ -350,11 +344,11 @@ if __name__ == "__main__":
 
     # Create a list of tournaments
     tournaments = [
-        SpelltableTournament("Turnier 1 mit einem ganz langen Titel", datetime(2025, 3, 20, tzinfo=timezone)),
-        SpelltableTournament("Nach Turnier 1", datetime(2025, 4, 26, tzinfo=timezone)),
-        SpelltableTournament("Noch ein Turnier - Pauper", datetime(2025, 4, 5, tzinfo=timezone)),
-        SpelltableTournament("Drittes Turnier", datetime(2025, 4, 20, tzinfo=timezone)),
-        SpelltableTournament("Turnier nächstes Jahr", datetime(2026, 2, 17, tzinfo=timezone)),
+        SpelltableTournament("Turnier 1 mit einem ganz langen Titel", date(2025, 3, 20)),
+        SpelltableTournament("Nach Turnier 1", date(2025, 4, 26)),
+        SpelltableTournament("Noch ein Turnier - Pauper", date(2025, 4, 5)),
+        SpelltableTournament("Drittes Turnier", date(2025, 4, 20)),
+        SpelltableTournament("Turnier nächstes Jahr", date(2026, 2, 17)),
     ]
 
     calendar_new = generate_calendar(tournaments)
