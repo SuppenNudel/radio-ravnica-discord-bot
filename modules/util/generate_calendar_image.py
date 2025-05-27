@@ -71,6 +71,39 @@ def draw_dashed_line(draw, start, end, dash_length=4, gap_length=5, fill="black"
         # Move to the next dash position
         current_length += dash_length + gap_length
 
+def calculate_required_rows(tournaments, year, month):
+    """
+    Calculate the number of rows needed for overlapping tournaments in a given month.
+    :param tournaments: List of tournaments.
+    :param year: The year of the calendar.
+    :param month: The month of the calendar.
+    :return: The number of rows needed.
+    """
+    days_in_month = calendar.monthrange(year, month)[1]
+    day_occupancy = [0] * days_in_month  # Track how many tournaments occupy each day
+
+    for tournament in tournaments:
+        start_date = tournament.time
+        end_date = tournament.calc_end()
+
+        # Check if the tournament overlaps with the current month
+        if start_date.year == year and start_date.month == month:
+            start_day = max(1, start_date.day)
+        else:
+            start_day = 1
+
+        if end_date.year == year and end_date.month == month:
+            end_day = min(days_in_month, end_date.day)
+        else:
+            end_day = days_in_month
+
+        # Increment occupancy for each day the tournament spans
+        for day in range(start_day, end_day + 1):
+            day_occupancy[day - 1] += 1
+
+    # The number of rows needed is the maximum occupancy for any day
+    return max(day_occupancy, default=0) + 1  # Add 1 for the weekday row
+
 def generate_calendar(tournaments: list["SpelltableTournament"] = []):
     """
     Generate a horizontal calendar where each row represents a month and each column represents a day.
@@ -95,6 +128,13 @@ def generate_calendar(tournaments: list["SpelltableTournament"] = []):
     # Calculate image dimensions
     total_width = (MARGIN * 2 + COLUMN_WIDTH * DAYS_IN_MONTH) + max_width_months
     total_height = MARGIN * 2 + HEADER_HEIGHT + ROW_HEIGHT * 12
+
+    # # Calculate the required rows for each month
+    # row_heights = []
+    # for month in range(1, 13):
+    #     required_rows = calculate_required_rows(tournaments, 2025, month)
+    #     row_heights.append(required_rows)
+    #     total_height += ROW_ROW_HIGHT * required_rows
 
     # Resize the image to fit the calendar
     img = img.resize((total_width, total_height))
@@ -123,7 +163,7 @@ def generate_calendar(tournaments: list["SpelltableTournament"] = []):
                     fill="#d3d3d3",  # Light gray color
                 )
                 continue
-
+            
             current_day = datetime(2025, month, day, tzinfo=timezone)
 
             # Highlight weekends
@@ -144,27 +184,28 @@ def generate_calendar(tournaments: list["SpelltableTournament"] = []):
 
             # Check if the current day is part of any tournament
             for tournament in tournaments:
+                row = tournament.row if hasattr(tournament, 'row') else 1
                 start_date = tournament.time
                 end_date = tournament.calc_end()
                 title = tournament.title
 
-                if start_date <= current_day <= end_date:
+                if start_date.date() <= current_day.date() <= end_date.date():
                     highlight_color = (
                         DARKER_HIGHLIGHT_COLOR if current_day.weekday() >= 5 else HIGHLIGHT_COLOR
                     )
 
                     # Highlight the tournament range
                     draw.rectangle(
-                        [x_offset, y_offset+ROW_ROW_HIGHT*(tournament.row), x_offset + COLUMN_WIDTH, y_offset + +ROW_ROW_HIGHT*(tournament.row+1)],
+                        [x_offset, y_offset+ROW_ROW_HIGHT*(row), x_offset + COLUMN_WIDTH, y_offset + +ROW_ROW_HIGHT*(row+1)],
                         fill=highlight_color,
                     )
-                    draw_dashed_line(draw, (x_offset, y_offset+ROW_ROW_HIGHT*(tournament.row)), (x_offset + COLUMN_WIDTH, y_offset+ROW_ROW_HIGHT*(tournament.row)))
+                    draw_dashed_line(draw, (x_offset, y_offset+ROW_ROW_HIGHT*(row)), (x_offset + COLUMN_WIDTH, y_offset+ROW_ROW_HIGHT*(row)))
 
                     # Add the event title on the first day of the event
-                    if current_day == start_date:
+                    if current_day.date() == start_date.date():
                         # Ensure the title is drawn after the highlight
                         tournament.title_x_offset = x_offset + 5  # Add padding inside the cell
-                        tournament.title_y_offset = y_offset+ROW_ROW_HIGHT*(tournament.row)  # Add padding from the top
+                        tournament.title_y_offset = y_offset+ROW_ROW_HIGHT*(row)  # Add padding from the top
 
     # Draw grid lines
     for day in range(DAYS_IN_MONTH + 1):  # Vertical lines
@@ -181,8 +222,8 @@ def generate_calendar(tournaments: list["SpelltableTournament"] = []):
     glow_offset = [(-glow_offset_size, -glow_offset_size), (-glow_offset_size, glow_offset_size), (glow_offset_size, -glow_offset_size), (glow_offset_size, glow_offset_size)]  # Offsets for the outline
     for tournament in tournaments:
         title = tournament.title
-        title_x_offset = tournament.title_x_offset
-        title_y_offset = tournament.title_y_offset
+        title_x_offset = tournament.title_x_offset #if hasattr(tournament, 'title_x_offset') else 100
+        title_y_offset = tournament.title_y_offset #if hasattr(tournament, 'title_y_offset') else 100
 
         wd_font_text_size = draw.textbbox((0, 0), title, font=weekday_font)
         text_length = wd_font_text_size[2] - wd_font_text_size[0]

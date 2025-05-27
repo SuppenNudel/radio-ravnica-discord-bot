@@ -8,6 +8,7 @@ import traceback
 import discord
 from enum import StrEnum, auto
 from modules import swiss_mtg, table_to_image
+from modules.util.generate_calendar_image import generate_calendar
 from modules.serializable import Serializable
 from modules import env
 import os
@@ -141,8 +142,8 @@ async def generate_tournament_message(tournaments: list["SpelltableTournament"])
 
 async def update_tournament_message(guild:discord.Guild):
     tourney_list_message = await generate_tournament_message(list(active_tournaments.values()))
-    # calendar_img = generate_calendar_image.generate_calendar_month_column(2025, list(active_tournaments.values()))
-    # calendar_file = discord.File(calendar_img, filename=calendar_img)
+    calendar_img = generate_calendar(list(active_tournaments.values()))
+    calendar_file = discord.File(calendar_img, filename=calendar_img)
     calendar_message = None
     if env.SPELLTABLE_CALENDAR_MESSAGE_ID:
         channel:discord.TextChannel = guild.get_channel(env.SPELLTABLE_CALENDAR_CHANNEL_ID)
@@ -152,9 +153,9 @@ async def update_tournament_message(guild:discord.Guild):
             log.warning("Calendar message not found, creating a new one")
 
     if calendar_message:
-        await calendar_message.edit(content=tourney_list_message)#, file=calendar_file)
+        await calendar_message.edit(content=tourney_list_message, attachments=[], file=calendar_file)
     else:
-        calendar_message = await guild.get_channel(env.SPELLTABLE_CALENDAR_CHANNEL_ID).send(tourney_list_message)#, file=calendar_file)
+        calendar_message = await guild.get_channel(env.SPELLTABLE_CALENDAR_CHANNEL_ID).send(tourney_list_message, file=calendar_file)
         env.SPELLTABLE_CALENDAR_MESSAGE_ID = calendar_message.id
         env.save_to_env("SPELLTABLE_CALENDAR_MESSAGE_ID", calendar_message.id)
 
