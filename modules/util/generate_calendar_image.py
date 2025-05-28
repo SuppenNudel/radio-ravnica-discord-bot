@@ -23,6 +23,46 @@ TODAY_COLOR = "#003366"
 HIGHLIGHT_COLOR = "#ffcc66"
 DARKER_HIGHLIGHT_COLOR = "#e6b800"
 
+def get_german_month_name(month: int) -> str:
+    """
+    Get the German name for a given month.
+    :param month: The month as an integer (1 = January, 12 = December).
+    :return: The German name of the month.
+    """
+    months = {
+        1: "Januar",
+        2: "Februar",
+        3: "März",
+        4: "April",
+        5: "Mai",
+        6: "Juni",
+        7: "Juli",
+        8: "August",
+        9: "September",
+        10: "Oktober",
+        11: "November",
+        12: "Dezember",
+    }
+    return months.get(month, "Unbekannt")  # Default to "Unbekannt" if the month is invalid
+
+
+def get_german_weekday_name(weekday: int) -> str:
+    """
+    Get the German name for a given weekday.
+    :param weekday: The weekday as an integer (0 = Monday, 6 = Sunday).
+    :return: The German name of the weekday.
+    """
+    weekdays = {
+        0: "Montag",
+        1: "Dienstag",
+        2: "Mittwoch",
+        3: "Donnerstag",
+        4: "Freitag",
+        5: "Samstag",
+        6: "Sonntag",
+    }
+    return weekdays.get(weekday, "Unbekannt")  # Default to "Unbekannt" if the weekday is invalid
+
 # Get abbreviated weekday name
 def get_weekday_abbr(d):
     return d.strftime('%a')[:2]
@@ -192,7 +232,7 @@ def generate_calendar(tournaments: list["SpelltableTournament"] = []):
         previous_offset += row_height
 
         # Draw the month name
-        month_name = month.strftime("%B")
+        month_name = get_german_month_name(month.month)
         draw.text((MARGIN, y_offset + row_height / 2 + 2), month_name, fill=TEXT_COLOR, font=FONT)
         
         if month_idx == 1 or month.month == 1:
@@ -229,7 +269,7 @@ def generate_calendar(tournaments: list["SpelltableTournament"] = []):
                 )
 
             # Add the first two letters of the weekday in the top-left corner of the cell
-            weekday_abbr = get_weekday_abbr(current_day)
+            weekday_abbr = get_german_weekday_name(current_day.weekday())[:2]
             draw.text(
                 (x_offset + 2, y_offset + 2),
                 f"{current_day.day} {weekday_abbr}",
