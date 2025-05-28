@@ -25,4 +25,3 @@ try:
     print(f"Abbreviated Weekday: {weekday_abbr}")
 except Exception as e:
     print(e)
-    e.with_traceback()
