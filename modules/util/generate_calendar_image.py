@@ -19,6 +19,7 @@ BG_COLOR = "white"
 TEXT_COLOR = "black"
 WEEKEND_COLOR = "#ffcccc"
 HEADER_COLOR = "#d0e0ff"
+TODAY_COLOR = "#003366"
 HIGHLIGHT_COLOR = "#ffcc66"
 DARKER_HIGHLIGHT_COLOR = "#e6b800"
 
@@ -220,13 +221,19 @@ def generate_calendar(tournaments: list["SpelltableTournament"] = []):
                     [x_offset, y_offset, x_offset + COLUMN_WIDTH, y_offset + ROW_HEIGHT],
                     fill=WEEKEND_COLOR,
                 )
+            
+            if current_day == datetime.now().date():
+                draw.rectangle(
+                    [x_offset, y_offset, x_offset + COLUMN_WIDTH, y_offset + ROW_HEIGHT],
+                    fill=TODAY_COLOR,
+                )
 
             # Add the first two letters of the weekday in the top-left corner of the cell
             weekday_abbr = get_weekday_abbr(current_day)
             draw.text(
                 (x_offset + 2, y_offset + 2),
                 f"{current_day.day} {weekday_abbr}",
-                fill=TEXT_COLOR,
+                fill=TEXT_COLOR if current_day != datetime.now().date() else "white",
                 font=weekday_font,
             )
 
@@ -344,11 +351,11 @@ if __name__ == "__main__":
 
     # Create a list of tournaments
     tournaments = [
-        SpelltableTournament("Turnier 1 mit einem ganz langen Titel", date(2025, 3, 20)),
-        SpelltableTournament("Nach Turnier 1", date(2025, 4, 26)),
-        SpelltableTournament("Noch ein Turnier - Pauper", date(2025, 4, 5)),
-        SpelltableTournament("Drittes Turnier", date(2025, 4, 20)),
-        SpelltableTournament("Turnier nächstes Jahr", date(2026, 2, 17)),
+        SpelltableTournament("Turnier 1 mit einem ganz langen Titel", datetime(2025, 3, 20)),
+        SpelltableTournament("Nach Turnier 1", datetime(2025, 4, 26)),
+        SpelltableTournament("Noch ein Turnier - Pauper", datetime(2025, 4, 5)),
+        SpelltableTournament("Drittes Turnier", datetime(2025, 4, 20)),
+        SpelltableTournament("Turnier nächstes Jahr", datetime(2026, 2, 17)),
     ]
 
     calendar_new = generate_calendar(tournaments)
