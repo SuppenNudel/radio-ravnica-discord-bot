@@ -5,6 +5,7 @@ import logging
 from ezcord import log, Bot
 import platform
 from modules import env
+from modules import locale_test
 
 LOG_WEBHOOK = os.getenv("LOG_WEBHOOK")
 IS_DEBUG = bool(os.getenv("DEBUG"))
