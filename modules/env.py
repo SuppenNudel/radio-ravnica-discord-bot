@@ -2,6 +2,9 @@ import os
 import json
 from dotenv import load_dotenv, dotenv_values
 from pathlib import Path
+import pytz
+
+TIMEZONE = pytz.timezone("Europe/Berlin")
 
 load_dotenv()
 # load_dotenv("config.env")

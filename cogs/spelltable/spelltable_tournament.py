@@ -8,6 +8,10 @@ from modules import swiss_mtg
 from modules import env
 import logging
 
+from discord.ext import tasks
+from datetime import datetime, timedelta
+import asyncio
+
 from modules.spelltable.tournament_model import TOURNAMENTS_FOLDER, SpelltableTournament, get_member, load_tournaments, active_tournaments, update_tournament_message
 from modules.spelltable.common_views import FinishTournamentView, KickPlayerModal, ParticipationState, ReportMatchView, StartNextRoundView, next_round
 from modules.spelltable import common_views
@@ -364,6 +368,32 @@ class SpelltableTournamentManager(Cog):
             view=view,
             ephemeral=True
         )
+
+    @tasks.loop(hours=24)
+    async def update_task(self):
+        """
+        Task to update the tournament message shortly after midnight.
+        """
+        now = datetime.now(tz=env.TIMEZONE)
+        # Calculate the time until midnight
+        next_midnight = (now + timedelta(days=1)).replace(hour=0, minute=0, second=1, microsecond=0)
+        delay = (next_midnight - now).total_seconds()
+
+        # Wait until shortly after midnight
+        await asyncio.sleep(delay)
+
+        # Execute the update
+        guild = BOT.get_guild(env.GUILD_ID)
+        if guild:
+            await update_tournament_message(guild)
+            log.info("Tournament message updated shortly after midnight.")
+
+    @update_task.before_loop
+    async def before_update_task(self):
+        """
+        Wait until the bot is ready before starting the task.
+        """
+        await self.bot.wait_until_ready()
 
 def setup(bot:Bot):
     bot.add_cog(SpelltableTournamentManager(bot))
