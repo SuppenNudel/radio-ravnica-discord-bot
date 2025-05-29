@@ -331,7 +331,7 @@ class SpelltableTournamentManager(Cog):
                     await tournament_message.edit(view=view)
                 
 
-                link_log.info(f"Turnier wurde geladen: {tournament_message.jump_url} <@{tournament.organizer_id}>")
+                link_log.info(f"Turnier wurde geladen: {tournament_message.jump_url}")
             except discord.errors.NotFound:
                 file_path = TOURNAMENTS_FOLDER+"/"+(message_path.replace("/", "_"))+".json"
                 log.warning(f"Turnier konnte nicht geladen werden, weil vermutlich der entprechende Channel gelöscht wurde. Lösche Datei {file_path}")
