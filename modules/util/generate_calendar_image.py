@@ -156,7 +156,6 @@ def generate_calendar(tournaments: list["SpelltableTournament"] = []):
     last_date:date = tournaments[-1].calc_end().date()
 
     months:list[date] = []
-    print(f"from {earliest_date.month}/{earliest_date.year} to {last_date.month}/{last_date.year}")
     current_date = earliest_date.replace(day=1)  # Start at the first day of the earliest month
     while current_date <= last_date:
         months.append(current_date)

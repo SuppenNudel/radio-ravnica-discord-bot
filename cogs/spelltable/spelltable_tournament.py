@@ -284,6 +284,7 @@ class SpelltableTournamentManager(Cog):
     def __init__(self, bot:Bot):
         global BOT
         BOT = bot
+        self.update_task.start()
 
     @Cog.listener()
     async def on_ready(self):
@@ -379,6 +380,8 @@ class SpelltableTournamentManager(Cog):
         next_midnight = (now + timedelta(days=1)).replace(hour=0, minute=0, second=1, microsecond=0)
         delay = (next_midnight - now).total_seconds()
 
+        log.debug(f"Waiting {delay} seconds ({str(timedelta(seconds=delay))}) until {next_midnight} to update tournament message")
+
         # Wait until shortly after midnight
         await asyncio.sleep(delay)
 
@@ -386,14 +389,15 @@ class SpelltableTournamentManager(Cog):
         guild = BOT.get_guild(env.GUILD_ID)
         if guild:
             await update_tournament_message(guild)
-            log.info("Tournament message updated shortly after midnight.")
+        else:
+            log.error(f"Guild is {guild}. Cannot update tournament message")
 
     @update_task.before_loop
     async def before_update_task(self):
         """
         Wait until the bot is ready before starting the task.
         """
-        await self.bot.wait_until_ready()
+        await BOT.wait_until_ready()
 
 def setup(bot:Bot):
     bot.add_cog(SpelltableTournamentManager(bot))

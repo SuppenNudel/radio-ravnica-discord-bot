@@ -141,6 +141,7 @@ async def generate_tournament_message(tournaments: list["SpelltableTournament"])
     return msg
 
 async def update_tournament_message(guild:discord.Guild):
+    log.info(f"Updating tournament message")
     tourney_list_message = await generate_tournament_message(list(active_tournaments.values()))
     calendar_img = generate_calendar(list(active_tournaments.values()))
     calendar_file = discord.File(calendar_img, filename=calendar_img)
@@ -158,6 +159,7 @@ async def update_tournament_message(guild:discord.Guild):
         calendar_message = await guild.get_channel(env.SPELLTABLE_CALENDAR_CHANNEL_ID).send(tourney_list_message, file=calendar_file)
         env.SPELLTABLE_CALENDAR_MESSAGE_ID = calendar_message.id
         env.save_to_env("SPELLTABLE_CALENDAR_MESSAGE_ID", calendar_message.id)
+    link_log.info(f"Tournament message updated: {calendar_message.jump_url}")
 
 async def use_custom_try(purpose:str, func, tournament:"SpelltableTournament"):
     try:
