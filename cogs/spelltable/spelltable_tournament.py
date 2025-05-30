@@ -380,7 +380,7 @@ class SpelltableTournamentManager(Cog):
         next_midnight = (now + timedelta(days=1)).replace(hour=0, minute=0, second=1, microsecond=0)
         delay = (next_midnight - now).total_seconds()
 
-        log.debug(f"Waiting {delay} seconds ({str(timedelta(seconds=delay))}) until {next_midnight} to update tournament message")
+        log.debug(f"It is now {now}. Waiting {delay} seconds ({str(timedelta(seconds=delay))}) until {next_midnight} to update tournament message")
 
         # Wait until shortly after midnight
         await asyncio.sleep(delay)
