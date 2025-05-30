@@ -3,6 +3,7 @@ from PIL import Image, ImageDraw, ImageFont
 from datetime import date, datetime, timedelta
 import calendar
 from collections import defaultdict
+import env
 
 MARGIN = 50
 ROW_HEIGHT = 20
@@ -261,7 +262,7 @@ def generate_calendar(tournaments: list["SpelltableTournament"] = []):
                     fill=WEEKEND_COLOR,
                 )
             
-            if current_day == datetime.now().date():
+            if current_day == datetime.now(tz=env.TIMEZONE).date():
                 draw.rectangle(
                     [x_offset, y_offset, x_offset + COLUMN_WIDTH, y_offset + ROW_HEIGHT],
                     fill=TODAY_COLOR,
@@ -272,7 +273,7 @@ def generate_calendar(tournaments: list["SpelltableTournament"] = []):
             draw.text(
                 (x_offset + 2, y_offset + 2),
                 f"{current_day.day} {weekday_abbr}",
-                fill=TEXT_COLOR if current_day != datetime.now().date() else "white",
+                fill=TEXT_COLOR if current_day != datetime.now(tz=env.TIMEZONE).date() else "white",
                 font=weekday_font,
             )
 
