@@ -9,12 +9,9 @@ from datetime import datetime
 import modules.notion as notion
 from modules import env
 import os
-import pytz
 from discord.ui import Modal
 from discord.utils import format_dt
 from modules.date_time_interpretation import parse_date
-
-timezone = pytz.timezone("Europe/Berlin")
 
 DB_ID_REMIND_ME = os.getenv("DATABASE_ID_REMIND_ME")
 DB_FIELD_DATE = "Timestamp"
@@ -48,7 +45,7 @@ async def handle_input(interaction: discord.Interaction|EzContext, followup_mess
     if not parsed_date:
         await interaction.followup.edit_message(followup_message.id, content=f"❌ Ich konnte deine Zeitangabe nicht interpretieren: {time_input}\nBitte passe sie an.", view=ReopenModalView(user, message, time_input, reason))
         return
-    if parsed_date < datetime.now(tz=timezone):
+    if parsed_date < datetime.now(tz=env.TIMEZONE):
         await interaction.followup.edit_message(followup_message.id, content=f"⚠️ Interpretierter Zeitpunkt: {format_dt(parsed_date, style='R')}\nIch kann dich nicht in der Vergangenheit erinnern. Zeitreisen wurden noch nicht erfunden 😅", view=ReopenModalView(user, message, time_input, reason))
         return
 
@@ -250,7 +247,7 @@ class RemindMe(commands.Cog):
     @tasks.loop(minutes=5)
     async def check_reminders(self):
         for guild in self.bot.guilds:
-            filter_date = datetime.now(tz=timezone)
+            filter_date = datetime.now(tz=env.TIMEZONE)
             filter = (notion.NotionFilterBuilder()
                     .add_date_filter(property_name=DB_FIELD_DATE, value=filter_date, condition=notion.DateCondition.ON_OR_BEFORE)
                     .add_text_filter(property_name=DB_FIELD_GUILD, value=str(guild.id), condition=notion.TextCondition.EQUALS)
