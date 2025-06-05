@@ -12,7 +12,7 @@ from discord.ext import tasks
 from datetime import datetime, timedelta
 import asyncio
 
-from modules.spelltable.tournament_model import TOURNAMENTS_FOLDER, SpelltableTournament, get_member, load_tournaments, active_tournaments, update_tournament_message
+from modules.spelltable.tournament_model import TOURNAMENTS_FOLDER, SpelltableTournament, load_tournaments, active_tournaments, update_tournament_message
 from modules.spelltable.common_views import FinishTournamentView, KickPlayerModal, ParticipationState, ReportMatchView, StartNextRoundView, next_round
 from modules.spelltable import common_views
 
@@ -105,7 +105,7 @@ class ParticipationView(discord.ui.View):
         players = []
         participants = self.tournament.get_users_by_state(ParticipationState.PARTICIPATE)
         for participant_id in participants:
-            member = await get_member(participant_id, self.tournament)
+            member = await self.tournament.get_member(participant_id)
             player_name = EMOJI_PATTERN.sub("", member.display_name).strip()
             players.append(swiss_mtg.Player(player_name, participant_id))
 
@@ -325,7 +325,8 @@ class SpelltableTournamentManager(Cog):
                         
                         if message.channel.archived:
                             await message.channel.edit(archived=False)
-                        await message.edit(view=view, content=f"Paarungen für die {current_round.round_number}. Runde:\n\n{tournament.get_pairings()}")
+                        pairings = await tournament.get_pairings()
+                        await message.edit(view=view, content=f"Paarungen für die {current_round.round_number}. Runde:\n\n{pairings}")
                 else:
                     view = await ParticipationView.create(tournament)
                     await tournament_message.edit(view=view)

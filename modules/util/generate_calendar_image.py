@@ -150,6 +150,8 @@ def rotated_text(text, draw:ImageDraw.ImageDraw, img:ImageDraw.Image.Image, x, y
     img.paste(rotated_text, (x, y), rotated_text)  # Third argument is mask for transparency
 
 def generate_calendar(tournaments: list["SpelltableTournament"] = []):
+    if not tournaments:
+        return None
     tournaments = tournaments or []
     tournaments.sort(key=lambda t: t.time)  # Sort tournaments by start time
 

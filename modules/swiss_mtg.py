@@ -1,6 +1,7 @@
 import random, re
 import networkx as nx
 from modules.serializable import Serializable
+import json
 
 # The following tiebreakers are used to determine how a player ranks in a tournament:
 # 1. Match points
@@ -109,7 +110,8 @@ class Player(Serializable):
             opponent = match.get_opponent_of(self)            
             if opponent is None:
                 raise ValueError("Opponent can not be None.")
-            opponent_mwp += opponent.calculate_match_win_percentage()
+            omwp = opponent.calculate_match_win_percentage()
+            opponent_mwp += omwp
         if non_bye_matches == 0:
             return 0.33
         omp = opponent_mwp / non_bye_matches
@@ -511,8 +513,28 @@ def main():
     for round_num in range(tournament.rounds_count):
         play_round(tournament, RANDOM_DROP_RATE)
 
+# Load the JSON file
+def load_tournament(file_path):
+    with open(file_path, "r", encoding="utf-8") as file:
+        data = json.load(file)
+    return data
+
+# Deserialize the tournament
+def deserialize_tournament(data):
+    tournament_data = data["tournament"]  # Extract the tournament data
+    tournament = SwissTournament.deserialize(tournament_data)
+    return tournament
+
 if __name__ == "__main__":
-    for _ in range(1000):
-        print("----- NEW TOURNAMENT -----")
-        main()
-    print(f"Double Bye count: {double_bye_count}")
+    file_path = "g:\\Meine Ablage\\Programmieren\\mtg\\radio-ravnica-discord-bot\\tournaments\\test_tournament.json"
+    data = load_tournament(file_path)
+    tournament = deserialize_tournament(data)
+    print(tournament.players[0])
+    print(tournament.players[0].calculate_opponent_match_win_percentage())
+    print(tournament.players[0].calculate_opponent_match_win_percentage())
+
+    # SwissTournament.deserialize()
+    # for _ in range(1000):
+    #     print("----- NEW TOURNAMENT -----")
+    #     main()
+    # print(f"Double Bye count: {double_bye_count}")

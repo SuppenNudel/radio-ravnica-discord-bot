@@ -1,7 +1,7 @@
 import discord
 import logging
 from modules import swiss_mtg
-from modules.spelltable.tournament_model import SpelltableTournament, get_member, use_custom_try, ParticipationState
+from modules.spelltable.tournament_model import SpelltableTournament, use_custom_try, ParticipationState
 from modules import env
 from ezcord import log
 
@@ -65,8 +65,8 @@ class ReportMatchModal(discord.ui.Modal):
         self.match = match
         self.round = round
 
-        self.player1_user = await get_member(match.player1.player_id, tournament)
-        self.player2_user = await get_member(match.player2.player_id, tournament)
+        self.player1_user = await tournament.get_member(match.player1.player_id)
+        self.player2_user = await tournament.get_member(match.player2.player_id)
         self.p1_score = discord.ui.InputText(
             label=f"Player 1 - {self.player1_user.display_name}",
             placeholder="",
@@ -255,13 +255,13 @@ class KickPlayerModal(discord.ui.Modal):
             participant_ids = self.tournament.get_users_by_state(ParticipationState.PARTICIPATE)
         if user_id:
             if user_id in participant_ids:
-                user_to_kick:discord.Member = await get_member(user_id, self.tournament)
+                user_to_kick:discord.Member = await self.tournament.get_member(user_id)
             else:
                 await interaction.respond(f"Kein User mit der ID `{user_id}` ist für das Turnier angemeldet.", ephemeral=True)
                 return
         elif user_name:
             for participant_id in participant_ids:
-                member = await get_member(participant_id, self.tournament)
+                member = await self.tournament.get_member(participant_id)
                 if user_name.lower() in member.display_name.lower():
                     user_to_kick = member
                     break
@@ -365,7 +365,8 @@ async def next_round(tournament:SpelltableTournament, interaction:discord.Intera
         pairings_image = await tournament.pairings_to_image()
         pairings_file = discord.File(pairings_image, filename=pairings_image)
         try:
-            new_pairings_message:discord.Message = await interaction.followup.send(content=f"Paarungen für die {round.round_number}. Runde:\n\n{tournament.get_pairings()}", file=pairings_file, view=reportMatchView)
+            pairings = await tournament.get_pairings()
+            new_pairings_message:discord.Message = await interaction.followup.send(content=f"Paarungen für die {round.round_number}. Runde:\n\n{pairings}", file=pairings_file, view=reportMatchView)
             await new_pairings_message.pin()
 
             if previous_round:
@@ -388,7 +389,9 @@ async def next_round(tournament:SpelltableTournament, interaction:discord.Intera
         # message players direcly
         for match in round.matches:
             try:
-                user1 = await tournament.guild.fetch_member(match.player1.player_id)
+                user1 = await tournament.get_member(match.player1.player_id)
+                if type(user1) != discord.Member:
+                    user1 = None
             except discord.NotFound:
                 user1 = None
             if match.is_bye():
@@ -400,18 +403,22 @@ async def next_round(tournament:SpelltableTournament, interaction:discord.Intera
                         log.error(f"Could not send message to {user1.display_name} ({user1.id})")
             else:
                 try:
-                    user2 = await tournament.guild.fetch_member(match.player2.player_id)
+                    user2 = await tournament.get_member(match.player2.player_id)
+                    if type(user2) != discord.Member:
+                        user2 = None
                 except discord.NotFound:
                     user2 = None
                 if user1:
                     try:
-                        await user1.send(f"Du spielst gegen <@{match.player2.player_id}> in der {round.round_number}. Runde im Turnier `{tournament.title}`: {new_pairings_message.jump_url}")
-                    except discord.Forbidden:
+                        p2_member = await tournament.get_member(match.player2.player_id)
+                        await user1.send(f"Du spielst gegen <@{match.player2.player_id}> ({p2_member.display_name}) in der {round.round_number}. Runde im Turnier `{tournament.title}`: {new_pairings_message.jump_url}")
+                    except discord.Forbidden as forbidden:
                         log.error(f"Could not send message to {user1.display_name} ({user1.id})")
                 if user2:
                     try:
-                        await user2.send(f"Du spielst gegen <@{match.player1.player_id}> in der {round.round_number}. Runde im Turnier `{tournament.title}`: {new_pairings_message.jump_url}")
-                    except discord.Forbidden:
+                        p1_member = await tournament.get_member(match.player1.player_id)
+                        await user2.send(f"Du spielst gegen <@{match.player1.player_id}> ({p1_member.display_name}) in der {round.round_number}. Runde im Turnier `{tournament.title}`: {new_pairings_message.jump_url}")
+                    except discord.Forbidden as forbidden:
                         log.error(f"Could not send message to {user2.display_name} ({user2.id})")
 
     await use_custom_try("Nächste Runde Erstellen", do_the_thing, tournament)

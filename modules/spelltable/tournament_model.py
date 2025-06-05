@@ -64,24 +64,6 @@ class CustomJSONEncoder(json.JSONEncoder):
             mapping = obj.serialize()
             return mapping
         return super().default(obj)
-
-members:dict[int, discord.Member] = {}
-
-async def get_member(user_id, tournament:'SpelltableTournament') -> discord.Member:
-    if user_id in members:
-        return members[user_id]
-    try:
-        user = await discord.utils.get_or_fetch(tournament.guild, "member", user_id)
-        members[user_id] = user
-        return user
-    except:
-        if env.DEBUG:
-            try:
-                user = await discord.utils.get_or_fetch(tournament.bot, "user", user_id)
-                return user
-            except discord.errors.NotFound: 
-                return None
-        raise Exception(f"User with ID {user_id} not found in guild {tournament.guild.id}.")
     
 async def generate_tournament_message(tournaments: list["SpelltableTournament"]) -> str:
     # Sort tournaments by start date, placing those with `time=None` first
@@ -144,7 +126,9 @@ async def update_tournament_message(guild:discord.Guild):
     log.info(f"Updating tournament message")
     tourney_list_message = await generate_tournament_message(list(active_tournaments.values()))
     calendar_img = generate_calendar(list(active_tournaments.values()))
-    calendar_file = discord.File(calendar_img, filename=calendar_img)
+    calendar_file = None
+    if calendar_img:
+        calendar_file = discord.File(calendar_img, filename=calendar_img)
     calendar_message = None
     if env.SPELLTABLE_CALENDAR_MESSAGE_ID:
         channel:discord.TextChannel = guild.get_channel(env.SPELLTABLE_CALENDAR_CHANNEL_ID)
@@ -154,9 +138,15 @@ async def update_tournament_message(guild:discord.Guild):
             log.warning("Calendar message not found, creating a new one")
 
     if calendar_message:
-        await calendar_message.edit(content=tourney_list_message, attachments=[], file=calendar_file)
+        if calendar_file:
+            await calendar_message.edit(content=tourney_list_message, attachments=[], file=calendar_file)
+        else:
+            await calendar_message.edit(content=tourney_list_message, attachments=[])
     else:
-        calendar_message = await guild.get_channel(env.SPELLTABLE_CALENDAR_CHANNEL_ID).send(tourney_list_message, file=calendar_file)
+        if calendar_file:
+            calendar_message = await guild.get_channel(env.SPELLTABLE_CALENDAR_CHANNEL_ID).send(tourney_list_message, file=calendar_file)
+        else:
+            calendar_message = await guild.get_channel(env.SPELLTABLE_CALENDAR_CHANNEL_ID).send(tourney_list_message)
         env.SPELLTABLE_CALENDAR_MESSAGE_ID = calendar_message.id
         env.save_to_env("SPELLTABLE_CALENDAR_MESSAGE_ID", calendar_message.id)
     link_log.info(f"Tournament message updated: {calendar_message.jump_url}")
@@ -198,6 +188,24 @@ class SpelltableTournament(Serializable):
 
         self._organizer:discord.Member|None = None
         self._message:discord.Message|None = None
+
+        self.members:dict[int, discord.Member] = {}
+
+    async def get_member(self, user_id) -> discord.Member:
+        if user_id in self.members:
+            return self.members[user_id]
+        try:
+            user = await discord.utils.get_or_fetch(self.guild, "member", user_id)
+            self.members[user_id] = user
+            return user
+        except:
+            if env.DEBUG:
+                try:
+                    user = await discord.utils.get_or_fetch(self.bot, "user", user_id)
+                    return user
+                except discord.errors.NotFound: 
+                    return None
+            raise Exception(f"User with ID {user_id} not found in guild {self.guild.id}.")
 
     @property
     async def organizer(self) -> discord.Member|None:
@@ -292,7 +300,7 @@ class SpelltableTournament(Serializable):
         if self.waitlist and len(participants) < self.max_participants:
             first_in_line_user_id = self.waitlist.pop(0)
             self.users[first_in_line_user_id] = ParticipationState.PARTICIPATE
-            new_participant:discord.Member = await get_member(first_in_line_user_id, self)
+            new_participant:discord.Member = await self.get_member(first_in_line_user_id)
             tournament_message = await self.message
             if not tournament_message:
                 raise Exception("Tournament has no message, shouldn't happen")
@@ -372,21 +380,19 @@ class SpelltableTournament(Serializable):
         participants = self.get_users_by_state(ParticipationState.PARTICIPATE)
         participant_members:list[discord.User] = []
         for uid in participants:
-            member = self.guild.get_member(uid)
-            if not member:
-                member = await self.bot.get_or_fetch_user(uid)
+            member = await self.get_member(uid)
             if member:
                 participant_members.append(member)
 
         participant_members.sort(key=lambda member: member.display_name.lower())
         embed.add_field(name=f"✅ Teilnehmer ({len(participants)}{f'/{self.max_participants}' if self.max_participants else ''})", value="\n".join([f"{p.display_name}" for p in participant_members]), inline=True)
         if self.max_participants:
-            waitlist_members = [self.guild.get_member(uid) for uid in waitlist]
+            waitlist_members = [await self.get_member(uid) for uid in waitlist]
             # Filter out None values if some IDs weren't found
             waitlist_members = [m for m in waitlist_members if m is not None]
             embed.add_field(name=f"⌚ Nachrücker ({len(waitlist)})", value="\n".join([f"{p.display_name}" for p in waitlist_members]), inline=True)
         
-        tentative_members = [self.guild.get_member(uid) for uid in tentative]
+        tentative_members = [await self.get_member(uid) for uid in tentative]
         # Filter out None values if some IDs weren't found
         tentative_members = [m for m in tentative_members if m is not None]
         embed.add_field(name=f"❓ Vielleicht ({len(tentative)})", value="\n".join([f"{p.display_name}" for p in tentative_members]), inline=True)
@@ -410,7 +416,7 @@ class SpelltableTournament(Serializable):
 
         await self.save_tournament()
     
-    def get_pairings(self, round=None) -> str:
+    async def get_pairings(self, round=None) -> str:
         if round is None:
             round = self.swiss_tournament.current_round()
 
@@ -423,7 +429,8 @@ class SpelltableTournament(Serializable):
                     mention = f"<@{player.player_id}>"
                     if player.dropped:
                         mention = f"~~{mention}~~"
-                    matchups[player.name] = f"{mention} hat ein BYE"
+                    player_member = await self.get_member(player.player_id)
+                    matchups[player_member.display_name] = f"{mention} hat ein BYE"
                 continue
 
             # Normal match
@@ -439,13 +446,15 @@ class SpelltableTournament(Serializable):
             if p2.dropped:
                 mention_p2 = f"~~{mention_p2}~~"
             
-            matchups[p1.name] = f"{mention_p1} vs {mention_p2}"
-            matchups[p2.name] = f"{mention_p2} vs {mention_p1}"
+            player1_member = await self.get_member(p1.player_id)
+            player2_member = await self.get_member(p2.player_id)
+            matchups[player1_member.display_name] = f"{mention_p1} vs {mention_p2}"
+            matchups[player2_member.display_name] = f"{mention_p2} vs {mention_p1}"
 
         if not matchups:
             return "Keine Paarungen verfügbar. Ein Neustart des Bots, sollte den Fehler beheben. <@356120044754698252>" # pings NudelForce
 
-        for_message = "\n".join(matchups[name] for name in sorted(matchups, key=str.lower))
+        for_message = "\n".join(matchups[player_name] for player_name in sorted(matchups, key=str.lower))
 
         return for_message
     
