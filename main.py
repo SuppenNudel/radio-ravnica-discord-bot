@@ -1,5 +1,17 @@
+import platform
 import sys
-print(sys.version)
+
+def get_system_info():
+    system = platform.system()
+    machine = platform.machine()
+    architecture = platform.architecture()[0]
+
+    print(f"System: {system}")
+    print(f"Machine: {machine}")
+    print(f"Architecture: {architecture}")
+    print(f"Python version: {sys.version}")
+
+get_system_info()
 
 import os
 import discord
@@ -55,7 +67,7 @@ async def on_ready():
 if __name__ == "__main__":
     os.makedirs("tmp", exist_ok=True)
     if IS_DEBUG:
-        bot.load_extension('cogs.spelltable.spelltable_tournament')
+        bot.load_extension('cogs.utils.mtgtop8_preview')
     else:
         bot.load_cogs(subdirectories=True, ignored_cogs=["ping", "hack", "notion_to_forum"])
     bot.add_status_changer(
