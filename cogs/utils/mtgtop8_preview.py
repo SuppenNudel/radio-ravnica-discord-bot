@@ -76,8 +76,8 @@ async def generate_preview_from_text(url: str):
     img = Image.new("RGB", (600, 400), color=(30, 30, 30))
     draw = ImageDraw.Draw(img)
 
-    font_title = ImageFont.truetype("arial.ttf", 24)
-    font_cards = ImageFont.truetype("arial.ttf", 16)
+    font_title = ImageFont.truetype("assets/beleren.ttf", 24)
+    font_cards = ImageFont.truetype("assets/beleren.ttf", 16)
 
     draw.text((10, 10), title, font=font_title, fill="white")
 
