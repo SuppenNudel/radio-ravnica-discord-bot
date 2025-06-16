@@ -65,6 +65,7 @@ def screenshot_element_before_card_div(url):
     url += "&switch=visual"  # Ensure we are in visual mode
     options = Options()
     options.add_argument('--headless')
+    options.add_argument("--no-sandbox")
     options.binary_location = PORTABLE_FIREFOX_PATH
     service = Service(executable_path=gecko_path)
     driver = webdriver.Firefox(
