@@ -22,10 +22,13 @@ import os
 import stat
 
 gecko_path = "assets/geckodriver" if platform.system() == "Linux" else "assets/geckodriver.exe"
+PORTABLE_FIREFOX_PATH = "assets/firefox/firefox"
 
 # Add execute permission for owner, group, others
 st = os.stat(gecko_path)
 os.chmod(gecko_path, st.st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+st = os.stat(PORTABLE_FIREFOX_PATH)
+os.chmod(PORTABLE_FIREFOX_PATH, st.st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
 MTGTOP8_URL_REGEX = r"https?://mtgtop8\.com/event\?e=\d+&d=\d+&f=\w+"
 
@@ -62,6 +65,7 @@ def screenshot_element_before_card_div(url):
     url += "&switch=visual"  # Ensure we are in visual mode
     options = Options()
     options.add_argument('--headless')
+    options.binary_location = PORTABLE_FIREFOX_PATH
     service = Service(executable_path=gecko_path)
     driver = webdriver.Firefox(
         options=options,
