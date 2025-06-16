@@ -102,16 +102,13 @@ class ReportMatchModal(discord.ui.Modal):
             await interaction.respond(f"Dein Match Resultat {int(self.p1_score.value)}-{int(self.p2_score.value)}-{int(self.draw_score.value) if self.draw_score.value else 0} ist invalide: {e}", ephemeral=True)
             return
 
-        msg_text = f"Match result submitted: {self.player1_user.mention} vs {self.player2_user.mention} → {self.p1_score.value}-{self.p2_score.value}-{self.draw_score.value if self.draw_score.value else 0}"
-        await interaction.response.send_message(
-            msg_text,
-            ephemeral=True
-        )
+        await interaction.response.send_message(f"{self.player1_user.mention} {self.p1_score.value} - {self.p2_score.value} {self.player2_user.mention}{f' ({self.draw_score.value} Unentschieden)' if self.draw_score.value else ''}\nGGs!")
 
         if env.DEBUG:
             swiss_mtg.simulate_remaining_matches(self.tournament.swiss_tournament)
 
-        link_log.info(f"{msg_text} in {interaction.message.jump_url}")
+        log_text = f"Match result submitted: {self.player1_user.mention} vs {self.player2_user.mention} → {self.p1_score.value}-{self.p2_score.value}-{self.draw_score.value if self.draw_score.value else 0}"
+        link_log.info(f"{log_text} in {interaction.message.jump_url}")
         await self.tournament.update_pairings(self.round)
         await update_standings(self.tournament, interaction)
         # TODO Enable "Runde beenden" Button (only usable by TO/Manager)

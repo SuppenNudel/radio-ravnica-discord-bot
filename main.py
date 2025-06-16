@@ -1,3 +1,6 @@
+import sys
+print(sys.version)
+
 import os
 import discord
 import ezcord
