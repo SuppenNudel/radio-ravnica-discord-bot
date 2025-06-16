@@ -12,6 +12,7 @@ from selenium import webdriver
 from selenium.webdriver.firefox.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.firefox.service import Service
 from selenium.webdriver.support import expected_conditions as EC
 from PIL import Image
 from io import BytesIO
@@ -52,14 +53,13 @@ def screenshot_element_before_card_div(url):
     url += "&switch=visual"  # Ensure we are in visual mode
     options = Options()
     options.add_argument('--headless')
-    if platform.system() == "Linux":
-        driver = webdriver.Firefox(
-            options=options,
-            executable_path="/assets/geckodriver"
-        )
-    else:
-        driver = webdriver.Firefox(options=options)
-        
+    gecko_path = "assets/geckodriver" if platform.system() == "Linux" else "assets/geckodriver.exe"
+    service = Service(executable_path=gecko_path)
+    driver = webdriver.Firefox(
+        options=options,
+        service=service
+    )
+
     driver.set_window_size(1920, 2000)
 
     try:
