@@ -129,7 +129,7 @@ class Location():
 
         response = requests.get(map_url)
         # Save the file locally
-        self.file_name = "google_map.png"
+        self.file_name = f"google_map_{lat}_{lng}.png"
         self.file_path = f"tmp/{self.file_name}"
         with open(self.file_path, "wb") as file_maps:
             file_maps.write(response.content)
