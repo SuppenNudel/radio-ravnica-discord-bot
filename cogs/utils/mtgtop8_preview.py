@@ -18,6 +18,15 @@ from PIL import Image
 from io import BytesIO
 import time
 
+import os
+import stat
+
+gecko_path = "assets/geckodriver" if platform.system() == "Linux" else "assets/geckodriver.exe"
+
+# Add execute permission for owner, group, others
+st = os.stat(gecko_path)
+os.chmod(gecko_path, st.st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
 MTGTOP8_URL_REGEX = r"https?://mtgtop8\.com/event\?e=\d+&d=\d+&f=\w+"
 
 class MTGTop8Preview(Cog):
@@ -53,7 +62,6 @@ def screenshot_element_before_card_div(url):
     url += "&switch=visual"  # Ensure we are in visual mode
     options = Options()
     options.add_argument('--headless')
-    gecko_path = "assets/geckodriver" if platform.system() == "Linux" else "assets/geckodriver.exe"
     service = Service(executable_path=gecko_path)
     driver = webdriver.Firefox(
         options=options,
