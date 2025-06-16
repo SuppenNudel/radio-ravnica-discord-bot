@@ -181,6 +181,7 @@ class SpelltableTournament(Serializable):
         self.days_per_match = 7
         self.bot:discord.Bot = bot
         self.cancelled = None
+        self.victory_message_id:int = None
 
         if env.DEBUG:
             for user_id in test_participants:
@@ -264,6 +265,7 @@ class SpelltableTournament(Serializable):
         tournament.users = {int(k): v for k, v in data["users"].items()}
         tournament.message_id = int(data["message_id"])
         tournament.channel_id = int(data["channel_id"])
+        tournament.victory_message_id = int(data["victory_message_id"]) if "victory_message_id" in data else None
         tournament.days_per_match = int(data["days_per_match"])
         tournament.waitlist = data["waitlist"] if "waitlist" in data else []
 
@@ -289,6 +291,7 @@ class SpelltableTournament(Serializable):
             "guild_id": message.guild.id,
             "message_id": message.id,
             "channel_id": message.channel.id,
+            "victory_message_id": self.victory_message_id,
             "max_participants": self.max_participants,
             "max_rounds": self.max_rounds,
             "tournament": self.swiss_tournament,

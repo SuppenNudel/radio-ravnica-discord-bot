@@ -7,6 +7,50 @@ from ezcord import log
 
 link_log = logging.getLogger("link_logger")
 
+class SubmitDeckModal(discord.ui.Modal):
+    def __init__(self, tournament:SpelltableTournament):
+        super().__init__(title="Deck einreichen")
+        self.tournament = tournament
+
+        self.deck_archetype = discord.ui.InputText(
+            label="Deck Archetyp",
+            placeholder="z.B. Rakdos Madness",#https://deckbox.org/...",
+            required=True,
+            # style=discord.InputTextStyle.long
+        )
+        self.add_item(self.deck_archetype)
+
+        self.deck_link = discord.ui.InputText(
+            label="Deck Link",
+            placeholder="z.B. https://deckbox.org/...",
+            required=False,
+            # style=discord.InputTextStyle.long
+        )
+        self.add_item(self.deck_link)
+
+    async def callback(self, interaction: discord.Interaction):
+        print(self.deck_archetype.value)
+        print(self.deck_link.value)
+        await interaction.respond(f"Danke für's Einreichen deines Decks!\nDeck Archetyp: {self.deck_archetype.value}\nDeck Link: {self.deck_link.value}", ephemeral=True)
+
+class SubmitDeckView(discord.ui.View):
+    def __init__(self):
+        raise RuntimeError("Use 'await SubmitDeckView.create(...)' instead")
+    
+    async def _init(self, tournament: SpelltableTournament):
+        super().__init__(timeout=None)
+        self.tournament:SpelltableTournament = tournament
+
+    @classmethod
+    async def create(cls, tournament: SpelltableTournament):
+        instance = object.__new__(cls)
+        await instance._init(tournament)
+        return instance
+    
+    @discord.ui.button(label="Deck einreichen", style=discord.ButtonStyle.primary, emoji="📥")
+    async def submit_button(self, button: discord.ui.Button, interaction: discord.Interaction):
+        await interaction.response.send_modal(SubmitDeckModal(self.tournament))
+
 class FinishTournamentView(discord.ui.View):
     def __init__(self):
         raise RuntimeError("Use 'await FinishTournamentView.create(...)' instead")
@@ -47,9 +91,10 @@ class FinishTournamentView(discord.ui.View):
             if standings_message:
                 await standings_message.edit(view=None)
 
-            await interaction.response.send_message(content, ephemeral=False)
+            victory_message = await interaction.response.send_message(content, view=await SubmitDeckView.create(self.tournament), ephemeral=False)
             link_log.info(f"Turnier abgeschlossen: `{self.tournament.title}`, Gewinner: <@{winner.player_id}>")
             self.tournament.swiss_tournament.winner = winner
+            self.tournament.victory_message_id = victory_message.id
             await self.tournament.save_tournament()
         else:
             await interaction.respond("Kein Gewinner gefunden. Das sollte nicht passieren.", ephemeral=True)
