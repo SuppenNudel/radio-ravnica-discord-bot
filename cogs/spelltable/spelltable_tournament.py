@@ -358,6 +358,25 @@ class SpelltableTournamentManager(Cog):
         if ctx.guild is None:
             await ctx.respond("Dieser Befehl kann nur in einem Server verwendet werden.", ephemeral=True)
             return
+
+        # Nur Turnierorganisatoren dürfen in Känalen unter der Kategorie "Spelltable Turniere" Turniere erstellen
+        official_tournament_roles = ["Turnier-Organisator", "Moderator", "Admin"]
+        if (ctx.channel.category
+            and ctx.channel.category.name in ("Spelltable Turniere")
+            and not any(role.name in official_tournament_roles for role in ctx.author.roles)):
+            # Use official_tournament_roles to look up roles
+            roles = [discord.utils.get(ctx.guild.roles, name=role_name) for role_name in official_tournament_roles]
+            # Collect roles that are not None
+            found_roles = [role for role in roles if role]
+            not_found_roles = [name for role, name in zip(roles, official_tournament_roles) if not role]
+            roles_mentions = ", ".join(role.mention for role in found_roles)
+            message = ""
+            if roles_mentions:
+                message += f"Du hast keine der Rolle(n) {roles_mentions} und darfst daher keine offiziellen Radio Ravnica Turniere erstellen!\nDu darfst gerne in einem anderen Kanal, der nicht unter der Kategorie \"Spelltable Turniere\" steht, ein Turnier erstellen."
+            if not_found_roles:
+                message += f"\nDie Rolle(n) {', '.join(f'`{name}`' for name in not_found_roles)} existieren nicht... Bitte benachrichtige einen Moderator des Servers!"
+            await ctx.respond(message.strip(), ephemeral=True)
+            return
         
         # Defer the interaction response to avoid timeout
         await ctx.defer(ephemeral=True)
