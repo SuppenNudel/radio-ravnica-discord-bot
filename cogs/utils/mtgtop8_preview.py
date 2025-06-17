@@ -42,7 +42,8 @@ class Card:
         return f"{self.quantity}x {self.name} ({self.group.name})"
     
     async def request_card_image(self):
-        """Fetches a card image from Scryfall."""
+        if self.image_url:
+            return self.image_url
         search_url = f"https://api.scryfall.com/cards/search?q=!\"{self.name}\" game:paper"
         response = requests.get(search_url)
         if response.status_code == 200:
@@ -59,6 +60,34 @@ class Card:
         else:
             log.error(f"Failed to fetch card image for {self.name}: {response.status_code}")
         return self.image_url
+    
+async def request_scryfall_card_images(deck_list: list[Card]):
+    # Split deck_list into batches of 75 cards (Scryfall API limit)
+    batch_size = 75
+    for i in range(0, len(deck_list), batch_size):
+        batch = deck_list[i:i+batch_size]
+        identifiers = [{"name": card.name} for card in batch]
+        response = requests.post(
+            "https://api.scryfall.com/cards/collection",
+            json={"identifiers": identifiers},
+            headers={"Content-Type": "application/json"}
+        )
+        if response.status_code == 200:
+            data = response.json()
+            cards_data = data.get("data", [])
+            # Map card names to image URLs
+            name_to_url = {}
+            for card_data in cards_data:
+                if "image_uris" in card_data:
+                    name_to_url[card_data["name"]] = card_data["image_uris"]["large"]
+                elif "card_faces" in card_data:
+                    name_to_url[card_data["name"]] = card_data["card_faces"][0]["image_uris"]["large"]
+            # Assign image_url to each Card in the batch
+            for card in batch:
+                if card.name in name_to_url:
+                    card.image_url = name_to_url[card.name]
+        else:
+            log.error(f"Failed to fetch card images from Scryfall: {response.status_code}")
 
 class MTGTop8Preview(Cog):
     def __init__(self, bot):
@@ -103,6 +132,8 @@ async def stack_by_4(deck_list: list[Card], title: str = "MTGTop8 Deck Preview")
     # Expand all main deck cards into (name, card) tuples first
     expanded = []
     image_cache = {}
+
+    await request_scryfall_card_images(deck_list)
     
     # Fetch image and resize
     async def fetch_card_image(card: Card):
