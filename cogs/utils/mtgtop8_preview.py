@@ -12,7 +12,7 @@ from io import BytesIO
 from collections import defaultdict, deque
 from enum import Enum
 
-MTGTOP8_URL_REGEX = r"https?://mtgtop8\.com/event\?e=\d+&d=\d+&f=\w+"
+MTGTOP8_URL_REGEX = r"https?://mtgtop8\.com/event\?(?:[^ ]*?&)?d=\d+(?:&[^ ]*)?"
 
 # Enum for card groups
 class CardGroup(Enum):
@@ -105,16 +105,25 @@ class MTGTop8Preview(Cog):
         match = re.search(MTGTOP8_URL_REGEX, message.content)
         if match:
             url = match.group(0)
-            await message.channel.send("🔍 Fetching MTGTop8 deck info...")
+            sent_message = await message.reply("🔍 MTGTop8-Deck-Infos werden abgerufen und Vorschau wird erstellt...")
             try:
-                deck_list, title = await request_deck_list("https://mtgtop8.com/event?e=69978&d=729958&f=LE&switch=visual")
-                preview_image = await stack_by_4(deck_list, title)
-                if preview_image:
-                    await message.channel.send(file=discord.File(preview_image, filename="preview.png"))
+                deck_list, title = await request_deck_list(url)
+                if deck_list:
+                    preview_image = await stack_by_4(deck_list, title)
+                    if preview_image:
+                        await sent_message.edit(content="", file=discord.File(preview_image, filename="preview.png"))
+                    else:
+                        await sent_message.edit(content="⚠️ Konnte deck infos nicht extrahieren.")
                 else:
-                    await message.channel.send("⚠️ Could not extract deck info.")
+                    await sent_message.edit(content="⚠️ Keine deckliste unter der URL gefunden.")
+            except requests.exceptions.ReadTimeout as e:
+                host = e.args[0].pool.host if hasattr(e.args[0], 'pool') else "unknown"
+                if host:
+                    await sent_message.edit(content=f"⏳ Anfrage zu {host} ist ausgelaufen. Bitte versuch es später nochmal.")
+                else:
+                    await sent_message.edit(content="⏳ Anfrage ist ausgelaufen. Bitte versuch es später nochmal.")
             except Exception as e:
-                await message.channel.send(f"❌ Error: {e}")
+                await sent_message.edit(content=f"❌ Fehler: {e}")
 
 async def stack_by_4(deck_list: list[Card], title: str = "MTGTop8 Deck Preview"):
     # Constants
@@ -296,7 +305,7 @@ async def stack_by_4(deck_list: list[Card], title: str = "MTGTop8 Deck Preview")
 async def request_deck_list(url: str) -> list[Card]:
     url += "&switch=text"  # Ensure we get the text version
 
-    response = requests.get(url)
+    response = requests.get(url, timeout=5)
     if not response.ok:
         raise IOError(f"Failed to fetch deck list from {url}: {response.status_code}")
 
