@@ -78,7 +78,8 @@ class MTGTop8Preview(Cog):
             url = match.group(0)
             await message.channel.send("🔍 Fetching MTGTop8 deck info...")
             try:
-                preview_image = screenshot_element_before_card_div(url)
+                deck_list, title = await request_deck_list("https://mtgtop8.com/event?e=69978&d=729958&f=LE&switch=visual")
+                preview_image = await stack_by_4(deck_list, title)
                 if preview_image:
                     await message.channel.send(file=discord.File(preview_image, filename="preview.png"))
                 else:
@@ -86,7 +87,7 @@ class MTGTop8Preview(Cog):
             except Exception as e:
                 await message.channel.send(f"❌ Error: {e}")
 
-async def stack_by_4(deck_list: list[Card]):
+async def stack_by_4(deck_list: list[Card], title: str = "MTGTop8 Deck Preview"):
     # Constants
     CARD_WIDTH, CARD_HEIGHT = 140, 195
     STACK_OFFSET = 25
@@ -122,7 +123,6 @@ async def stack_by_4(deck_list: list[Card]):
     lands = [card for card in main_deck if card.group == CardGroup.LANDS]
     non_lands = [card for card in main_deck if card.group != CardGroup.LANDS]
     main_deck = lands + non_lands
-
 
     # Step 1: Expand all main deck cards
     expanded = []
@@ -207,11 +207,34 @@ async def stack_by_4(deck_list: list[Card]):
     STACKS_PER_ROW = 5
     num_rows = (len(stacks) + STACKS_PER_ROW - 1) // STACKS_PER_ROW
 
-    # Calculate canvas size (add space for sideboard stack)
+    # --- Title rendering ---
+    # Prepare title font and size
+    try:
+        title_font = ImageFont.truetype("assets/beleren.ttf", 32)
+    except Exception:
+        title_font = ImageFont.load_default()
+    title_text = title
+    # Estimate title height
+    title_bbox = title_font.getbbox(title_text)
+    title_width = title_bbox[2] - title_bbox[0]
+    title_height = title_bbox[3] - title_bbox[1]
+    TITLE_MARGIN = 20
+    TITLE_AREA_HEIGHT = title_height + 2 * TITLE_MARGIN
+
+    # Calculate canvas size (add space for sideboard stack and title)
     canvas_width = H_SPACING + (STACKS_PER_ROW + 1) * (CARD_WIDTH + H_SPACING)
-    canvas_height = num_rows * (V_MARGIN * 2 + STACK_OFFSET * 3 + CARD_HEIGHT)
+    canvas_height = TITLE_AREA_HEIGHT + num_rows * (V_MARGIN * 2 + STACK_OFFSET * 3 + CARD_HEIGHT)
 
     img = Image.new("RGBA", (canvas_width, canvas_height), BG_COLOR)
+    draw = ImageDraw.Draw(img)
+
+    # Draw the title at the top center
+    draw.text(
+        ((canvas_width - title_width) // 2, TITLE_MARGIN),
+        title_text,
+        font=title_font,
+        fill=(255, 255, 255, 255)
+    )
 
     # Step 5: Draw main deck stacks in rows
     for index, stack in enumerate(stacks):
@@ -219,7 +242,7 @@ async def stack_by_4(deck_list: list[Card]):
         col = index % STACKS_PER_ROW
 
         x = H_SPACING + col * (CARD_WIDTH + H_SPACING)
-        y_offset = row * (V_MARGIN * 2 + STACK_OFFSET * 3 + CARD_HEIGHT)
+        y_offset = TITLE_AREA_HEIGHT + row * (V_MARGIN * 2 + STACK_OFFSET * 3 + CARD_HEIGHT)
 
         for i, (name, card_img) in enumerate(stack):
             y = y_offset + V_MARGIN + i * STACK_OFFSET
@@ -229,7 +252,7 @@ async def stack_by_4(deck_list: list[Card]):
     if sideboard_images:
         # Stack all sideboard cards vertically with offset
         sb_stack_height = V_MARGIN * 2 + STACK_OFFSET * (len(sideboard_images) - 1) + CARD_HEIGHT
-        sb_y = (canvas_height - sb_stack_height) // 2
+        sb_y = TITLE_AREA_HEIGHT + (canvas_height - TITLE_AREA_HEIGHT - sb_stack_height) // 2
         sb_x = H_SPACING + STACKS_PER_ROW * (CARD_WIDTH + H_SPACING)
         for i, (name, card_img) in enumerate(sideboard_images):
             y = sb_y + V_MARGIN + i * STACK_OFFSET
@@ -237,6 +260,7 @@ async def stack_by_4(deck_list: list[Card]):
 
     # Save
     img.save("deck_preview.png")
+    return "deck_preview.png"
 
 async def request_deck_list(url: str) -> list[Card]:
     url += "&switch=text"  # Ensure we get the text version
@@ -275,35 +299,19 @@ async def request_deck_list(url: str) -> list[Card]:
                 if card_name:
                     cards.append(Card(card_name, qty, current_group))
 
-    return cards
-
-
     # Grab basic info (example: deck name, player, event name, format)
     title_tag = soup.find("title")
     title = title_tag.get_text(strip=True) if title_tag else "MTGTop8 Deck"
 
-    card_lines = soup.find_all("div", {"class": "deck_line"})
-    if not card_lines:
-        raise ValueError(f"No card lines found in deck list from {url}")
-
-    # Attempt to extract a few sample cards for display
-    cards:dict[str, int] = {}
-    for line in card_lines:
-        # The text is usually like "4 Lightning Bolt"
-        qty = line.contents[0].strip() if line.contents else ""
-        card_span = line.find("span")
-        card_name = card_span.get_text(strip=True) if card_span else ""
-        cards[card_name] = int(qty) if qty.isdigit() else 0
-        
-    return cards
+    return cards, title
 
 def setup(bot):
     bot.add_cog(MTGTop8Preview(bot))
 
 if __name__ == "__main__":
     async def main():
-        deck_list = await request_deck_list("https://mtgtop8.com/event?e=69978&d=729958&f=LE&switch=visual")
-        await stack_by_4(deck_list)
+        deck_list, title = await request_deck_list("https://mtgtop8.com/event?e=69978&d=729958&f=LE&switch=visual")
+        await stack_by_4(deck_list, title)
         # screenshot_element_before_card_div("https://mtgtop8.com/event?e=69978&d=729958&f=LE&switch=visual")
 
     asyncio.run(main())
