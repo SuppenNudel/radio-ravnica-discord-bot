@@ -10,6 +10,7 @@ from PIL import Image
 from io import BytesIO
 from enum import Enum
 from modules import env
+import io
 
 MTGTOP8_URL_REGEX = r"https?://mtgtop8\.com/event\?(?:[^ ]*?&)?d=\d+(?:&[^ ]*)?"
 
@@ -59,6 +60,27 @@ class Card:
         else:
             log.error(f"Failed to fetch card image for {self.name}: {response.status_code}")
         return self.image_url
+    
+def shrink_image_if_needed(image_path, output_path, max_size_mb=10):
+    max_size_bytes = max_size_mb * 1024 * 1024
+
+    with Image.open(image_path) as img:
+        scale_factor = 0.95  # shrink a bit each iteration
+        buffer = io.BytesIO()
+        img.save(buffer, format='PNG')
+        
+        while buffer.tell() > max_size_bytes:
+            # Shrink the image
+            new_size = (int(img.width * scale_factor), int(img.height * scale_factor))
+            img = img.resize(new_size, Image.LANCZOS)
+            
+            # Recheck size
+            buffer = io.BytesIO()
+            img.save(buffer, format='PNG')
+
+        # Save the final version
+        with open(output_path, 'wb') as f:
+            f.write(buffer.getvalue())
     
 async def request_scryfall_card_images(deck_list: list[Card]):
     IMAGE_TYPE = "border_crop"
@@ -150,9 +172,14 @@ class MTGTop8Preview(Cog):
             if deck_list:
                 preview_image = await stack_cards(deck_id, deck_list, title)
                 if preview_image:
-                    link = upload_to_imgbb(preview_image, env.API_KEY_IMGBB)
-                    await sent_message.edit(content=link)
-                    # await sent_message.edit(content="", file=discord.File(preview_image, filename="preview.png"))
+                    link=None # uncomment if upload to imgbb is wanted
+                    # link = upload_to_imgbb(preview_image, env.API_KEY_IMGBB)
+                    if link:
+                        await sent_message.edit(content=link)
+                    else:                        
+                        # Example usage
+                        shrink_image_if_needed(preview_image, preview_image)
+                        await sent_message.edit(content="", file=discord.File(preview_image, filename="preview.png"))
                 else:
                     await sent_message.edit(content="⚠️ Konnte deck infos nicht extrahieren.")
             else:
