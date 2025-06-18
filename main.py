@@ -21,8 +21,8 @@ from ezcord import log, Bot
 import platform
 from modules import env
 
-LOG_WEBHOOK = os.getenv("LOG_WEBHOOK")
-IS_DEBUG = bool(os.getenv("DEBUG"))
+LOG_WEBHOOK = env.LOG_WEBHOOK
+IS_DEBUG = env.DEBUG
 
 ezcord.set_log(
     log_level=logging.DEBUG,

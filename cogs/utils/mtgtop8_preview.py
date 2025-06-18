@@ -1,7 +1,6 @@
 import re
 from ezcord import log, Cog
 import discord
-from discord.ext import commands
 import requests
 from bs4 import BeautifulSoup
 from io import BytesIO
@@ -9,26 +8,25 @@ from PIL import Image, ImageDraw, ImageFont
 import asyncio
 from PIL import Image
 from io import BytesIO
-from collections import defaultdict, deque
 from enum import Enum
 
 MTGTOP8_URL_REGEX = r"https?://mtgtop8\.com/event\?(?:[^ ]*?&)?d=\d+(?:&[^ ]*)?"
 
 # Enum for card groups
 class CardGroup(Enum):
+    COMMANDER = "COMMANDER"
     LANDS = "LANDS"
     CREATURES = "CREATURES"
-    INSTANTS_AND_SORC = "INSTANTS and SORC."
+    INSTANTS_AND_SORC = "INSTANTS AND SORC."
     OTHER_SPELLS = "OTHER SPELLS"
     SIDEBOARD = "SIDEBOARD"
-    UNKNOWN = "UNKNOWN"
 
     @classmethod
     def from_string(cls, label):
         for group in cls:
             if label.upper() == group.value:
                 return group
-        return cls.UNKNOWN
+        raise ValueError(f"{label} is not part of the CardGroup enum")
 
 # Card class
 class Card:
@@ -62,30 +60,57 @@ class Card:
         return self.image_url
     
 async def request_scryfall_card_images(deck_list: list[Card]):
-    # Split deck_list into batches of 75 cards (Scryfall API limit)
+    IMAGE_TYPE = "border_crop"
+
+    # Replace all "/" in card names with "//"
+    for card in deck_list:
+        card.name = card.name.replace("/", "//")
+
+    # Prepare identifiers, including names before "//" for split cards
+    identifiers = []
+    for card in deck_list:
+        identifiers.append({"name": card.name})
+        if "//" in card.name:
+            front_name = card.name.split(" // ")[0].strip()
+            if not any(iden["name"] == front_name for iden in identifiers):
+                identifiers.append({"name": front_name})
+
+    # Split identifiers into batches of 75 cards (Scryfall API limit)
     batch_size = 75
-    for i in range(0, len(deck_list), batch_size):
-        batch = deck_list[i:i+batch_size]
-        identifiers = [{"name": card.name} for card in batch]
+    for i in range(0, len(identifiers), batch_size):
+        batch = identifiers[i:i+batch_size]
         response = requests.post(
             "https://api.scryfall.com/cards/collection",
-            json={"identifiers": identifiers},
+            json={"identifiers": batch},
             headers={"Content-Type": "application/json"}
         )
         if response.status_code == 200:
             data = response.json()
+            if data.get("not_found"):
+                print(f"WARNING: Cards not found: {data['not_found']}")
             cards_data = data.get("data", [])
             # Map card names to image URLs
             name_to_url = {}
             for card_data in cards_data:
+                image_url = None
                 if "image_uris" in card_data:
-                    name_to_url[card_data["name"]] = card_data["image_uris"]["large"]
+                    image_url = card_data["image_uris"].get(IMAGE_TYPE) or card_data["image_uris"].get("large")
                 elif "card_faces" in card_data:
-                    name_to_url[card_data["name"]] = card_data["card_faces"][0]["image_uris"]["large"]
-            # Assign image_url to each Card in the batch
-            for card in batch:
+                    image_url = card_data["card_faces"][0]["image_uris"].get(IMAGE_TYPE) or card_data["card_faces"][0]["image_uris"].get("large")
+                if image_url:
+                    name_to_url[card_data["name"]] = image_url
+                    if "//" in card_data["name"]:
+                        name_to_url[card_data["name"].split(" // ")[0].strip()] = image_url
+                else:
+                    log.error(f"No image found for {card_data['name']} in Scryfall response")
+            # Assign image_url to each Card in the deck_list
+            for card in deck_list:
                 if card.name in name_to_url:
                     card.image_url = name_to_url[card.name]
+                elif "//" in card.name:
+                    front_name = card.name.split(" // ")[0].strip()
+                    if front_name in name_to_url:
+                        card.image_url = name_to_url[front_name]
         else:
             log.error(f"Failed to fetch card images from Scryfall: {response.status_code}")
 
@@ -107,9 +132,9 @@ class MTGTop8Preview(Cog):
             url = match.group(0)
             sent_message = await message.reply("🔍 MTGTop8-Deck-Infos werden abgerufen und Vorschau wird erstellt...")
             try:
-                deck_list, title = await request_deck_list(url)
+                deck_list, title, deck_id = await request_deck_list(url)
                 if deck_list:
-                    preview_image = await stack_by_4(deck_list, title)
+                    preview_image = await stack_cards(deck_id, deck_list, title)
                     if preview_image:
                         await sent_message.edit(content="", file=discord.File(preview_image, filename="preview.png"))
                     else:
@@ -125,101 +150,52 @@ class MTGTop8Preview(Cog):
             except Exception as e:
                 await sent_message.edit(content=f"❌ Fehler: {e}")
 
-async def stack_by_4(deck_list: list[Card], title: str = "MTGTop8 Deck Preview"):
+async def stack_cards(deck_id, deck_list: list[Card], title: str = "MTGTop8 Deck Preview"):
     # Constants
-    CARD_WIDTH, CARD_HEIGHT = 140, 195
-    STACK_OFFSET = 25
-    H_SPACING = 20
+    CARD_WIDTH, CARD_HEIGHT = 200, 280
+    H_SPACING = 10
     V_MARGIN = 10
     BG_COLOR = (0, 0, 0, 0)
+    STACK_OVERLAP = 27  # Amount of vertical overlap between stacked cards
+    STACK_OVERLAP_SIDEBOARD = STACK_OVERLAP * 2
 
     # Separate main deck and sideboard
     main_deck = [card for card in deck_list if card.group != CardGroup.SIDEBOARD]
     sideboard = [card for card in deck_list if card.group == CardGroup.SIDEBOARD]
 
-    # Sort expanded card images so that lands are in the first stacks (reading order)
-    # Expand all main deck cards into (name, card) tuples first
-    expanded = []
-    image_cache = {}
+    card_group_list = list(CardGroup)
 
+    # Sort main deck by group order, then by name
+    def group_sort_key(card:Card):
+        return (card_group_list.index(card.group), card.name.lower())
+        
+    main_deck = sorted(main_deck, key=group_sort_key)
+
+    # Fetch all images
     await request_scryfall_card_images(deck_list)
-    
-    # Fetch image and resize
-    async def fetch_card_image(card: Card):
-        image_url: str = await card.request_card_image()
-        response = requests.get(image_url)
-        return Image.open(BytesIO(response.content)).resize((CARD_WIDTH, CARD_HEIGHT))
 
-    for card in main_deck:
-        if card.image_url not in image_cache:
-            image_cache[card.image_url] = await fetch_card_image(card)
-        for _ in range(card.quantity):
-            expanded.append((card, image_cache[card.image_url]))
-
-    # Now, sort expanded so that all lands come first (preserving order within lands/non-lands)
-    expanded_lands = [(c, img) for (c, img) in expanded if c.group == CardGroup.LANDS]
-    expanded_non_lands = [(c, img) for (c, img) in expanded if c.group != CardGroup.LANDS]
-    expanded = expanded_lands + expanded_non_lands
-    lands = [card for card in main_deck if card.group == CardGroup.LANDS]
-    non_lands = [card for card in main_deck if card.group != CardGroup.LANDS]
-    main_deck = lands + non_lands
-
-    # Step 1: Expand all main deck cards
-    expanded = []
+    # Prepare image cache
     image_cache = {}
 
-    for card in main_deck:
+    async def fetch_card_image(card: Card):
         if card.image_url not in image_cache:
-            image_cache[card.image_url] = await fetch_card_image(card)
-        for _ in range(card.quantity):
-            expanded.append((card.name, image_cache[card.image_url]))
+            response = requests.get(card.image_url)
+            img = Image.open(BytesIO(response.content)).resize((CARD_WIDTH, CARD_HEIGHT))
+            image_cache[card.image_url] = img
+        return image_cache[card.image_url]
 
-    # Step 2: Build stacks of exactly 4 cards
+    # Prepare stacks: group by card, stack up to 4, show number if >4
     stacks = []
-    grouped = defaultdict(deque)
-    for name, img in expanded:
-        grouped[name].append(img)
+    for card in main_deck:
+        img = await fetch_card_image(card)
+        stacks.append((card, img, card.quantity))
 
-    # 2a: Take all lands first (regardless of quantity)
-    for name in list(grouped):
-        # Find the card object for this name
-        card_obj = next((c for c in main_deck if c.name == name), None)
-        if card_obj and card_obj.group == CardGroup.LANDS:
-            stack = []
-            while grouped[name]:
-                stack.append((name, grouped[name].popleft()))
-                if len(stack) == 4:
-                    stacks.append(stack)
-                    stack = []
-            if stack:
-                stacks.append(stack)
-            del grouped[name]
-
-    # 2a: Take all full 4-ofs first
-    for name in list(grouped):
-        if len(grouped[name]) >= 4:
-            stack = [(name, grouped[name].popleft()) for _ in range(4)]
-            stacks.append(stack)
-            if not grouped[name]:
-                del grouped[name]
-
-    # 2b: Mix remaining cards into 4-card stacks
-    remaining = []
-    for name, imgs in grouped.items():
-        for img in imgs:
-            remaining.append((name, img))
-
-    for i in range(0, len(remaining), 4):
-        chunk = remaining[i:i+4]
-        stacks.append(chunk)
-
-    # Step 3: Prepare sideboard stack (all sideboard cards in one stack)
+    # Prepare sideboard stack (all sideboard cards overlapped)
     sideboard_images = []
-    # Add a "Sideboard" header image at the top of the sideboard stack (only once)
     if sideboard:
         HEADER_WIDTH, HEADER_HEIGHT = 140, 40
         header_img = Image.new("RGBA", (HEADER_WIDTH, HEADER_HEIGHT), (30, 30, 30, 255))
-        draw = ImageDraw.Draw(header_img)
+        draw_sb = ImageDraw.Draw(header_img)
         try:
             font = ImageFont.truetype("assets/beleren.ttf", 24)
         except Exception:
@@ -227,43 +203,78 @@ async def stack_by_4(deck_list: list[Card], title: str = "MTGTop8 Deck Preview")
         text = "Sideboard"
         bbox = font.getbbox(text)
         text_width = bbox[2] - bbox[0]
-        text_height = bbox[3] - bbox[1]
-        # Move the text a bit higher (e.g., 4 pixels from the top)
-        draw.text(
+        # Get bounding box of the text
+        bbox = font.getbbox(text)
+        left, top, right, bottom = bbox
+        text_width = right - left
+        text_height = bottom - top
+
+        # Draw black rectangle behind text with padding
+        padding = 10
+        x = (HEADER_WIDTH - text_width) // 2
+        y = 4
+        draw_sb.rectangle(
+            [x + left - padding, y + top - padding, x + right + padding, y + bottom + padding],
+            fill="black"
+        )
+        draw_sb.text(
             ((HEADER_WIDTH - text_width) // 2, 4),
             text,
             font=font,
             fill=(255, 255, 255, 255)
         )
         sideboard_images.append(("Sideboard", header_img))
-        # Add each sideboard card according to its quantity
+        # Overlap all sideboard cards
+        sb_imgs = []
+        sb_cards = []
         for card in sideboard:
-            if card.image_url not in image_cache:
-                image_cache[card.image_url] = await fetch_card_image(card)
+            img = await fetch_card_image(card)
             for _ in range(card.quantity):
-                sideboard_images.append((card.name, image_cache[card.image_url]))
-
-    # Step 4: Create canvas with row logic
-    STACKS_PER_ROW = 5
-    num_rows = (len(stacks) + STACKS_PER_ROW - 1) // STACKS_PER_ROW
+                sb_imgs.append(img)
+                sb_cards.append(card)
+        if sb_imgs:
+            # Create one image with all sideboard cards overlapped
+            sb_stack_height = CARD_HEIGHT + (len(sb_imgs) - 1) * STACK_OVERLAP_SIDEBOARD
+            sb_stack_img = Image.new("RGBA", (CARD_WIDTH, sb_stack_height), (0, 0, 0, 0))
+            for i, img in enumerate(sb_imgs):
+                sb_stack_img.paste(img, (0, i * STACK_OVERLAP_SIDEBOARD))
+            sideboard_images.append(("SideboardStack", sb_stack_img, len(sb_imgs)))
 
     # --- Title rendering ---
-    # Prepare title font and size
     try:
-        title_font = ImageFont.truetype("assets/beleren.ttf", 32)
+        title_font = ImageFont.truetype("assets/beleren.ttf", 45)
     except Exception:
         title_font = ImageFont.load_default()
     title_text = title
-    # Estimate title height
     title_bbox = title_font.getbbox(title_text)
     title_width = title_bbox[2] - title_bbox[0]
     title_height = title_bbox[3] - title_bbox[1]
     TITLE_MARGIN = 20
     TITLE_AREA_HEIGHT = title_height + 2 * TITLE_MARGIN
 
-    # Calculate canvas size (add space for sideboard stack and title)
+    # Layout
+    STACKS_PER_ROW = 6
+
+    # Calculate max stack height for vertical stacking with overlap
+    def stack_height(qty):
+        if qty <= 4:
+            return CARD_HEIGHT + (qty - 1) * STACK_OVERLAP if qty > 0 else 0
+        else:
+            return CARD_HEIGHT
+
+    max_stack_height = max(stack_height(card.quantity) for card, _, _ in stacks) if stacks else CARD_HEIGHT
+    num_rows = (len(stacks) + STACKS_PER_ROW - 1) // STACKS_PER_ROW
+    # Calculate sideboard stack height for canvas
+    sb_stack_img_height = 0
+    if sideboard_images and len(sideboard_images) > 1:
+        sb_stack_img_height = sideboard_images[1][1].height
+    sb_total_height = (sideboard_images[0][1].height if sideboard_images else 0) + sb_stack_img_height
+
     canvas_width = H_SPACING + (STACKS_PER_ROW + 1) * (CARD_WIDTH + H_SPACING)
-    canvas_height = TITLE_AREA_HEIGHT + num_rows * (V_MARGIN * 2 + STACK_OFFSET * 3 + CARD_HEIGHT)
+    canvas_height = max(
+        TITLE_AREA_HEIGHT + num_rows * (V_MARGIN * 2 + max_stack_height),
+        TITLE_AREA_HEIGHT + sb_total_height + V_MARGIN * 2
+    )
 
     img = Image.new("RGBA", (canvas_width, canvas_height), BG_COLOR)
     draw = ImageDraw.Draw(img)
@@ -276,34 +287,81 @@ async def stack_by_4(deck_list: list[Card], title: str = "MTGTop8 Deck Preview")
         fill=(255, 255, 255, 255)
     )
 
-    # Step 5: Draw main deck stacks in rows
-    for index, stack in enumerate(stacks):
+    # Draw main deck stacks (cards overlapped under each other)
+    try:
+        qty_font = ImageFont.truetype("assets/beleren.ttf", 35)
+    except Exception:
+        qty_font = ImageFont.load_default()
+
+    for index, (card, card_img, quantity) in enumerate(stacks):
         row = index // STACKS_PER_ROW
         col = index % STACKS_PER_ROW
-
         x = H_SPACING + col * (CARD_WIDTH + H_SPACING)
-        y_offset = TITLE_AREA_HEIGHT + row * (V_MARGIN * 2 + STACK_OFFSET * 3 + CARD_HEIGHT)
+        y = TITLE_AREA_HEIGHT + row * (V_MARGIN * 2 + max_stack_height)
 
-        for i, (name, card_img) in enumerate(stack):
-            y = y_offset + V_MARGIN + i * STACK_OFFSET
+        if quantity <= 4:
+            # Overlap the cards vertically
+            for i in range(quantity):
+                img.paste(card_img, (x, y + i * STACK_OVERLAP))
+        else:
+            # Paste one card and write the quantity
             img.paste(card_img, (x, y))
+            qty_text = f"x{quantity}"
+            bbox = qty_font.getbbox(qty_text)
+            text_width = bbox[2] - bbox[0]
+            text_height = bbox[3] - bbox[1]
+            text_x = x + CARD_WIDTH - text_width - 8
+            text_y = y + CARD_HEIGHT / 2 - text_height - 8
+            # Draw a semi-transparent rectangle behind the text for readability
+            rect_x0 = text_x - 4
+            rect_y0 = text_y - 2
+            rect_x1 = text_x + text_width + 4
+            rect_y1 = text_y + text_height + 2
+            draw.rectangle([rect_x0, rect_y0, rect_x1, rect_y1], fill=(0, 0, 0, 180))
+            draw.text((text_x, text_y), qty_text, font=qty_font, fill=(255, 255, 0, 255))
 
-    # Step 6: Draw sideboard stack to the right of main deck stacks, vertically centered
+    # Draw sideboard stack to the right of main deck stacks, vertically centered
     if sideboard_images:
-        # Stack all sideboard cards vertically with offset
-        sb_stack_height = V_MARGIN * 2 + STACK_OFFSET * (len(sideboard_images) - 1) + CARD_HEIGHT
-        sb_y = TITLE_AREA_HEIGHT + (canvas_height - TITLE_AREA_HEIGHT - sb_stack_height) // 2
         sb_x = H_SPACING + STACKS_PER_ROW * (CARD_WIDTH + H_SPACING)
-        for i, (name, card_img) in enumerate(sideboard_images):
-            y = sb_y + V_MARGIN + i * STACK_OFFSET
-            img.paste(card_img, (sb_x, y))
+        # Draw header
+        header_img = sideboard_images[0][1]
+        sb_y = TITLE_AREA_HEIGHT + V_MARGIN
+        img.paste(header_img, (sb_x, sb_y))
+        y_offset = sb_y + header_img.height
+        # Draw overlapped sideboard stack
+        if len(sideboard_images) > 1:
+            _, sb_stack_img, sb_qty = sideboard_images[1]
+            img.paste(sb_stack_img, (sb_x, y_offset))
+            # Draw quantity if more than 1
+            # if sb_qty > 1:
+            #     qty_text = f"x{sb_qty}"
+            #     bbox = qty_font.getbbox(qty_text)
+            #     text_width = bbox[2] - bbox[0]
+            #     text_height = bbox[3] - bbox[1]
+            #     text_x = sb_x + CARD_WIDTH - text_width - 8
+            #     text_y = y_offset + sb_stack_img.height - text_height - 8
+            #     rect_x0 = text_x - 4
+            #     rect_y0 = text_y - 2
+            #     rect_x1 = text_x + text_width + 4
+            #     rect_y1 = text_y + text_height + 2
+            #     draw.rectangle([rect_x0, rect_y0, rect_x1, rect_y1], fill=(0, 0, 0, 180))
+                # draw.text((text_x, text_y), qty_text, font=qty_font, fill=(255, 255, 0, 255))
 
-    # Save
-    img.save("deck_preview.png")
-    return "deck_preview.png"
+    file_location = f"tmp/deck_preview_{deck_id}.png"
+    img.save(file_location)
+    return file_location
 
-async def request_deck_list(url: str) -> list[Card]:
+import urllib.parse
+
+async def request_deck_list(url: str) -> tuple[list[Card], str, str]:
     url += "&switch=text"  # Ensure we get the text version
+
+    # Extract deck_id from the URL (d= parameter)
+    parsed = urllib.parse.urlparse(url)
+    query = urllib.parse.parse_qs(parsed.query)
+    deck_id = query.get("d", [None])[0]
+    if not deck_id:
+        raise ValueError("No deck_id (d= parameter) found in the URL.")
 
     response = requests.get(url, timeout=5)
     if not response.ok:
@@ -312,18 +370,17 @@ async def request_deck_list(url: str) -> list[Card]:
     soup = BeautifulSoup(response.text, "html.parser")
 
     cards = []
-    
-    for column in soup.find_all('div', style=lambda v: v and v.startswith('margin:3px')):
-        current_group = CardGroup.UNKNOWN
+    current_group = None  # Persist across columns
 
+    for column in soup.find_all('div', style=lambda v: v and v.startswith('margin:3px')):
         for child in column.find_all('div', recursive=False):
             classes = child.get('class', [])
 
             if 'O14' in classes:
                 label = child.get_text(strip=True).upper()
-                match = re.search(r'\d+\s+(.*)', label)
+                match = re.search(r'\d+\s+([A-Z\s\.&]+)(\(\d+\))?', label)
                 group_label = match.group(1) if match else label
-                current_group = CardGroup.from_string(group_label)
+                current_group = CardGroup.from_string(group_label.strip())
                 continue
 
             if 'deck_line' in classes:
@@ -343,15 +400,14 @@ async def request_deck_list(url: str) -> list[Card]:
     title_tag = soup.find("title")
     title = title_tag.get_text(strip=True) if title_tag else "MTGTop8 Deck"
 
-    return cards, title
+    return cards, title, deck_id
 
 def setup(bot):
     bot.add_cog(MTGTop8Preview(bot))
 
 if __name__ == "__main__":
     async def main():
-        deck_list, title = await request_deck_list("https://mtgtop8.com/event?e=69978&d=729958&f=LE&switch=visual")
-        await stack_by_4(deck_list, title)
-        # screenshot_element_before_card_div("https://mtgtop8.com/event?e=69978&d=729958&f=LE&switch=visual")
+        deck_list, title, deck_id = await request_deck_list("https://mtgtop8.com/event?d=729438")
+        await stack_cards(deck_id, deck_list, title)
 
     asyncio.run(main())
