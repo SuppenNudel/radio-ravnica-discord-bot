@@ -9,6 +9,7 @@ import asyncio
 from PIL import Image
 from io import BytesIO
 from enum import Enum
+from modules import env
 
 MTGTOP8_URL_REGEX = r"https?://mtgtop8\.com/event\?(?:[^ ]*?&)?d=\d+(?:&[^ ]*)?"
 
@@ -131,31 +132,38 @@ class MTGTop8Preview(Cog):
         if match:
             url = match.group(0)
             sent_message = await message.reply("🔍 MTGTop8-Deck-Infos werden abgerufen und Vorschau wird erstellt...")
+            deck_list = None
             try:
                 deck_list, title, deck_id = await request_deck_list(url)
-                if deck_list:
-                    preview_image = await stack_cards(deck_id, deck_list, title)
-                    if preview_image:
-                        await sent_message.edit(content="", file=discord.File(preview_image, filename="preview.png"))
-                    else:
-                        await sent_message.edit(content="⚠️ Konnte deck infos nicht extrahieren.")
-                else:
-                    await sent_message.edit(content="⚠️ Keine deckliste unter der URL gefunden.")
             except requests.exceptions.ReadTimeout as e:
                 host = e.args[0].pool.host if hasattr(e.args[0], 'pool') else "unknown"
                 if host:
                     await sent_message.edit(content=f"⏳ Anfrage zu {host} ist ausgelaufen. Bitte versuch es später nochmal.")
                 else:
                     await sent_message.edit(content="⏳ Anfrage ist ausgelaufen. Bitte versuch es später nochmal.")
+            except discord.errors.HTTPException as e:
+                if e.code == 413:
+                    await sent_message.edit(content=f"🖼 das generierte Bild ist leider zu groß zum Hochladen. <@356120044754698252> guck mal bitte nach! :)")
             except Exception as e:
                 await sent_message.edit(content=f"❌ Fehler: {e}")
 
+            if deck_list:
+                preview_image = await stack_cards(deck_id, deck_list, title)
+                if preview_image:
+                    link = upload_to_imgbb(preview_image, env.API_KEY_IMGBB)
+                    await sent_message.edit(content=link)
+                    # await sent_message.edit(content="", file=discord.File(preview_image, filename="preview.png"))
+                else:
+                    await sent_message.edit(content="⚠️ Konnte deck infos nicht extrahieren.")
+            else:
+                await sent_message.edit(content="⚠️ Keine deckliste unter der URL gefunden.")
+
 async def stack_cards(deck_id, deck_list: list[Card], title: str = "MTGTop8 Deck Preview"):
     # Constants
-    CARD_WIDTH, CARD_HEIGHT = 200, 280
+    CARD_WIDTH = 200
+    CARD_HEIGHT = int(CARD_WIDTH * 1.4) # mtg card ratio
     H_SPACING = 10
     V_MARGIN = 10
-    BG_COLOR = (0, 0, 0, 0)
     STACK_OVERLAP = 27  # Amount of vertical overlap between stacked cards
     STACK_OVERLAP_SIDEBOARD = STACK_OVERLAP * 2
 
@@ -194,7 +202,7 @@ async def stack_cards(deck_id, deck_list: list[Card], title: str = "MTGTop8 Deck
     sideboard_images = []
     if sideboard:
         HEADER_WIDTH, HEADER_HEIGHT = 140, 40
-        header_img = Image.new("RGBA", (HEADER_WIDTH, HEADER_HEIGHT), (30, 30, 30, 255))
+        header_img = Image.new("RGB", (HEADER_WIDTH, HEADER_HEIGHT))
         draw_sb = ImageDraw.Draw(header_img)
         try:
             font = ImageFont.truetype("assets/beleren.ttf", 24)
@@ -209,14 +217,6 @@ async def stack_cards(deck_id, deck_list: list[Card], title: str = "MTGTop8 Deck
         text_width = right - left
         text_height = bottom - top
 
-        # Draw black rectangle behind text with padding
-        padding = 10
-        x = (HEADER_WIDTH - text_width) // 2
-        y = 4
-        draw_sb.rectangle(
-            [x + left - padding, y + top - padding, x + right + padding, y + bottom + padding],
-            fill="black"
-        )
         draw_sb.text(
             ((HEADER_WIDTH - text_width) // 2, 4),
             text,
@@ -235,7 +235,7 @@ async def stack_cards(deck_id, deck_list: list[Card], title: str = "MTGTop8 Deck
         if sb_imgs:
             # Create one image with all sideboard cards overlapped
             sb_stack_height = CARD_HEIGHT + (len(sb_imgs) - 1) * STACK_OVERLAP_SIDEBOARD
-            sb_stack_img = Image.new("RGBA", (CARD_WIDTH, sb_stack_height), (0, 0, 0, 0))
+            sb_stack_img = Image.new("RGB", (CARD_WIDTH, sb_stack_height))
             for i, img in enumerate(sb_imgs):
                 sb_stack_img.paste(img, (0, i * STACK_OVERLAP_SIDEBOARD))
             sideboard_images.append(("SideboardStack", sb_stack_img, len(sb_imgs)))
@@ -253,7 +253,10 @@ async def stack_cards(deck_id, deck_list: list[Card], title: str = "MTGTop8 Deck
     TITLE_AREA_HEIGHT = title_height + 2 * TITLE_MARGIN
 
     # Layout
-    STACKS_PER_ROW = 6
+    if len(main_deck) <= 24:
+        STACKS_PER_ROW = 6
+    else:
+        STACKS_PER_ROW = 10
 
     # Calculate max stack height for vertical stacking with overlap
     def stack_height(qty):
@@ -276,7 +279,7 @@ async def stack_cards(deck_id, deck_list: list[Card], title: str = "MTGTop8 Deck
         TITLE_AREA_HEIGHT + sb_total_height + V_MARGIN * 2
     )
 
-    img = Image.new("RGBA", (canvas_width, canvas_height), BG_COLOR)
+    img = Image.new("RGB", (canvas_width, canvas_height))
     draw = ImageDraw.Draw(img)
 
     # Draw the title at the top center
@@ -401,6 +404,28 @@ async def request_deck_list(url: str) -> tuple[list[Card], str, str]:
     title = title_tag.get_text(strip=True) if title_tag else "MTGTop8 Deck"
 
     return cards, title, deck_id
+
+def upload_to_imgbb(image_path, api_key):
+    with open(image_path, 'rb') as f:
+        encoded_image = f.read()
+
+    response = requests.post(
+        'https://api.imgbb.com/1/upload',
+        params={
+            'key': api_key,
+        },
+        files={
+            'image': encoded_image,
+        }
+    )
+
+    if response.status_code == 200:
+        link = response.json()['data']['url']
+        print("Uploaded:", link)
+        return link
+    else:
+        print("Error:", response.status_code, response.text)
+
 
 def setup(bot):
     bot.add_cog(MTGTop8Preview(bot))
