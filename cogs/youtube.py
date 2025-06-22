@@ -57,7 +57,7 @@ class Youtube(commands.Cog):
     async def get_latest_content(self, channel:YoutubeChannel, content_type:ContentType):
         generator = scrapetube.get_channel(
             channel_username=channel.name,
-            limit=5,
+            limit=10,
             content_type=content_type.value,
             sort_by='newest')
         skipped = []
@@ -66,7 +66,7 @@ class Youtube(commands.Cog):
                 skipped.append(content)
                 continue
             return content
-        log.error(f"No 'non-badge' {content_type} in the last 5 videos")
+        log.error(f"No 'non-badge' {content_type} in the last {limit} videos")
         return None
 
     @tasks.loop(minutes=5)
