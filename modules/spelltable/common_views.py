@@ -96,23 +96,24 @@ class ReportMatchModal(discord.ui.Modal):
         return instance
 
     async def callback(self, interaction: discord.Interaction):
+        score1 = int(self.p1_score.value) if self.p1_score.value else 0
+        score2 = int(self.p2_score.value) if self.p2_score.value else 0
+        draw_score = int(self.draw_score.value) if self.draw_score.value else 0
         try:
-            self.match.set_result(int(self.p1_score.value), int(self.p2_score.value), int(self.draw_score.value) if self.draw_score.value else 0)
+            self.match.set_result(score1, score2, draw_score)
         except ValueError as e:
-            await interaction.respond(f"Dein Match Resultat {int(self.p1_score.value)}-{int(self.p2_score.value)}-{int(self.draw_score.value) if self.draw_score.value else 0} ist invalide: {e}", ephemeral=True)
+            await interaction.respond(f"Dein Match Resultat {score1}-{score2}-{draw_score} ist invalide: {e}", ephemeral=True)
             return
 
-        await interaction.response.send_message(f"{self.player1_user.mention} {self.p1_score.value} - {self.p2_score.value} {self.player2_user.mention}{f' ({self.draw_score.value} Unentschieden)' if self.draw_score.value else ''}\nGGs!")
+        await interaction.response.send_message(f"{self.player1_user.mention} {score1} - {score2} {self.player2_user.mention}{f' ({draw_score} Unentschieden)' if draw_score else ''}\nGGs!")
 
         if env.DEBUG:
             swiss_mtg.simulate_remaining_matches(self.tournament.swiss_tournament)
 
-        log_text = f"Match result submitted: {self.player1_user.mention} vs {self.player2_user.mention} → {self.p1_score.value}-{self.p2_score.value}-{self.draw_score.value if self.draw_score.value else 0}"
+        log_text = f"Match result submitted: {self.player1_user.mention} vs {self.player2_user.mention} → {score1}-{score2}-{draw_score}"
         link_log.info(f"{log_text} in {interaction.message.jump_url}")
         await self.tournament.update_pairings(self.round)
         await update_standings(self.tournament, interaction)
-        # TODO Enable "Runde beenden" Button (only usable by TO/Manager)
-        # after that button is clicked, calculate Standings and disable Report Match Result Button
 
 class ConfirmDropModal(discord.ui.Modal):
     def __init__(self, player:swiss_mtg.Player, tournament:SpelltableTournament):
