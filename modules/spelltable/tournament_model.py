@@ -149,7 +149,7 @@ async def update_tournament_message(guild:discord.Guild):
             calendar_message = await guild.get_channel(env.SPELLTABLE_CALENDAR_CHANNEL_ID).send(tourney_list_message)
         env.SPELLTABLE_CALENDAR_MESSAGE_ID = calendar_message.id
         env.save_to_env("SPELLTABLE_CALENDAR_MESSAGE_ID", calendar_message.id)
-    link_log.info(f"Tournament message updated: {calendar_message.jump_url}")
+    link_log.info(f"Tournament Overview Message updated: {calendar_message.jump_url}")
 
 async def use_custom_try(purpose:str, func, tournament:"SpelltableTournament"):
     try:

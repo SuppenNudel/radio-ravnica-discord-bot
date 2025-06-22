@@ -104,14 +104,15 @@ class ReportMatchModal(discord.ui.Modal):
         except ValueError as e:
             await interaction.respond(f"Dein Match Resultat {score1}-{score2}-{draw_score} ist invalide: {e}", ephemeral=True)
             return
-
-        await interaction.response.send_message(f"{self.player1_user.mention} {score1} - {score2} {self.player2_user.mention}{f' ({draw_score} Unentschieden)' if draw_score else ''}\nGGs!")
+        
+        await interaction.response.defer()
+        gg_message = await interaction.followup.send(f"{self.player1_user.mention} {score1} - {score2} {self.player2_user.mention}{f' ({draw_score} Unentschieden)' if draw_score else ''}\nGGs!", wait=True)
 
         if env.DEBUG:
             swiss_mtg.simulate_remaining_matches(self.tournament.swiss_tournament)
 
         log_text = f"Match result submitted: {self.player1_user.mention} vs {self.player2_user.mention} → {score1}-{score2}-{draw_score}"
-        link_log.info(f"{log_text} in {interaction.message.jump_url}")
+        link_log.info(f"{log_text} in {gg_message.jump_url}")
         await self.tournament.update_pairings(self.round)
         await update_standings(self.tournament, interaction)
 
