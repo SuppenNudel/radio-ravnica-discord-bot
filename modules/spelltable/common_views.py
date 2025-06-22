@@ -169,6 +169,14 @@ async def update_standings(tournament:SpelltableTournament, interaction: discord
     else:
         async def do_the_thing():
             message_standings = await interaction.followup.send(content=content, view=view, file=standings_file)
+            # dm organizer
+            to = await tournament.organizer
+            can_do = None
+            if type(view) == FinishTournamentView:
+                can_do = "das Turnier abschließen"
+            elif type(view) == StartNextRoundView:
+                can_do = "die nächste Runde starten"
+            await to.send(f"🏆 Die Platzierungen für die {tournament.swiss_tournament.current_round().round_number}. Runde des Turniers `{tournament.title}` wurden gepostet.\nDu kannst {can_do}...\n{message_standings.jump_url}")
             current_round.message_id_standings = message_standings.id
         await use_custom_try("Platzierungen Senden", do_the_thing, tournament)
 
@@ -409,13 +417,13 @@ async def next_round(tournament:SpelltableTournament, interaction:discord.Intera
                 if user1:
                     try:
                         p2_member = await tournament.get_member(match.player2.player_id)
-                        await user1.send(f"Du spielst gegen <@{match.player2.player_id}> ({p2_member.display_name}) in der {round.round_number}. Runde im Turnier `{tournament.title}`: {new_pairings_message.jump_url}")
+                        await user1.send(f"🤺 Du spielst gegen <@{match.player2.player_id}> ({p2_member.display_name}) in der {round.round_number}. Runde im Turnier `{tournament.title}`: {new_pairings_message.jump_url}")
                     except discord.Forbidden as forbidden:
                         log.error(f"Could not send message to {user1.display_name} ({user1.id})")
                 if user2:
                     try:
                         p1_member = await tournament.get_member(match.player1.player_id)
-                        await user2.send(f"Du spielst gegen <@{match.player1.player_id}> ({p1_member.display_name}) in der {round.round_number}. Runde im Turnier `{tournament.title}`: {new_pairings_message.jump_url}")
+                        await user2.send(f"🤺 Du spielst gegen <@{match.player1.player_id}> ({p1_member.display_name}) in der {round.round_number}. Runde im Turnier `{tournament.title}`: {new_pairings_message.jump_url}")
                     except discord.Forbidden as forbidden:
                         log.error(f"Could not send message to {user2.display_name} ({user2.id})")
 
