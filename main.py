@@ -67,7 +67,8 @@ async def on_ready():
 if __name__ == "__main__":
     os.makedirs("tmp", exist_ok=True)
     if IS_DEBUG:
-        bot.load_extension('cogs.utils.mtgtop8_preview')
+        bot.load_extension('cogs.feed.youtube')
+        bot.load_extension('cogs.feed.instagram')
     else:
         bot.load_cogs(subdirectories=True, ignored_cogs=["ping", "hack", "notion_to_forum"])
     bot.add_status_changer(

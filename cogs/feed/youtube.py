@@ -8,7 +8,7 @@ from enum import Enum
 
 class ContentType(Enum):
     VIDEOS = "videos"
-    # SHORTS = "shorts"
+    SHORTS = "shorts"
     STREAMS = "streams"
 
 class YoutubeChannel():
@@ -55,6 +55,7 @@ class Youtube(commands.Cog):
             await self.discord_channel.send(f"<@&{os.getenv('ROLE_ANNOUNCEMENT')}>\nneues Video von **<@{yt_channel.dc_user_id}>**\n\n{url}")
 
     async def get_latest_content(self, channel:YoutubeChannel, content_type:ContentType):
+        limit = 10
         generator = scrapetube.get_channel(
             channel_username=channel.name,
             limit=10,
@@ -66,7 +67,7 @@ class Youtube(commands.Cog):
                 skipped.append(content)
                 continue
             return content
-        log.error(f"No 'non-badge' {content_type} in the last {limit} videos")
+        log.warning(f"No 'non-badge' {content_type} in the last {limit} videos")
         return None
 
     @tasks.loop(minutes=5)

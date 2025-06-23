@@ -13,3 +13,4 @@ atproto
 babel
 networkx
 selenium
+apify-client
