@@ -90,7 +90,7 @@ class InstagramMonitor(commands.Cog):
                 ig_channel.content_cache.extend(post['id'] for post in latest_posts)
                 continue
             for post in latest_posts:
-                if False and post['id'] in ig_channel.content_cache:
+                if post['id'] in ig_channel.content_cache:
                     pass
                     # log.debug(f"Post already in cache: {post.get('id')}")
                 else:
