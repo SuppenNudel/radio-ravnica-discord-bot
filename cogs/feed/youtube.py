@@ -8,7 +8,7 @@ from enum import Enum
 
 class ContentType(Enum):
     VIDEOS = "videos"
-    SHORTS = "shorts"
+    # SHORTS = "shorts"
     STREAMS = "streams"
 
 class YoutubeChannel():
