@@ -7,9 +7,9 @@ from ezcord import log
 from modules import env
 import json
 
-MOCK = False  # Set to True to use mock data from ig_return.json
+MOCK = True  # Set to True to use mock data from ig_return.json
 
-class InstagramChannel():
+class InstagramProfile():
     def __init__(self, name:str, dc_user_id:int):
         self.name = name
         self.dc_user_id = dc_user_id
@@ -19,7 +19,7 @@ class InstagramMonitor(commands.Cog):
     def __init__(self, bot:Bot):
         self.bot = bot
         self.channels = [
-            InstagramChannel("gamerii93", 270288996666441728)
+            InstagramProfile("gamerii93", 270288996666441728)
         ]
 
         channel_id_str = os.getenv("CHANNEL_INSTAGRAM")
@@ -29,6 +29,33 @@ class InstagramMonitor(commands.Cog):
             except ValueError:
                 log.error("The environment variable 'CHANNEL_INSTAGRAM' is not a valid integer.")
 
+    @commands.slash_command(name="share_instagram_post", description="Share an Instagram post by ID or URL", default_member_permissions=discord.Permissions(manage_guild=True))
+    async def share_instagram_post(self, ctx: discord.ApplicationContext, post: str):
+        # Restrict command to user with ID 356120044754698252
+        if ctx.user.id != 356120044754698252:
+            await ctx.respond("Du hast keine Berechtigung, diesen Befehl zu verwenden.", ephemeral=True)
+            return
+
+        await ctx.defer()
+        try:
+            # Extract post ID if a URL is provided
+            if post.startswith("http"):
+                post_id = instagram.extract_post_id(post)
+            else:
+                post_id = post
+
+            post_data = instagram.get_post_by_id(post_id, apify_token=os.getenv("API_KEY_INSTAGRAM"))
+            if not post_data:
+                await ctx.respond("Kein Beitrag gefunden für diese ID/URL.", ephemeral=True)
+                return
+
+            # Use the first channel as the author for the post
+            ig_channel = self.channels[0]
+            await self.post_content(ig_channel, post_data)
+            await ctx.respond("Instagram-Post wurde geteilt.", ephemeral=True)
+        except Exception as e:
+            log.error(f"Fehler beim Teilen des Instagram-Posts: {e}")
+            await ctx.respond("Fehler beim Teilen des Instagram-Posts.", ephemeral=True)
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -43,7 +70,7 @@ class InstagramMonitor(commands.Cog):
         if not self.check_channels.is_running():
             self.check_channels.start()
 
-    async def post_content(self, ig_channel:InstagramChannel, new_post):
+    async def post_content(self, ig_channel:InstagramProfile, new_post):
         caption = new_post.get("caption")
         log.info(f"Poste neuen Instagram Inhalt:\n{caption}")
         url = new_post.get("url")
@@ -70,7 +97,7 @@ class InstagramMonitor(commands.Cog):
             display_url = display_url.replace("https://instagram.fosu2-1.fna.fbcdn.net", "https://scontent-dus1-1.cdninstagram.com")
             await self.discord_channel.send(content=f"{header}\n{display_url}")
 
-    async def get_latest_posts(self, channel:InstagramChannel):
+    async def get_latest_posts(self, channel:InstagramProfile):
         latest_posts = None
         if MOCK:
             with open("ig_return.json", "r", encoding="utf-8") as f:
