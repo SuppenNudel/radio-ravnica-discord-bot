@@ -13,11 +13,13 @@ URL_WIZARDS = "https://magic.wizards.com"
 NEWS_URLS = {
     "de": {
         "url": f"{URL_WIZARDS}/de/news",
-        "channel_id": env.CHANNEL_NEWS_DE
+        "channel_id": env.CHANNEL_NEWS_DE,
+        "role_ping": "<@&1302367507017105439>"
     },
     "en": {
         "url": f"{URL_WIZARDS}/en/news",
-        "channel_id": env.CHANNEL_NEWS_EN
+        "channel_id": env.CHANNEL_NEWS_EN,
+        "role_ping": "<@&1302367633324376238>"
     }
 }
 
@@ -53,9 +55,8 @@ class MtgNews(Cog):
             
         log.debug(self.__class__.__name__ + " is ready")
 
-    @discord.ext.tasks.loop(minutes=15)
+    @discord.ext.tasks.loop(minutes=10)
     async def check_mtg_news(self):
-
         for lang, obj in NEWS_URLS.items():
             latest_articles = check_website.request_website(obj["url"], "article", SELECTORS)
             channel:discord.TextChannel = await discord.utils.get_or_fetch(self.bot, "channel", obj["channel_id"])
@@ -83,6 +84,7 @@ class MtgNews(Cog):
                 await channel.send(f"""
 # {article["title"]}
 {"von" if lang == "de" else "by"} {authors}
+{obj["role_ping"]}
 {article_url}
 {"Weitere" if lang == "de" else "More"} [{article["type"]} {"Artikel" if lang == "de" else "articles"}](<{article_url}>)""")
                 self.posted_articles.append(article_url)
