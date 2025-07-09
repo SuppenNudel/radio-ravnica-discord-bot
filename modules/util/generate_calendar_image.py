@@ -155,7 +155,8 @@ def generate_calendar(tournaments: list["SpelltableTournament"] = []):
     tournaments = tournaments or []
     tournaments.sort(key=lambda t: t.time)  # Sort tournaments by start time
 
-    earliest_date:date = tournaments[0].time.date()
+    today = datetime.now(tz=env.TIMEZONE).date()
+    earliest_date:date = min(tournaments[0].time.date(), today)
     last_date:date = tournaments[-1].calc_end().date()
 
     months:list[date] = []
