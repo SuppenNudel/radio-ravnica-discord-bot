@@ -360,7 +360,7 @@ class SpelltableTournamentManager(Cog):
             return
 
         # Nur Turnierorganisatoren dürfen in Känalen unter der Kategorie "Spelltable Turniere" Turniere erstellen
-        official_tournament_roles = ["Turnier-Organisator", "Moderator", "Admin"]
+        official_tournament_roles = ["Turnier-Organisation", "Moderator", "Admin"]
         if (ctx.channel.category
             and ctx.channel.category.name in ("Spelltable Turniere")
             and not any(role.name in official_tournament_roles for role in ctx.author.roles)):
