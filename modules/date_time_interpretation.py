@@ -1,18 +1,11 @@
 import dateparser
 from datetime import datetime, timedelta
-import google.generativeai as genai
+from modules.util import google_ai
 import os
 from dateutil.relativedelta import relativedelta
 from babel.dates import format_timedelta
 import pytz
 from ezcord import log
-
-MODEL = "gemini-1.5-flash"
-
-# Set up API key
-genai.configure(api_key=os.getenv("GEMINI_KEY"), transport="rest")
-# Initialize the model
-model = genai.GenerativeModel(MODEL)
 
 settings = {
     'RETURN_AS_TIMEZONE_AWARE': True,
@@ -35,13 +28,12 @@ def parse_date(user_time_input) -> datetime | None:
     # Generate text
     prompt = f"Jetzt ist {now}. Welches Datum und Uhrzeit ist {user_time_input}? Prüfe das Ergebnis nochmal nach! Gib mir nur das Datum mit Uhrzeit."
     log.debug(f"Gemini Prompt: {prompt}")
-    response = model.generate_content(prompt)
-    response_date = response.text.strip()
-    log.debug(f"Gemini Response: {response_date}")
-    parsed_date = dateparser.parse(response_date, settings=settings)
-    log.debug(f"Parsed by dateparser after gemini: '{response_date}' -> {parsed_date}")
+    response = google_ai.prompt(prompt)
+    log.debug(f"Gemini Response: {response}")
+    parsed_date = dateparser.parse(response, settings=settings)
+    log.debug(f"Parsed by dateparser after gemini: '{response}' -> {parsed_date}")
 
-    log.debug(f"using {MODEL} {user_time_input} -> {parsed_date}")
+    log.debug(f"using {google_ai.MODEL} {user_time_input} -> {parsed_date}")
 
     return parsed_date
 

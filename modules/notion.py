@@ -20,6 +20,8 @@ class TextCondition(Enum):
     CONTAINS = "contains"
     STARTS_WITH = "starts_with"
     ENDS_WITH = "ends_with"
+    IS_EMPTY = "is_empty"
+    IS_NOT_EMPTY = "is_not_empty"
 
 class NumberCondition(Enum):
     EQUALS = "equals"
@@ -27,7 +29,7 @@ class NumberCondition(Enum):
     LESS_THAN = "less_than"
     GREATER_THAN_OR_EQUAL_TO = "greater_than_or_equal_to"
     LESS_THAN_OR_EQUAL_TO = "less_than_or_equal_to"
-
+    IS_EMPTY = "is_empty"
 
 class CheckboxCondition(Enum):
     EQUALS = "equals"
@@ -49,13 +51,51 @@ class DateCondition(Enum):
 class MultiSelectCondition(Enum):
     CONTAINS = "contains"
     DOES_NOT_CONTAIN = "does_not_contain"
+    
+class StatusCondition(Enum):
+    EQUALS = "equals"
+    DOES_NOT_EQUAL = "does_not_equal"
+    IS_EMPTY = "is_empty"
+    IS_NOT_EMPTY = "is_not_empty"
+    
+class RelationCondition(Enum):
+    IS_EMPTY = "is_empty"
+    IS_NOT_EMPTY = "is_not_empty"
+    CONTAINS = "contains"  # For filtering by a specific related page ID
 
 
 class NotionFilterBuilder:
     def __init__(self):
         self.filters = []
+        
+    def add_relation_filter(self, property_name: str, condition: RelationCondition, value: str = None):
+        """
+        Adds a relation filter. For IS_EMPTY/IS_NOT_EMPTY, value is ignored.
+        For CONTAINS, value should be the related page ID.
+        """
+        if condition in [RelationCondition.IS_EMPTY, RelationCondition.IS_NOT_EMPTY]:
+            self.filters.append({
+                "property": property_name,
+                "relation": {condition.value: True}
+            })
+        elif condition == RelationCondition.CONTAINS and value is not None:
+            self.filters.append({
+                "property": property_name,
+                "relation": {condition.value: value}
+            })
+        else:
+            raise ValueError("Invalid relation filter usage.")
+        return self
 
-    def add_text_filter(self, property_name: str, condition: TextCondition, value: str):
+    def add_status_filter(self, property_name: str, condition: StatusCondition, value: str = None):
+        filter_dict = {
+            "property": property_name,
+            "status": {condition.value: value} if value is not None else {condition.value: True}
+        }
+        self.filters.append(filter_dict)
+        return self
+
+    def add_text_filter(self, property_name: str, condition: TextCondition, value: str|bool):
         self.filters.append({
             "property": property_name,
             "rich_text": {condition.value: value}
@@ -159,7 +199,7 @@ class Entry():
     
     def get_url_property(self, name):
         prop = self.get_property(name)
-        return prop
+        return prop["string"]
     
     def get_file_property(self, name):
         prop = self.get_property(name)
@@ -178,6 +218,32 @@ class Entry():
         v_type = prop['type']
         result = prop[v_type]
         return result
+    
+    def __str__(self):
+        props = self.entry.get('properties', {})
+        prop_strings = []
+        for name, prop in props.items():
+            p_type = prop.get('type')
+            value = prop.get(p_type)
+            # Format value for display
+            if p_type == "rich_text" and value:
+                val_str = ", ".join([v.get('plain_text', '') for v in value])
+            elif p_type == "title" and value:
+                val_str = ", ".join([v.get('plain_text', '') for v in value])
+            elif p_type == "multi_select" and value:
+                val_str = ", ".join([v.get('name', '') for v in value])
+            elif p_type == "select" and value:
+                val_str = value.get('name', '')
+            elif p_type == "date" and value:
+                val_str = f"{value.get('start', '')} - {value.get('end', '')}"
+            elif p_type == "status" and value:
+                val_str = value.get('name', '')
+            elif p_type == "files" and value:
+                val_str = ", ".join([f.get(f['type'], {}).get('url', '') for f in value])
+            else:
+                val_str = str(value)
+            prop_strings.append(f"{name}: {val_str}")
+        return f"Entry(id={self.id}, public_url={self.public_url})\n" + "\n".join(prop_strings)
 
 class NotionPayloadBuilder():
 
@@ -334,7 +400,7 @@ def update_entry(page_id, update_properties) -> dict:
 #     result = DatabasesEndpoint(notion).query(database_id=database_id, filter=filter)
 #     return result
 
-def get_all_entries(database_id, filter=None) -> list[dict]:
+def get_all_entries(database_id, filter=None) -> list[Entry]:
     if filter:
         all_entries = retry_with_rate_limit(
             collect_paginated_api,
@@ -348,6 +414,7 @@ def get_all_entries(database_id, filter=None) -> list[dict]:
             notion.databases.query,
             database_id=database_id
         )
+    all_entries = [Entry(entry) for entry in all_entries]
     return all_entries
 
 def remove_entry(entry:Entry):
