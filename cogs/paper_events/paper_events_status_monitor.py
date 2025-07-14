@@ -57,12 +57,11 @@ class PaperEventsStatusMonitor(Cog):
             filter = filter
         )
         for entry in entries:
-            my_entry = notion.Entry(entry)
-            date = my_entry.get_date_property('Start (und Ende)')
+            date = entry.get_date_property('Start (und Ende)')
             event_start:datetime = date['start']
             event_end:datetime = date['end']
-            event_discord_channel_id = my_entry.get_text_property("Thread ID")
-            event_title = my_entry.get_text_property("Event Titel")
+            event_discord_channel_id = entry.get_text_property("Thread ID")
+            event_title = entry.get_text_property("Event Titel")
             now = datetime.now(tz=event_start.tzinfo)
             if not event_discord_channel_id:
                 log.error(f"Event {event_title} has no Channel ID")

@@ -33,8 +33,8 @@ class FormatOverlapCheck(Cog):
             percent = (count / min_count * 100) if min_count > 0 else 0
             percent_r1 = (count / len(role_members[r1]) * 100) if len(role_members[r1]) > 0 else 0
             percent_r2 = (count / len(role_members[r2]) * 100) if len(role_members[r2]) > 0 else 0
-            log.info(f"Overlap between '{r1}' and '{r2}': {count} members ({percent:.2f}%)"
-                     + f"  - {percent_r1:.2f}% of '{r1}' also in '{r2}'"
+            log.info(f"Overlap between '{r1}' and '{r2}': {count} members ({percent:.2f}%)\n"
+                     + f"  - {percent_r1:.2f}% of '{r1}' also in '{r2}'\n"
                      + f"  - {percent_r2:.2f}% of '{r2}' also in '{r1}'")
         log.info(self.__class__.__name__ + " is ready")
 
