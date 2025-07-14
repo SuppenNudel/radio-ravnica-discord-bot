@@ -199,7 +199,7 @@ class Entry():
     
     def get_url_property(self, name):
         prop = self.get_property(name)
-        return prop["string"]
+        return prop
     
     def get_file_property(self, name):
         prop = self.get_property(name)

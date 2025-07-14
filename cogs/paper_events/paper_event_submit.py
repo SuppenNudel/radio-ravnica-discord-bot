@@ -132,8 +132,8 @@ class PaperEventSubmit(Cog):
 
             except discord.NotFound as e:
                 log.error(f"Didn't find guild or author {e}")
-            except Exception as e:
-                log.error(f"Error when trying to parse {event}: {e}")
+            # except Exception as e:
+            #     log.error(f"Error when trying to parse {event}: {e}")
         log.debug(self.__class__.__name__ + " is ready")
 
     # Weitere Checks https://gist.github.com/Painezor/eb2519022cd2c907b56624105f94b190
