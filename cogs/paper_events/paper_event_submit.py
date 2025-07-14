@@ -113,10 +113,9 @@ class PaperEventSubmit(Cog):
         upcoming_events = notion.get_all_entries(EVENT_DATABASE_ID, filter=filter)
         
         for event in upcoming_events:
-            event_entry = notion.Entry(event)
-            server_id = int(event_entry.get_text_property("Server ID"))
-            author_id = int(event_entry.get_text_property("Author ID"))
-            thread_id = int(event_entry.get_text_property("Thread ID"))
+            server_id = int(event.get_text_property("Server ID"))
+            author_id = int(event.get_text_property("Author ID"))
+            thread_id = int(event.get_text_property("Thread ID"))
             try:
                 guild = await discord.utils.get_or_fetch(self.bot, "guild", server_id)
                 author = await discord.utils.get_or_fetch(guild, "member", author_id)
@@ -124,7 +123,7 @@ class PaperEventSubmit(Cog):
                 thread:discord.Thread = await discord.utils.get_or_fetch(guild, "channel", thread_id)
                 paper_event.thread = thread
 
-                paper_event.fill_fields_from_notion_entry(event_entry)
+                paper_event.fill_fields_from_notion_entry(event)
 
                 # thread does not have get_message method, so we need to fetch the message
                 message:discord.Message = await thread.fetch_message(thread_id)
