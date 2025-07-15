@@ -110,7 +110,7 @@ class Location():
             entry = notion.Entry(result)
             area_page_id = entry.id
         else:
-            area_page_id = area_response[0]['id']
+            area_page_id = area_response[0].id
         return area_page_id
 
     def get_search_url(self):
