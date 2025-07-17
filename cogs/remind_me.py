@@ -254,19 +254,18 @@ class RemindMe(commands.Cog):
                     .build())
             entries = notion.get_all_entries(DB_ID_REMIND_ME, filter=filter)
             for entry in entries:
-                my_entry = notion.Entry(entry)
-                timestamp = my_entry.get_date_property(DB_FIELD_DATE)
+                timestamp = entry.get_date_property(DB_FIELD_DATE)
                 if timestamp['start'] > filter_date:
                     # noch zu früh
                     continue
-                user = my_entry.get_text_property(DB_FIELD_USER)
-                message = my_entry.get_text_property(DB_FIELD_MESSAGE)
-                channel = my_entry.get_text_property(DB_FIELD_CHANNEL)
-                reason = my_entry.get_text_property(DB_FIELD_REASON)
+                user = entry.get_text_property(DB_FIELD_USER)
+                message = entry.get_text_property(DB_FIELD_MESSAGE)
+                channel = entry.get_text_property(DB_FIELD_CHANNEL)
+                reason = entry.get_text_property(DB_FIELD_REASON)
                 success = await self.send_reminder_message(guild, message, channel, user, reason=reason)
                 if success:
                     # remove from database
-                    notion.remove_entry(my_entry)
+                    notion.remove_entry(entry)
 
 def setup(bot:Bot):
     bot.add_cog(RemindMe(bot))

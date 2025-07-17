@@ -30,11 +30,10 @@ class PaperEventsRequest(Cog):
         all_entries = notion.get_all_entries(DB_PAPER_EVENTS_ID, filter=filter)
         destinations = []
         for entry in all_entries:
-            myEntry = notion.Entry(entry)
-            address = myEntry.get_formula_property("Google Maps")
-            events[myEntry.id] = {
+            address = entry.get_formula_property("Google Maps")
+            events[entry.id] = {
                 "address": address,
-                "entry": myEntry
+                "entry": entry
             }
             destinations.append(address)
 

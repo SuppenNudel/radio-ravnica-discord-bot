@@ -76,15 +76,14 @@ class AskUsAnything(Cog):
 
         filter = notion.NotionFilterBuilder().add_url_filter("Discord Link", notion.URLCondition.EQUALS, url).build()
         # check entry
-        aua_entries = notion.get_all_entries(self.db_id_aua, filter=filter)
+        aua_entries:list[notion.Entry] = notion.get_all_entries(self.db_id_aua, filter=filter)
 
         if aua_entries:
             log.debug("Entry exits already")
             if initial_response:
                 await initial_response.edit_original_response(content=f"{current_message}: Eintrag existiert")
 
-            entry = aua_entries[0]
-            my_entry = notion.Entry(entry)
+            my_entry = aua_entries[0]
 
             existing_status = my_entry.get_status_property('Status', AuaStatus)
             if existing_status == status:

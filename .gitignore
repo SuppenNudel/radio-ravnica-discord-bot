@@ -173,3 +173,4 @@ tmp/
 tournaments/
 test_participants*
 *.env
+video_downloads/

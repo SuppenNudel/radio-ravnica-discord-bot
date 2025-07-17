@@ -59,21 +59,20 @@ class PaperEventsNotionToForum(commands.Cog):
         entries = notion.get_all_entries(database_id=EVENT_DATABASE_ID, filter=filter)
         for entry in entries:
             try:
-                my_entry = notion.Entry(entry)
-                is_test_entry = my_entry.get_checkbox_property("For Test")
+                is_test_entry = entry.get_checkbox_property("For Test")
                 if (DEBUG and is_test_entry) or ((not DEBUG) and (not is_test_entry)):
-                    author_text = my_entry.get_text_property("Author")
+                    author_text = entry.get_text_property("Author")
                     if not author_text:
                         raise Exception(f"No Author value")
                     author = self.guild.get_member_named(author_text)
                     if not author:
                         # reject
                         update_properties = notion.NotionPayloadBuilder().add_status("Status", "Author not found").build()
-                        update_response = notion.update_entry(my_entry.id, update_properties=update_properties)
+                        update_response = notion.update_entry(entry.id, update_properties=update_properties)
                         log.error(f"Author not found: {author_text}")
                         continue
 
-                    event = PaperEvent(my_entry, author)
+                    event = PaperEvent(entry, author)
                     tag = discord.utils.get(self.paper_event_channel.available_tags, name=event.tag_name)
 
                     log.debug(f"Going to create post in paper_event_channe: {[event.title, event.content, event.embeds, [tag], event.files]}")
@@ -89,7 +88,7 @@ class PaperEventsNotionToForum(commands.Cog):
                     )
                     if event.area_page_id:
                         update_properties.add_relation("(Bundes)land", event.area_page_id)
-                    update_response = notion.update_entry(page_id=my_entry.id, update_properties=update_properties.build())
+                    update_response = notion.update_entry(page_id=entry.id, update_properties=update_properties.build())
                     link_log.info(f"Updated Notion page: {update_response['url']}")
             except Exception as e:
                 log.error(f"Beim Lesen eines Events aus Notion ist ein Fehler passiert {e.args}")
