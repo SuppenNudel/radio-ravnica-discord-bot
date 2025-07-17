@@ -8,6 +8,7 @@ from datetime import datetime
 import os
 import traceback
 from enum import Enum
+from modules import env
 
 EMOJI_THUMBS_UP = "👍"
 EMOJI_NOTEPAD = "🗒️"
@@ -53,7 +54,7 @@ async def analyse_reactions(reactions:list[discord.Reaction], aua_managers):
 class AskUsAnything(Cog):
     def __init__(self, bot:Bot):
         self.bot = bot
-        self.db_id_aua = os.getenv("DATABASE_ID_AUA")
+        self.db_id_aua = env.AUA_DATABASE_ID
         channel_aua = os.getenv("CHANNEL_AUA")
         if channel_aua:
             self.channel_id_aua = int(channel_aua)
@@ -74,43 +75,51 @@ class AskUsAnything(Cog):
         if status == None:
             status = AuaStatus.NOT_STARTED
 
+        payload = create_aua_payload(
+            message_text=message_text,
+            author=author,
+            date=date,
+            url=url,
+            status=status
+        )
         filter = notion.NotionFilterBuilder().add_url_filter("Discord Link", notion.URLCondition.EQUALS, url).build()
+        log.debug(f"Adding or Updating Notion entry for {url}")
+        notion.add_or_update_entry(self.db_id_aua, payload, filter)
+
         # check entry
-        aua_entries:list[notion.Entry] = notion.get_all_entries(self.db_id_aua, filter=filter)
+        # aua_entries:list[notion.Entry] = notion.get_all_entries(self.db_id_aua, filter=filter)
 
-        if aua_entries:
-            log.debug("Entry exits already")
-            if initial_response:
-                await initial_response.edit_original_response(content=f"{current_message}: Eintrag existiert")
+        # if aua_entries:
+        #     log.debug("Entry exits already")
+        #     if initial_response:
+        #         await initial_response.edit_original_response(content=f"{current_message}: Eintrag existiert")
 
-            my_entry = aua_entries[0]
+        #     entry = aua_entries[0]
 
-            existing_status = my_entry.get_status_property('Status', AuaStatus)
-            if existing_status == status:
-                log.debug("No need to update, status already same")
-                if initial_response:
-                    await initial_response.edit_original_response(content=f"{current_message}: No need to update, status already same")
-                return
-            # write if not exists
-            entry_id = entry['id']
-            update_properties = notion.NotionPayloadBuilder().add_status("Status", status).build()
-            # update status
-            update_response = notion.update_entry(entry_id, update_properties=update_properties)
-            log.debug(f"Update response: {update_response['url']}")
-            if initial_response:
-                await initial_response.edit_original_response(content=f"{current_message}: Updated Entry to {status}")
-        else:
-            log.debug("Creating database entry...")
-            if initial_response:
-                await initial_response.edit_original_response(content=f"{current_message}: Creating database entry...")
-            payload = create_aua_payload(message_text=message_text, author=author, date=date, url=url, status=status)
+        #     existing_status = entry.get_status_property('Status', AuaStatus)
+        #     if existing_status == status:
+        #         log.debug("No need to update, status already same")
+        #         if initial_response:
+        #             await initial_response.edit_original_response(content=f"{current_message}: No need to update, status already same")
+        #         return
+        #     # write if not exists
+        #     update_properties = notion.NotionPayloadBuilder().add_status("Status", status).build()
+        #     # update status
+        #     update_response = notion.update_entry(entry.id, update_properties=update_properties)
+        #     log.debug(f"Update response: {update_response['url']}")
+        #     if initial_response:
+        #         await initial_response.edit_original_response(content=f"{current_message}: Updated Entry to {status}")
+        # else:
+        #     log.debug("Creating database entry...")
+        #     if initial_response:
+        #         await initial_response.edit_original_response(content=f"{current_message}: Creating database entry...")
+        #     payload = create_aua_payload(message_text=message_text, author=author, date=date, url=url, status=status)
 
-            response = notion.add_to_database(self.db_id_aua, payload)
-            log.debug(f"Created database entry on message for '{message_text}': {response['url']}")
-            if initial_response:
-                await initial_response.edit_original_response(content=f"{current_message}: Created database entry with status {status}")
+        #     response = notion.add_to_database(self.db_id_aua, payload)
+        #     log.debug(f"Created database entry on message for '{message_text}': {response['url']}")
+        #     if initial_response:
+        #         await initial_response.edit_original_response(content=f"{current_message}: Created database entry with status {status}")
 
-    # TODO make this also available as message command
     @slash_command()
     @discord.default_permissions(manage_guild=True)
     @commands.has_role("Moderator")
@@ -129,13 +138,13 @@ class AskUsAnything(Cog):
         initial_response = await ctx.respond(f"Werde die letzten {limit} Nachrichten analysieren...", ephemeral=True)
         if not initial_response:
             raise Exception("Unable to send response")
-                    
-        if not type(initial_response) == discord.Interaction:
+
+        if not isinstance(initial_response, discord.Interaction):
             raise Exception("initial_response is not discord.Interaction")
 
         channel = ctx.channel
 
-        if not type(channel) == discord.TextChannel:
+        if not isinstance(channel, discord.TextChannel):
             raise Exception(f"Not a text channel but {type(channel)}")
 
         start_message = None
@@ -166,18 +175,63 @@ class AskUsAnything(Cog):
                         current_message=current_message
                     )
             except Exception as e:
-                log.error(traceback.format_exc())
-                try:
-                    log.error(f"An error occured while trying to Analyse message: {str(e)}")
-                except:
-                    log.error(f"An error occured while trying to Analyse message: {type(e)}")
+                log.error(f"An error occured while trying to Analyse message: {str(e)}\n{traceback.format_exc()}")
 
         log.debug(f"Found {counter} messages")
         if initial_response:
-            if type(initial_response) == discord.Interaction:
+            if isinstance(initial_response, discord.Interaction):
                 await initial_response.edit_original_response(content=f"{counter} Nachrichten wurden analysiert")
             else:
                 log.debug(f"Can't edit_original_response of {initial_response}")
+
+    @Cog.listener()
+    async def on_raw_message_edit(self, payload: discord.RawMessageUpdateEvent):
+        channel = self.bot.get_channel(payload.channel_id)
+        if not channel or channel.id != self.channel_id_aua or not isinstance(channel, discord.TextChannel):
+            return
+
+        try:
+            message = await channel.fetch_message(payload.message_id)
+        except Exception as e:
+            log.error(f"Could not fetch edited message: {e}")
+            return
+
+        if message.author.bot:
+            return
+
+        log.debug(f"Message edited in {channel.mention} ({channel.name})")
+        message_text = message.clean_content
+        author = message.author
+        date = message.created_at
+        url = message.jump_url
+
+        await self.write_or_update_notion(
+            message_text=message_text,
+            author=author,
+            date=date,
+            url=url
+        )
+
+    @Cog.listener()
+    async def on_raw_message_delete(self, payload: discord.RawMessageDeleteEvent):
+        channel = self.bot.get_channel(payload.channel_id)
+        if not channel or channel.id != self.channel_id_aua or not isinstance(channel, discord.TextChannel):
+            return
+
+        # We can't get author or content from deleted message, but we can use the message id and channel
+        url = f"https://discord.com/channels/{payload.guild_id}/{payload.channel_id}/{payload.message_id}"
+
+        log.debug(f"Message deleted in {channel.mention} ({channel.name})")
+
+        # Remove entry from Notion if exists
+        filter = notion.NotionFilterBuilder().add_url_filter("Discord Link", notion.URLCondition.EQUALS, url).build()
+        aua_entries = notion.get_all_entries(self.db_id_aua, filter=filter)
+        if aua_entries and len(aua_entries) == 1:
+            entry = aua_entries[0]
+            notion.remove_entry(entry)
+            log.debug(f"Deleted Notion entry for message: {url}")
+        else:
+            log.error(f"Could not find Notion entry for deleted message: {url}")
 
     # when user posts message in #ask-us-anything
     # write to notion
@@ -188,8 +242,8 @@ class AskUsAnything(Cog):
         
         if message.channel.id != self.channel_id_aua:
             return
-        
-        if not type(message.channel) == discord.TextChannel:
+
+        if not isinstance(message.channel, discord.TextChannel):
             return
         
         if message.channel:
@@ -236,7 +290,7 @@ class AskUsAnything(Cog):
             raise Exception("Guild not found")
         
         channel = guild.get_channel(payload.channel_id)
-        if not type(channel) == discord.TextChannel:
+        if not isinstance(channel, discord.TextChannel):
             raise Exception("Channel is not a Text Channel")
         
         # Get the user who added the reaction

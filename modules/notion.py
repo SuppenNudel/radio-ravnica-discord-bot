@@ -446,7 +446,7 @@ def remove_duplicates(entries):
         notion.blocks.delete(block_id=entry_id)
         print(f"Deleted entry with ID: {entry_id}")
 
-def add_or_update_entry(database_id: str, payload: dict, filter: dict|None=None):
+def add_or_update_entry(database_id, payload: dict, filter: dict|None=None):
     """
     Updates an entry if it exists or creates a new one if not.
 
@@ -457,13 +457,13 @@ def add_or_update_entry(database_id: str, payload: dict, filter: dict|None=None)
     """
     if filter:
         # Get all matching entries
-        matching_entries = get_all_entries(database_id, filter=filter)
+        matching_entries:list[Entry] = get_all_entries(database_id, filter=filter)
 
         if matching_entries:
             if len(matching_entries) > 1:
                 raise Exception("Multiple entries found, not going to update")
             # Update the first matching entry
-            page_id = matching_entries[0]["id"]
+            page_id = matching_entries[0].id
             # print(f"Updating entry with ID: {page_id}")
             response = update_entry(page_id, payload)
         else:
