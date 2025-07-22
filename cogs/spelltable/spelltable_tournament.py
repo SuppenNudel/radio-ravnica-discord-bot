@@ -286,10 +286,7 @@ class SpelltableTournamentManager(Cog):
 
     @Cog.listener()
     async def on_ready(self):
-        loaded_tournaments = {}
-        for guild in self.bot.guilds:
-            guild_tournaments = await load_tournaments(guild, self.bot)
-            loaded_tournaments.update(guild_tournaments)
+        loaded_tournaments = await load_tournaments(self.bot)
 
         global active_tournaments
         for message_path, tournament in loaded_tournaments.items():

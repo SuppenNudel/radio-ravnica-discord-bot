@@ -37,7 +37,7 @@ async def save_tournaments():
         await tournament.save_tournament()
 
 
-async def load_tournaments(guild:discord.Guild, bot) -> dict[str, "SpelltableTournament"]:
+async def load_tournaments(bot) -> dict[str, "SpelltableTournament"]:
     tournaments = {}
 
     if not os.path.exists(TOURNAMENTS_FOLDER):
@@ -50,7 +50,7 @@ async def load_tournaments(guild:discord.Guild, bot) -> dict[str, "SpelltableTou
                 json_data = file.read()
                 try:
                     raw_dict = json.loads(json_data)
-                    tournament = await SpelltableTournament.deserialize(raw_dict, guild, bot)
+                    tournament = await SpelltableTournament.deserialize(raw_dict, bot)
                     tournament_id = filename[:-5].replace("_", "/")  # Convert back to original ID format
                     tournaments[tournament_id] = tournament
                 except Exception as e:
@@ -125,7 +125,7 @@ async def generate_tournament_message(tournaments: list["SpelltableTournament"])
 async def update_tournament_message(bot:discord.Bot):
     guild:discord.Guild = bot.get_guild(env.GUILD_ID)
     log.info(f"Updating tournament message on guild {guild.name} ({guild.jump_url})")
-    rr_tournaments:list["SpelltableTournament"] = [t for t in active_tournaments.values() if t.guild.id == guild.id and not t.cancelled]
+    rr_tournaments:list["SpelltableTournament"] = [t for t in active_tournaments.values() if t.guild.id == guild.id]
     log.debug(f"List of RR Tournaments: {', '.join(t.title for t in rr_tournaments)}")
     tourney_list_message = await generate_tournament_message(rr_tournaments)
     calendar_img = generate_calendar(rr_tournaments)
@@ -267,8 +267,9 @@ class SpelltableTournament(Serializable):
         return [user for user in self.users if self.users[user] == state]
 
     @classmethod
-    async def deserialize(cls, data, guild:discord.Guild, bot): #, organizer, message):
+    async def deserialize(cls, data, bot): #, organizer, message):
         organizer_id = int(data["organizer_id"])
+        guild = await bot.fetch_guild(data["guild_id"])
 
         tournament = cls(guild, data["name"], organizer_id, bot)
         tournament.description = data["description"]
