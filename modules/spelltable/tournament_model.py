@@ -7,7 +7,6 @@ import logging
 import traceback
 import discord
 from enum import StrEnum, auto
-from cogs.spelltable.spelltable_tournament import BOT
 from modules import swiss_mtg, table_to_image
 from modules.util.generate_calendar_image import generate_calendar
 from modules.serializable import Serializable
