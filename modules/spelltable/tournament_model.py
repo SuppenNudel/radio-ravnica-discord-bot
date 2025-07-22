@@ -123,6 +123,9 @@ async def generate_tournament_message(tournaments: list["SpelltableTournament"])
     return msg
 
 async def update_tournament_message(guild:discord.Guild):
+    if guild.id != env.GUILD_ID:
+        log.debug(f"Guild {guild.id} is not in the list of guilds to update tournament messages.")
+        return
     log.info(f"Updating tournament message")
     tourney_list_message = await generate_tournament_message(list(active_tournaments.values()))
     calendar_img = generate_calendar(list(active_tournaments.values()))
