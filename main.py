@@ -43,12 +43,14 @@ intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
 
+debug_guilds = [os.getenv("GUILD")] if IS_DEBUG else []
+
 bot:Bot = Bot(
     intents=intents,
     error_webhook_url=os.getenv("ERROR_WEBHOOK"),
     language="de",
     ready_event=None,
-    debug_guilds=[os.getenv("GUILD")]
+    debug_guilds=debug_guilds
 )
 # bot.add_help_command()
 
@@ -56,8 +58,7 @@ bot:Bot = Bot(
 async def on_ready():
     infos = {
         "Python": platform.python_version(),
-        "Emojis": len(bot.emojis),
-        "Guild": [os.getenv("GUILD")]
+        "Emojis": len(bot.emojis)
     }
     bot.ready(
         new_info=infos,
@@ -67,10 +68,9 @@ async def on_ready():
 if __name__ == "__main__":
     os.makedirs("tmp", exist_ok=True)
     if IS_DEBUG:
-        bot.load_extension('cogs.feed.youtube')
-        bot.load_extension('cogs.feed.instagram')
+        bot.load_extension('cogs.ask-us-anything')
     else:
-        bot.load_cogs(subdirectories=True, ignored_cogs=["ping", "hack", "notion_to_forum"])
+        bot.load_cogs(subdirectories=True, ignored_cogs=[])
     bot.add_status_changer(
         "Puzzelt mit Blacky",
     #     discord.Game("plays with you"),
