@@ -230,6 +230,7 @@ class SpelltableTournament(Serializable):
             if not self.channel_id:
                 return None
             try:
+                log.debug(f"For {self.title} trying to fetch message {self.message_id} in channel {self.channel_id} in guild {self.guild.id} ({self.guild.name})")
                 thread:discord.Thread = await discord.utils.get_or_fetch(self.guild, "channel", self.channel_id)
                 try:
                     # thread does not have get_message method, so we need to fetch the message
