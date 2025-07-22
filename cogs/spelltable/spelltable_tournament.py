@@ -19,7 +19,6 @@ from modules.spelltable import common_views
 link_log = logging.getLogger("link_logger")
 
 IS_DEBUG = env.DEBUG
-BOT = None
 
 EMOJI_PATTERN = re.compile("[\U0001F300-\U0001F6FF\U0001F900-\U0001F9FF\U0001FA70-\U0001FAFF\U0001F600-\U0001F64F]+", flags=re.UNICODE)
 
@@ -282,8 +281,6 @@ class EditTournamentView(discord.ui.View):
 
 class SpelltableTournamentManager(Cog):
     def __init__(self, bot:Bot):
-        global BOT
-        BOT = bot
         self.bot = bot
         self.update_task.start()
 
@@ -291,7 +288,7 @@ class SpelltableTournamentManager(Cog):
     async def on_ready(self):
         loaded_tournaments = {}
         for guild in self.bot.guilds:
-            guild_tournaments = await load_tournaments(guild, BOT)
+            guild_tournaments = await load_tournaments(guild, self.bot)
             loaded_tournaments.update(guild_tournaments)
 
         global active_tournaments
@@ -381,7 +378,7 @@ class SpelltableTournamentManager(Cog):
         # Defer the interaction response to avoid timeout
         await ctx.defer(ephemeral=True)
 
-        tournament = SpelltableTournament(ctx.guild, titel, ctx.author.id, BOT)
+        tournament = SpelltableTournament(ctx.guild, titel, ctx.author.id, self.bot)
         tournament.organizer = ctx.author
         view = await EditTournamentView.create(tournament, ctx.channel)
         await ctx.followup.send(
