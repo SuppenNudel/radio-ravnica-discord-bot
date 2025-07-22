@@ -284,15 +284,15 @@ class SpelltableTournamentManager(Cog):
     def __init__(self, bot:Bot):
         global BOT
         BOT = bot
+        self.bot = bot
         self.update_task.start()
 
     @Cog.listener()
     async def on_ready(self):
-        if not BOT:
-            raise Exception("BOT is None")
-        
-        guild:discord.Guild = BOT.get_guild(env.GUILD_ID)
-        loaded_tournaments = await load_tournaments(guild, BOT)
+        loaded_tournaments = {}
+        for guild in self.bot.guilds:
+            guild_tournaments = await load_tournaments(guild, BOT)
+            loaded_tournaments.update(guild_tournaments)
 
         global active_tournaments
         for message_path, tournament in loaded_tournaments.items():
@@ -338,6 +338,9 @@ class SpelltableTournamentManager(Cog):
                 log.warning(f"Turnier konnte nicht geladen werden, weil vermutlich der entprechende Channel gelöscht wurde. Lösche Datei {file_path}")
                 os.remove(file_path)
 
+        if not BOT:
+            raise Exception("BOT is None")
+        guild:discord.Guild = self.bot.get_guild(env.GUILD_ID)
         await update_tournament_message(guild)
 
         log.debug(self.__class__.__name__ + " is ready")
