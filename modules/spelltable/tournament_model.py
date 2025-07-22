@@ -122,11 +122,12 @@ async def generate_tournament_message(tournaments: list["SpelltableTournament"])
 
     return msg
 
-async def update_tournament_message(bot:discord.Bot):
+async def update_tournament_message(bot:discord.Bot, trigger_guild:discord.Guild|None = None):
+    if trigger_guild and trigger_guild.id != env.GUILD_ID:
+        return  # Only update for the main guild
     guild:discord.Guild = bot.get_guild(env.GUILD_ID)
-    log.info(f"Updating tournament message on guild {guild.name} ({guild.jump_url})")
+    log.info(f"Updating tournament message")
     rr_tournaments:list["SpelltableTournament"] = [t for t in active_tournaments.values() if t.guild.id == guild.id]
-    log.debug(f"List of RR Tournaments: {', '.join(t.title for t in rr_tournaments)}")
     tourney_list_message = await generate_tournament_message(rr_tournaments)
     calendar_img = generate_calendar(rr_tournaments)
     calendar_file = None
@@ -499,7 +500,7 @@ class SpelltableTournament(Serializable):
                 print(f"Tournament {tournament_id} has been concluded and moved to {concluded_path}")
         except Exception as e:
             print(f"Error saving tournament {tournament_id}: {e}")
-        await update_tournament_message(self.bot)
+        await update_tournament_message(self.bot, trigger_guild=self.guild)
 
 
     async def standings_to_image(self, round=None) -> str:
