@@ -232,7 +232,13 @@ class SpelltableTournament(Serializable):
                 return None
             try:
                 log.debug(f"Fetching message of tournament {self.title} on {self.guild.name}: https://discord.com/channels/{self.guild.id}/{self.channel_id}/{self.message_id}")
-                thread:discord.Thread = await discord.utils.get_or_fetch(self.guild, "channel", self.channel_id)
+                channel = await self.bot.fetch_channel(self.channel_id)
+                log.debug(f"Expecting {channel.jump_url} to match {self.guild.jump_url}")
+                # thread:discord.Thread = await discord.utils.get_or_fetch(self.guild, "channel", self.channel_id)
+                if isinstance(channel, discord.Thread):
+                    thread = channel
+                else:
+                    raise TypeError(f"Expected Thread, got {type(channel)}")
                 try:
                     # thread does not have get_message method, so we need to fetch the message
                     self._message = await thread.fetch_message(self.message_id)
