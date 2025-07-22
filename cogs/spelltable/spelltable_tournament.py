@@ -337,11 +337,8 @@ class SpelltableTournamentManager(Cog):
                 file_path = TOURNAMENTS_FOLDER+"/"+(message_path.replace("/", "_"))+".json"
                 log.warning(f"Turnier konnte nicht geladen werden, weil vermutlich der entprechende Channel gelöscht wurde. Lösche Datei {file_path}")
                 os.remove(file_path)
-
-        if not BOT:
-            raise Exception("BOT is None")
-        guild:discord.Guild = self.bot.get_guild(env.GUILD_ID)
-        await update_tournament_message(guild)
+        
+        await update_tournament_message(self.bot)
 
         log.debug(self.__class__.__name__ + " is ready")
 
@@ -409,18 +406,14 @@ class SpelltableTournamentManager(Cog):
         await asyncio.sleep(delay)
 
         # Execute the update
-        guild = BOT.get_guild(env.GUILD_ID)
-        if guild:
-            await update_tournament_message(guild)
-        else:
-            log.error(f"Guild is {guild}. Cannot update tournament message")
+        await update_tournament_message(self.bot)
 
     @update_task.before_loop
     async def before_update_task(self):
         """
         Wait until the bot is ready before starting the task.
         """
-        await BOT.wait_until_ready()
+        await self.bot.wait_until_ready()
 
 def setup(bot:Bot):
     bot.add_cog(SpelltableTournamentManager(bot))

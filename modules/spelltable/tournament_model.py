@@ -7,6 +7,7 @@ import logging
 import traceback
 import discord
 from enum import StrEnum, auto
+from cogs.spelltable.spelltable_tournament import BOT
 from modules import swiss_mtg, table_to_image
 from modules.util.generate_calendar_image import generate_calendar
 from modules.serializable import Serializable
@@ -122,12 +123,11 @@ async def generate_tournament_message(tournaments: list["SpelltableTournament"])
 
     return msg
 
-async def update_tournament_message(guild:discord.Guild):
-    if guild.id != env.GUILD_ID:
-        log.debug(f"Guild {guild.id} is not in the list of guilds to update tournament messages.")
-        return
-    log.info(f"Updating tournament message")
-    rr_tournaments = [t for t in active_tournaments.values() if t.guild.id == guild.id and not t.cancelled]
+async def update_tournament_message(bot:discord.Bot):
+    guild:discord.Guild = bot.get_guild(env.GUILD_ID)
+    log.info(f"Updating tournament message on guild {guild.name} ({guild.jump_url})")
+    rr_tournaments:list["SpelltableTournament"] = [t for t in active_tournaments.values() if t.guild.id == guild.id and not t.cancelled]
+    log.debug(f"List of RR Tournaments: {', '.join(t.title for t in rr_tournaments)}")
     tourney_list_message = await generate_tournament_message(rr_tournaments)
     calendar_img = generate_calendar(rr_tournaments)
     calendar_file = None
@@ -499,7 +499,7 @@ class SpelltableTournament(Serializable):
                 print(f"Tournament {tournament_id} has been concluded and moved to {concluded_path}")
         except Exception as e:
             print(f"Error saving tournament {tournament_id}: {e}")
-        await update_tournament_message(self.guild)
+        await update_tournament_message(self.bot)
 
 
     async def standings_to_image(self, round=None) -> str:
