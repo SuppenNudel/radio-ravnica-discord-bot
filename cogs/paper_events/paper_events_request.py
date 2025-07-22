@@ -103,7 +103,10 @@ class PaperEventsRequest(Cog):
 
         return embeds
 
-    @slash_command(description="Finde Veranstaltungen in deiner Nähe")
+    @slash_command(
+        description="Finde Veranstaltungen in deiner Nähe",
+        guild_ids=[env.GUILD_ID]
+    )
     async def events_in_meiner_nähe(self, ctx:ApplicationContext, plz:int, land:str="Deutschland"):
         initial_response = await ctx.respond(
             f"Ich schicke dir eine Privatnachricht, wenn ich soweit bin.",

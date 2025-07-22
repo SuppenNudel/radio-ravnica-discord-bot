@@ -29,7 +29,12 @@ class InstagramMonitor(commands.Cog):
             except ValueError:
                 log.error("The environment variable 'CHANNEL_INSTAGRAM' is not a valid integer.")
 
-    @commands.slash_command(name="share_instagram_post", description="Share an Instagram post by ID or URL", default_member_permissions=discord.Permissions(manage_guild=True))
+    @commands.slash_command(
+        name="share_instagram_post",
+        description="Share an Instagram post by ID or URL",
+        default_member_permissions=discord.Permissions(manage_guild=True),
+        guild_ids=[env.GUILD_ID]
+    )
     async def share_instagram_post(self, ctx: discord.ApplicationContext, post: str):
         # Restrict command to user with ID 356120044754698252
         if ctx.user.id != 356120044754698252:

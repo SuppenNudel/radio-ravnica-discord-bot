@@ -120,7 +120,7 @@ class AskUsAnything(Cog):
         #     if initial_response:
         #         await initial_response.edit_original_response(content=f"{current_message}: Created database entry with status {status}")
 
-    @slash_command()
+    @slash_command(guild_ids=[env.GUILD_ID])
     @discord.default_permissions(manage_guild=True)
     @commands.has_role("Moderator")
     @option(name="limit", input_type=int)

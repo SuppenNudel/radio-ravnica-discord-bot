@@ -138,6 +138,7 @@ class PaperEventSubmit(Cog):
 
     # Weitere Checks https://gist.github.com/Painezor/eb2519022cd2c907b56624105f94b190
     @slash_command(
+        guild_ids=[env.GUILD_ID],
         description="Reiche ein Paper Turnier/Event ein",
         integration_type={IntegrationType.user_install},
         contexts={InteractionContextType.bot_dm} #, InteractionContextType.private_channel
