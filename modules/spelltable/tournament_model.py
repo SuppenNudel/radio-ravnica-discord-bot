@@ -127,8 +127,9 @@ async def update_tournament_message(guild:discord.Guild):
         log.debug(f"Guild {guild.id} is not in the list of guilds to update tournament messages.")
         return
     log.info(f"Updating tournament message")
-    tourney_list_message = await generate_tournament_message(list(active_tournaments.values()))
-    calendar_img = generate_calendar(list(active_tournaments.values()))
+    rr_tournaments = [t for t in active_tournaments.values() if t.guild.id == guild.id and not t.cancelled]
+    tourney_list_message = await generate_tournament_message(rr_tournaments)
+    calendar_img = generate_calendar(rr_tournaments)
     calendar_file = None
     if calendar_img:
         calendar_file = discord.File(calendar_img, filename=calendar_img)
@@ -235,7 +236,9 @@ class SpelltableTournament(Serializable):
                 try:
                     # thread does not have get_message method, so we need to fetch the message
                     self._message = await thread.fetch_message(self.message_id)
+                    log.debug(f"Got message of tournament {self.title} on {self.guild.name}: https://discord.com/channels/{self.guild.id}/{self.channel_id}/{self.message_id}")
                 except Exception as e:
+                    log.error(e)
                     return None
             except discord.errors.Forbidden:
                 log.error(f"Bot does not have permission to access channel {self.channel_id} in guild {self.guild.id} ({self.guild.name}).")
