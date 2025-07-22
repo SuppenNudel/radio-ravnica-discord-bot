@@ -43,7 +43,7 @@ intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
 
-debug_guilds = [os.getenv("GUILD")] if IS_DEBUG else []
+debug_guilds = [os.getenv("GUILD"), os.getenv("DEBUG_GUILD2_ID")] if IS_DEBUG else []
 
 bot:Bot = Bot(
     intents=intents,
@@ -68,7 +68,7 @@ async def on_ready():
 if __name__ == "__main__":
     os.makedirs("tmp", exist_ok=True)
     if IS_DEBUG:
-        bot.load_extension('cogs.ask-us-anything')
+        bot.load_extension('cogs.spelltable.spelltable_tournament')
     else:
         bot.load_cogs(subdirectories=True, ignored_cogs=[])
     bot.add_status_changer(
