@@ -141,7 +141,6 @@ class PaperEventSubmit(Cog):
         guild_ids=[env.GUILD_ID],
         description="Reiche ein Paper Turnier/Event ein",
         integration_type={IntegrationType.user_install},
-        contexts={InteractionContextType.bot_dm} #, InteractionContextType.private_channel
     )
     async def poste_turnier(self, ctx:ApplicationContext):
         try:
