@@ -209,7 +209,7 @@ class SpelltableTournament(Serializable):
                     return user
                 except discord.errors.NotFound: 
                     return None
-            raise Exception(f"User with ID {user_id} not found in guild {self.guild.id}.")
+            raise Exception(f"User with ID {user_id} not found in guild {self.guild.id} for tournament {self.title}.")
 
     @property
     async def organizer(self) -> discord.Member|None:

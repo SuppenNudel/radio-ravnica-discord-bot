@@ -19,6 +19,7 @@ from modules.spelltable import common_views
 link_log = logging.getLogger("link_logger")
 
 IS_DEBUG = env.DEBUG
+BOT = None
 
 EMOJI_PATTERN = re.compile("[\U0001F300-\U0001F6FF\U0001F900-\U0001F9FF\U0001FA70-\U0001FAFF\U0001F600-\U0001F64F]+", flags=re.UNICODE)
 
@@ -281,12 +282,17 @@ class EditTournamentView(discord.ui.View):
 
 class SpelltableTournamentManager(Cog):
     def __init__(self, bot:Bot):
-        self.bot = bot
+        global BOT
+        BOT = bot
         self.update_task.start()
 
     @Cog.listener()
     async def on_ready(self):
-        loaded_tournaments = await load_tournaments(self.bot)
+        if not BOT:
+            raise Exception("BOT is None")
+        
+        guild:discord.Guild = BOT.get_guild(env.GUILD_ID)
+        loaded_tournaments = await load_tournaments(guild, BOT)
 
         global active_tournaments
         for message_path, tournament in loaded_tournaments.items():
@@ -331,8 +337,8 @@ class SpelltableTournamentManager(Cog):
                 file_path = TOURNAMENTS_FOLDER+"/"+(message_path.replace("/", "_"))+".json"
                 log.warning(f"Turnier konnte nicht geladen werden, weil vermutlich der entprechende Channel gelöscht wurde. Lösche Datei {file_path}")
                 os.remove(file_path)
-        
-        await update_tournament_message(self.bot)
+
+        await update_tournament_message(guild)
 
         log.debug(self.__class__.__name__ + " is ready")
 
@@ -352,30 +358,11 @@ class SpelltableTournamentManager(Cog):
         if ctx.guild is None:
             await ctx.respond("Dieser Befehl kann nur in einem Server verwendet werden.", ephemeral=True)
             return
-
-        # Nur Turnierorganisatoren dürfen in Känalen unter der Kategorie "Spelltable Turniere" Turniere erstellen
-        official_tournament_roles = ["Turnier-Organisation", "Moderator", "Admin"]
-        if (ctx.channel.category
-            and ctx.channel.category.name in ("Spelltable Turniere")
-            and not any(role.name in official_tournament_roles for role in ctx.author.roles)):
-            # Use official_tournament_roles to look up roles
-            roles = [discord.utils.get(ctx.guild.roles, name=role_name) for role_name in official_tournament_roles]
-            # Collect roles that are not None
-            found_roles = [role for role in roles if role]
-            not_found_roles = [name for role, name in zip(roles, official_tournament_roles) if not role]
-            roles_mentions = ", ".join(role.mention for role in found_roles)
-            message = ""
-            if roles_mentions:
-                message += f"Du hast keine der Rolle(n) {roles_mentions} und darfst daher keine offiziellen Radio Ravnica Turniere erstellen!\nDu darfst gerne in einem anderen Kanal, der nicht unter der Kategorie \"Spelltable Turniere\" steht, ein Turnier erstellen."
-            if not_found_roles:
-                message += f"\nDie Rolle(n) {', '.join(f'`{name}`' for name in not_found_roles)} existieren nicht... Bitte benachrichtige einen Moderator des Servers!"
-            await ctx.respond(message.strip(), ephemeral=True)
-            return
         
         # Defer the interaction response to avoid timeout
         await ctx.defer(ephemeral=True)
 
-        tournament = SpelltableTournament(ctx.guild, titel, ctx.author.id, self.bot)
+        tournament = SpelltableTournament(ctx.guild, titel, ctx.author.id, BOT)
         tournament.organizer = ctx.author
         view = await EditTournamentView.create(tournament, ctx.channel)
         await ctx.followup.send(
@@ -400,14 +387,18 @@ class SpelltableTournamentManager(Cog):
         await asyncio.sleep(delay)
 
         # Execute the update
-        await update_tournament_message(self.bot)
+        guild = BOT.get_guild(env.GUILD_ID)
+        if guild:
+            await update_tournament_message(guild)
+        else:
+            log.error(f"Guild is {guild}. Cannot update tournament message")
 
     @update_task.before_loop
     async def before_update_task(self):
         """
         Wait until the bot is ready before starting the task.
         """
-        await self.bot.wait_until_ready()
+        await BOT.wait_until_ready()
 
 def setup(bot:Bot):
     bot.add_cog(SpelltableTournamentManager(bot))
