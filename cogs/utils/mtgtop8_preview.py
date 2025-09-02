@@ -12,7 +12,7 @@ from enum import Enum
 from modules import env
 import io
 
-MTGTOP8_URL_REGEX = r"https?://mtgtop8\.com/event\?(?:[^ ]*?&)?d=\d+(?:&[^ ]*)?"
+MTGTOP8_URL_REGEX = r"https?://[w]{0,3}\.?mtgtop8\.com/event\?(?:[^ ]*?&)?d=\d+(?:&[^ ]*)?"
 
 # Enum for card groups
 class CardGroup(Enum):
