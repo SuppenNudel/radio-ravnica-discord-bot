@@ -70,7 +70,7 @@ if __name__ == "__main__":
     if IS_DEBUG:
         bot.load_extension('cogs.spelltable.spelltable_tournament')
     else:
-        bot.load_cogs(subdirectories=True, ignored_cogs=[])
+        bot.load_cogs(subdirectories=True, ignored_cogs=["format_overlap_check"])
     bot.add_status_changer(
         "Puzzelt mit Blacky",
     #     discord.Game("plays with you"),
