@@ -89,6 +89,13 @@ class ReportMatchModal(discord.ui.Modal):
         )
         self.add_item(self.draw_score)
 
+        self.personalized_message = discord.ui.InputText(
+            label=f"Nachricht an deinen Gegner",
+            placeholder="Schreib eine nette Nachricht, wenn du möchtest :)",
+            required=False
+        )
+        self.add_item(self.personalized_message)
+
     @classmethod
     async def create(cls, tournament:SpelltableTournament, round:swiss_mtg.Round, match:swiss_mtg.Match):
         instance = object.__new__(cls)
@@ -106,7 +113,8 @@ class ReportMatchModal(discord.ui.Modal):
             return
         
         await interaction.response.defer()
-        gg_message = await interaction.followup.send(f"{self.player1_user.mention} {score1} - {score2} {self.player2_user.mention}{f' ({draw_score} Unentschieden)' if draw_score else ''}\nGGs!", wait=True)
+        message_to_opponend = f"{interaction.user.mention} lässt ausrichten:\n> {self.personalized_message.value}" if self.personalized_message.value else "GGs!"
+        gg_message = await interaction.followup.send(f"{self.player1_user.mention} {score1} - {score2} {self.player2_user.mention}{f' ({draw_score} Unentschieden)' if draw_score else ''}\n{message_to_opponend}", wait=True)
 
         if env.DEBUG:
             swiss_mtg.simulate_remaining_matches(self.tournament.swiss_tournament)
