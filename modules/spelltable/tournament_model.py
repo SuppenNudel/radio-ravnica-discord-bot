@@ -156,8 +156,8 @@ async def update_tournament_message(bot:discord.Bot, trigger_guild:discord.Guild
     link_log.info(f"Tournament Overview Message updated: {calendar_message.jump_url}")
 
     tournament_count = len(rr_tournaments)
-    activity_name = f"{tournament_count} Turnier{'en' if tournament_count != 1 else ''} zu"
-    activity = discord.Activity(type=discord.ActivityType.watching, name=activity_name)
+    activity_name = f"Veranstaltet {tournament_count} Turnier{'e' if tournament_count != 1 else ''}"
+    activity = discord.CustomActivity(name=activity_name)
     await bot.change_presence(activity=activity)
 
 async def use_custom_try(purpose:str, func, tournament:"SpelltableTournament"):
