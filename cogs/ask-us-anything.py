@@ -9,6 +9,7 @@ import os
 import traceback
 from enum import Enum
 from modules import env
+import random
 
 EMOJI_THUMBS_UP = "👍"
 EMOJI_NOTEPAD = "🗒️"
@@ -26,7 +27,7 @@ def create_aua_payload(message_text, author:discord.User, date:datetime, url, st
         notion.NotionPayloadBuilder()
         .add_title("Text", message_text)
         .add_text("Author", author.display_name)
-        .add_number("Author ID", author.id)
+        .add_text("Author ID", str(author.id))
         .add_date("Date", date)
         .add_url("Discord Link", url)
     )
@@ -119,6 +120,29 @@ class AskUsAnything(Cog):
         #     log.debug(f"Created database entry on message for '{message_text}': {response['url']}")
         #     if initial_response:
         #         await initial_response.edit_original_response(content=f"{current_message}: Created database entry with status {status}")
+
+    @slash_command(guild_ids=[env.GUILD_ID], description="Hole eine zufällige 'Gesehen' Frage aus der Datenbank")
+    @discord.default_permissions(manage_guild=True)
+    @commands.has_role("Moderator")
+    async def random_aua_question(self, ctx:discord.commands.ApplicationContext):
+        await ctx.defer(ephemeral=True)
+        filter = (
+            notion.NotionFilterBuilder()
+            .add_status_filter("Status", notion.StatusCondition.EQUALS, AuaStatus.SEEN.value)
+            .add_url_filter("Discord Link", notion.URLCondition.CONTAINS, "https://discord.com/channels/783441128119730236")
+            .build()
+        )
+        entries = notion.get_all_entries(self.db_id_aua, filter=filter)
+        if not entries:
+            await ctx.respond("Keine passende Frage gefunden.", ephemeral=True)
+            return
+        entry = random.choice(entries)
+
+        question = entry.get_text_property("Text")
+        author = entry.get_text_property("Author")
+        author_id = entry.get_text_property("Author ID")
+        url = entry.get_url_property("Discord Link")
+        await ctx.respond(f"**Frage:** {question}\n**Von:** <@{author_id}>({author})\n{url}", ephemeral=True)
 
     @slash_command(guild_ids=[env.GUILD_ID])
     @discord.default_permissions(manage_guild=True)

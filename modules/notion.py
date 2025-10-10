@@ -151,7 +151,7 @@ class Entry():
 
     def __init__(self, entry):
         self.entry = entry
-        self.public_url = entry['public_url']
+        self.public_url = entry.get('public_url')
         self.id = entry['id']
 
     def get_property(self, name):

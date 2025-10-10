@@ -67,8 +67,5 @@ async def on_ready():
 
 if __name__ == "__main__":
     os.makedirs("tmp", exist_ok=True)
-    if IS_DEBUG:
-        bot.load_extension('cogs.spelltable.spelltable_tournament')
-    else:
-        bot.load_cogs(subdirectories=True, ignored_cogs=["format_overlap_check"])
+    bot.load_cogs(subdirectories=True, ignored_cogs=["format_overlap_check"])
     bot.run(os.getenv("TOKEN"))

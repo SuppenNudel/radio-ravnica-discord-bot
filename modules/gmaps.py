@@ -1,8 +1,16 @@
 import googlemaps
-from modules import env, notion
-# import env
+
+if __name__ == "__main__":
+    import env
+else:
+    from modules import env, notion
 import requests
 import urllib.parse
+import logging
+
+DEFAULT_LOG = "ezcord"
+log = logging.getLogger(DEFAULT_LOG)
+link_log = logging.getLogger("link_logger")
 
 GMAPS_TOKEN = env.GMAPS_TOKEN
 STATE_TAGS = env.STATE_TAGS
@@ -40,6 +48,7 @@ class Location():
         self.county = None
         self.street = None
         self.street_number = None
+        self.zip = None
         self.formatted_address = None
         self.coord = None
         self.types = None
@@ -49,26 +58,31 @@ class Location():
 
     def __str__(self):
         if self.city:
-            return f"{self.name} {self.city['long_name']}"
+            return f"{self.name} - {self.street['long_name']} {self.street_number['long_name']}, {self.zip['long_name']} {self.city['long_name']}"
 
     @classmethod
     def from_geocode_result(cls, geocode_result, place_details) -> "Location":#:type:Literal['geocode', 'places']):
         location = Location()    
         # if type == 'geocode':
-        for obj in geocode_result['address_components']:
-            types = obj.get('types', [])
-            if 'country' in types:
-                location.country = obj
-            elif 'administrative_area_level_1' in types:
-                location.state = obj
-            elif 'locality' in types:
-                location.city = obj
-            elif 'administrative_area_level_3' in types:
-                location.county = obj # Landkreis
-            elif 'route' in types:
-                location.street = obj
-            elif 'street_number' in types:
-                location.street_number = obj
+        if geocode_result and 'address_components' in geocode_result:
+            for obj in geocode_result['address_components']:
+                types = obj.get('types', [])
+                if 'country' in types:
+                    location.country = obj
+                elif 'administrative_area_level_1' in types:
+                    location.state = obj
+                elif 'locality' in types:
+                    location.city = obj
+                elif 'administrative_area_level_3' in types:
+                    location.county = obj # Landkreis
+                elif 'route' in types:
+                    location.street = obj
+                elif 'street_number' in types:
+                    location.street_number = obj
+                elif 'postal_code' in types:
+                    location.zip = obj
+        else:
+            link_log.error(f"No address_components for {place_details['url']}")
         # elif type == 'places':
         #     self.name = geocode_result['name']
         location.formatted_address:str = geocode_result['formatted_address']
@@ -152,10 +166,17 @@ def get_location(location:str, language="de", details=False) -> Location:
     geocode_results = gmaps.geocode(location, language=language)
     if len(geocode_results) == 0:
         # not found
-        raise Exception(f"No location found for {location}")
+        raise Exception(f"No location  found for {location}")
     if len(geocode_results) > 1:
-        locations = [Location.from_geocode_result(geocode_results, 'geocode') for geocode_result in geocode_results]
-        raise Exception(f"Multiple locations found for {location}", locations)
+        locations:[Location] = []
+        for geocode_result in geocode_results:
+            place_details = None
+            if details:
+                place_details = gmaps.place(place_id=geocode_results[0]['place_id'])['result']
+            location_result:Location = Location.from_geocode_result(geocode_result, place_details)
+            locations.append(location_result)
+        locations_str = '\n'.join([f"{loc.name}\n{loc.formatted_address}\n{loc.gmaps_url}\n" for loc in locations])
+        raise Exception(f"Mehrere Orte für '{location}' gefunden:\n\n{locations_str}\nBitte versuche den Ort zu spezifizieren!")
     # location_coords = geocode_results[0]["geometry"]["location"]
     place_details = None
     if details:
@@ -163,7 +184,7 @@ def get_location(location:str, language="de", details=False) -> Location:
     return Location.from_geocode_result(geocode_results[0], place_details)
 
 if __name__ == "__main__":
-    lucca = get_location("Via della Chiesa XXXII, 237, 55100 Lucca LU, Italien")
+    lucca = get_location("Comic Planet Osnabrück")
     lucca.get_static_map()
     exit()
 

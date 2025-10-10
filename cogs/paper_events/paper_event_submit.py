@@ -6,6 +6,9 @@ from modules import notion, env, gmaps
 import modules.paper_events_common as pe_common
 import traceback
 from datetime import datetime
+import logging
+
+link_log = logging.getLogger("link_logger")
 
 EVENT_DATABASE_ID = env.EVENT_DATABASE_ID
 DEBUG = env.DEBUG
@@ -131,7 +134,7 @@ class PaperEventSubmit(Cog):
                 await message.edit(view=view)
 
             except discord.NotFound as e:
-                log.error(f"Didn't find guild or author {e}")
+                link_log.error(f"Gilde/Server oder Author/Servermitglied für https://discord.com/channels/{server_id}/{thread_id} wurde konnte nicht gefunden werden: {server_id}, Author <@{author_id}>")
             # except Exception as e:
             #     log.error(f"Error when trying to parse {event}: {e}")
         log.debug(self.__class__.__name__ + " is ready")

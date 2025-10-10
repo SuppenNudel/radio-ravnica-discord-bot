@@ -190,13 +190,13 @@ async def edit_event_post(event:"PaperEvent", interaction_or_message:discord.Int
         embeds.append(gmaps_embed)
     files = event.get_files()
     if type(interaction_or_message) == discord.Interaction:
-        await interaction_or_message.response.edit_message(
+        await interaction_or_message.edit_original_response(
             content=event.construct_content(preview=True),
             embeds=embeds,
             files=files,
             attachments=[],
             view=view
-            )
+        )
     elif type(interaction_or_message) == discord.Message:
         thread = interaction_or_message.channel
         if isinstance(thread, discord.Thread):
@@ -207,7 +207,7 @@ async def edit_event_post(event:"PaperEvent", interaction_or_message:discord.Int
             files=files,
             attachments=[],
             view=view
-            )
+        )
     else:
         log.error("interaction is neither Interaction nor Message")
 
@@ -236,12 +236,13 @@ class EditFieldModal(discord.ui.Modal):
 
     async def callback(self, interaction: discord.Interaction):
         try:
+            await interaction.response.defer()
             new_value = self.input.value
             self.field.value = new_value
 
             await edit_event_post(self.event, interaction, EditTourneyView(self.event))
         except Exception as e:
-            await interaction.respond(e, ephemeral=True)
+            await interaction.followup.send(str(e), ephemeral=True)
 
 def make_callback(event, field:InputField):
     async def edit_field_callback(interaction:discord.Interaction):
@@ -394,11 +395,15 @@ class PaperEvent():
         self.fields[FieldName.END].value = entry.get_date_property("Start (und Ende)")['end']
         # location = gmaps.Location()
         location_name = entry.get_text_property("Name des Ladens")
-        # street_and_number = entry.get_text_property("Straße + Hausnummer")
+        street_and_number = entry.get_text_property("Straße + Hausnummer")
         # location.street = entry.get_text_property("Straße + Hausnummer")
         location_city = entry.get_text_property("Stadt")
         # location.state = entry.get_text_property("(Bundes)land")
-        self.fields[FieldName.LOCATION].value = f"{location_name} {location_city}"
+        try:
+            self.fields[FieldName.LOCATION].value = f"{location_name} {street_and_number} {location_city}"
+        except Exception as e:
+            log.error(f"Error while getting location info for {self.fields[FieldName.TITLE].value}")
+            log.error(str(e))
         self.fields[FieldName.FEE].value = entry.get_number_property("Gebühr")
         formats = entry.get_multi_select_property("Format(e)")
         self.fields[FieldName.FORMATS].value = formats
@@ -429,6 +434,7 @@ class PaperEvent():
         if self.fields[FieldName.FEE].value:
             payload.add_number("Gebühr", self.fields[FieldName.FEE].value)
         location:gmaps.Location = self.fields[FieldName.LOCATION].value
+        payload.add_text("Straße + Hausnummer", f"{location.street['long_name']} {location.street_number['long_name']}")
         payload.add_text("Name des Ladens", location.name or "")
         payload.add_text("Stadt", location.city['long_name'])
         payload.add_relation("(Bundes)land", location.get_area_page_id())
