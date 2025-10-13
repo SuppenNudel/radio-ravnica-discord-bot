@@ -429,13 +429,20 @@ class SpelltableTournament(Serializable):
 
     async def update_pairings(self, round:swiss_mtg.Round):
         pairings_message:discord.Message = await self.get_message(round.message_id_pairings)
-        link_log.info(f"updating pairings {pairings_message.jump_url}")
-        pairings_image = await self.pairings_to_image(round)
-        pairings_file = discord.File(pairings_image, filename=pairings_image)
         if pairings_message:
+            link_log.info(f"updating pairings {pairings_message.jump_url}")
+            pairings_image = await self.pairings_to_image(round)
+            pairings_file = discord.File(pairings_image, filename=pairings_image)
             await pairings_message.edit(file=pairings_file, attachments=[], content=pairings_message.content or "Kein Inhalt verfügbar.")
         else:
-            raise Exception("Pairings message not found.")
+            # issue new pairing message
+            pairings_image = await self.pairings_to_image(round)
+            pairings_file = discord.File(pairings_image, filename=pairings_image)
+            channel = await self.guild.fetch_channel(self.channel_id)
+            pairings_message = await channel.send(file=pairings_file, content="Neue Paarungen:")
+            round.message_id_pairings = pairings_message.id
+            log.info(f"Issued new pairings message {pairings_message.jump_url} for tournament {self.title}.")
+            await self.save_tournament()
 
         await self.save_tournament()
     

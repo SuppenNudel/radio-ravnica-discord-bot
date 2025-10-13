@@ -295,6 +295,8 @@ class SpelltableTournamentManager(Cog):
                 tournament_message = await tournament.message
 
                 if tournament.swiss_tournament:
+                    # await tournament_message.edit(view=None)
+
                     # tournament has been started started
                     current_round = tournament.swiss_tournament.current_round()
                     if current_round.message_id_standings:
@@ -321,6 +323,9 @@ class SpelltableTournamentManager(Cog):
                             await message.channel.edit(archived=False)
                         pairings = await tournament.get_pairings()
                         await message.edit(view=view, content=f"Paarungen für die {current_round.round_number}. Runde:\n\n{pairings}")
+                    else:
+                        # pairings have not been posted yet
+                        await tournament.update_pairings(current_round)
                 else:
                     view = await ParticipationView.create(tournament)
                     await tournament_message.edit(view=view)
