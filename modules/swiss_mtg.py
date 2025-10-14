@@ -251,11 +251,15 @@ class Round(Serializable):
         round = Round(round_data['round_number'])
         round.matches = [Match.deserialize(match, players, round.round_number) for match in round_data['matches']]
         if 'message_pairings' in round_data:
-            message = int(round_data['message_pairings'])
-            round.message_id_pairings = message
+            message_id_str = round_data['message_pairings']
+            if message_id_str is not None:
+                message_id = int(message_id_str)
+                round.message_id_pairings = message_id
         if 'message_standings' in round_data:
-            message = int(round_data['message_standings'])
-            round.message_id_standings = message
+            message_id_str = round_data['message_standings']
+            if message_id_str is not None:
+                message_id = int(message_id_str)
+                round.message_id_standings = message_id
         return round
     
     def is_concluded(self):

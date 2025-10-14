@@ -371,22 +371,37 @@ class ReportMatchView(discord.ui.View):
             return
         await interaction.response.send_modal(CancelTournamentModal(self.tournament))
 
+async def post_pairings(round:swiss_mtg.Round, tournament:SpelltableTournament, previous_round:swiss_mtg.Round=None, interaction:discord.Interaction=None):
+    reportMatchView = await ReportMatchView.create(round, tournament)
+    pairings_image = await tournament.pairings_to_image()
+    pairings_file = discord.File(pairings_image, filename=pairings_image)
+    pairings = await tournament.get_pairings()
+    if interaction:
+        new_pairings_message:discord.Message = await interaction.followup.send(content=f"Paarungen für die {round.round_number}. Runde:\n\n{pairings}", file=pairings_file, view=reportMatchView)
+    else:
+        message_to_reply_to = None
+        if round.round_number == 1:
+            # first round, post in tournament channel
+            message_to_reply_to = await tournament.message
+        else:
+            if not previous_round:
+                previous_round = tournament.swiss_tournament.rounds[round.round_number - 2]
+            message_to_reply_to = await tournament.get_message(previous_round.message_id_pairings)
+        new_pairings_message:discord.Message = await message_to_reply_to.reply(content=f"Paarungen für die {round.round_number}. Runde:\n\n{pairings}", file=pairings_file, view=reportMatchView)
+    
+    if previous_round:
+        previous_pairings_message = await new_pairings_message.channel.fetch_message(previous_round.message_id_pairings)
+        await previous_pairings_message.unpin()
+    await new_pairings_message.pin()
+    round.message_id_pairings = new_pairings_message.id
+    return new_pairings_message
+
 async def next_round(tournament:SpelltableTournament, interaction:discord.Interaction):
     async def do_the_thing():
         previous_round = tournament.swiss_tournament.current_round()
         round = tournament.swiss_tournament.pair_players()
-        await interaction.followup.send(f"Berechne Paarungen für Runde {round.round_number} ...", ephemeral=True)
-        reportMatchView = await ReportMatchView.create(round, tournament)
-        pairings_image = await tournament.pairings_to_image()
-        pairings_file = discord.File(pairings_image, filename=pairings_image)
         try:
-            pairings = await tournament.get_pairings()
-            new_pairings_message:discord.Message = await interaction.followup.send(content=f"Paarungen für die {round.round_number}. Runde:\n\n{pairings}", file=pairings_file, view=reportMatchView)
-            await new_pairings_message.pin()
-
-            if previous_round:
-                previous_pairings_message = await new_pairings_message.channel.fetch_message(previous_round.message_id_pairings)
-                await previous_pairings_message.unpin()
+            new_pairings_message:discord.Message = await post_pairings(round, tournament, previous_round, interaction)
         except discord.errors.HTTPException as e:
             log.error(f"Failed to send pairings message: {e}")
             await interaction.followup.send("Fehler beim Senden der Paarungen. Bitte versuche es später erneut.", ephemeral=True)
@@ -398,7 +413,6 @@ async def next_round(tournament:SpelltableTournament, interaction:discord.Intera
 
         if not isinstance(new_pairings_message, discord.Message):
             raise TypeError("Expected a discord.Message, but got None or an invalid type.")
-        round.message_id_pairings = new_pairings_message.id
         await tournament.save_tournament()
 
         # message players direcly
@@ -461,11 +475,14 @@ class StartNextRoundView(discord.ui.View):
     @discord.ui.button(label="Nächste Runde", style=discord.ButtonStyle.success, emoji="➡️")
     async def next_round_button(self, button: discord.ui.Button, interaction: discord.Interaction):
         async def do_the_thing():
+            # check if the user even is allowed to start the next round
+            # only Moderator or Organizer
             if interaction.user.id != self.tournament.organizer_id and not any(role.name == "Moderator" for role in interaction.user.roles):
                 await interaction.respond("Nur der Turn Organisator darf dies tun.", ephemeral=True)
                 return
             await interaction.response.defer()
 
+            # update the previous round's messages
             previous_standings_message = await self.tournament.get_message(self.previous_round.message_id_standings)
             previous_pairings_message = await self.tournament.get_message(self.previous_round.message_id_pairings)
 

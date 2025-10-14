@@ -279,6 +279,29 @@ class EditTournamentView(discord.ui.View):
             )
             link_log.info(f"Ein Turnier wurde erstellt: {message.jump_url}")
 
+async def update_pairings(tournament:SpelltableTournament, round:swiss_mtg.Round):
+    # make sure the pairings message is up to date
+    pairings_message = None
+    if round.message_id_pairings:
+        pairings_message:discord.Message = await tournament.get_message(round.message_id_pairings)
+    if pairings_message:
+        link_log.info(f"updating pairings {pairings_message.jump_url}")
+        pairings_image = await tournament.pairings_to_image(round)
+        pairings_file = discord.File(pairings_image, filename=pairings_image)
+        await pairings_message.edit(file=pairings_file, attachments=[], content=pairings_message.content or "Kein Inhalt verfügbar.")
+    else:
+        pairings_message = await common_views.post_pairings(round, tournament)
+        log.info(f"Issued new pairings message {pairings_message.jump_url} for tournament {tournament.title}.")
+    # else:
+    #     # issue new pairing message
+    #     pairings_image = await tournament.pairings_to_image(round)
+    #     pairings_file = discord.File(pairings_image, filename=pairings_image)
+    #     channel = await tournament.guild.fetch_channel(tournament.channel_id)
+    #     pairings_message = await channel.send(file=pairings_file, content="Neue Paarungen:")
+    #     round.message_id_pairings = pairings_message.id
+
+    await tournament.save_tournament()
+
 class SpelltableTournamentManager(Cog):
     def __init__(self, bot:Bot):
         self.bot = bot
@@ -325,7 +348,7 @@ class SpelltableTournamentManager(Cog):
                         await message.edit(view=view, content=f"Paarungen für die {current_round.round_number}. Runde:\n\n{pairings}")
                     else:
                         # pairings have not been posted yet
-                        await tournament.update_pairings(current_round)
+                        await update_pairings(tournament, current_round)
                 else:
                     view = await ParticipationView.create(tournament)
                     await tournament_message.edit(view=view)

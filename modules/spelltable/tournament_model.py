@@ -345,7 +345,8 @@ class SpelltableTournament(Serializable):
                 self.users[userid] = state
 
         await self.check_waitlist(participants)
-
+        tournament_message = await self.message
+        link_log.info(f"Benutzer <@{userid}> hat den Status auf {state.name} für das Turnier {tournament_message.jump_url} gesetzt")
         await self.save_tournament()
         message = await self.message
         if message:
@@ -426,25 +427,6 @@ class SpelltableTournament(Serializable):
             tourney_message = await self.message
             return await tourney_message.channel.fetch_message(message_id)
         return None
-
-    async def update_pairings(self, round:swiss_mtg.Round):
-        pairings_message:discord.Message = await self.get_message(round.message_id_pairings)
-        if pairings_message:
-            link_log.info(f"updating pairings {pairings_message.jump_url}")
-            pairings_image = await self.pairings_to_image(round)
-            pairings_file = discord.File(pairings_image, filename=pairings_image)
-            await pairings_message.edit(file=pairings_file, attachments=[], content=pairings_message.content or "Kein Inhalt verfügbar.")
-        else:
-            # issue new pairing message
-            pairings_image = await self.pairings_to_image(round)
-            pairings_file = discord.File(pairings_image, filename=pairings_image)
-            channel = await self.guild.fetch_channel(self.channel_id)
-            pairings_message = await channel.send(file=pairings_file, content="Neue Paarungen:")
-            round.message_id_pairings = pairings_message.id
-            log.info(f"Issued new pairings message {pairings_message.jump_url} for tournament {self.title}.")
-            await self.save_tournament()
-
-        await self.save_tournament()
     
     async def get_pairings(self, round=None) -> str:
         if round is None:
