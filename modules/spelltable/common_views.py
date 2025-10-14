@@ -121,8 +121,35 @@ class ReportMatchModal(discord.ui.Modal):
 
         log_text = f"Match result submitted: {self.player1_user.mention} vs {self.player2_user.mention} → {score1}-{score2}-{draw_score}"
         link_log.info(f"{log_text} in {gg_message.jump_url}")
-        await self.tournament.update_pairings(self.round)
+        await update_pairings(self.tournament, self.round)
         await update_standings(self.tournament, interaction)
+
+
+async def update_pairings(tournament:SpelltableTournament, round:swiss_mtg.Round):
+    # make sure the pairings message is up to date
+    
+    view = await ReportMatchView.create(round, tournament)
+    pairings_message = None
+    if round.message_id_pairings:
+        pairings_message:discord.Message = await tournament.get_message(round.message_id_pairings)
+    if pairings_message:
+        link_log.info(f"updating pairings {pairings_message.jump_url}")
+        pairings_image = await tournament.pairings_to_image(round)
+        pairings_file = discord.File(pairings_image, filename=pairings_image)
+        await pairings_message.edit(file=pairings_file, attachments=[], content=pairings_message.content or "Kein Inhalt verfügbar.", view=view)
+    else:
+        pairings_message = await post_pairings(round, tournament)
+        log.info(f"Issued new pairings message {pairings_message.jump_url} for tournament {tournament.title}.")
+    # else:
+    #     # issue new pairing message
+    #     pairings_image = await tournament.pairings_to_image(round)
+    #     pairings_file = discord.File(pairings_image, filename=pairings_image)
+    #     channel = await tournament.guild.fetch_channel(tournament.channel_id)
+    #     pairings_message = await channel.send(file=pairings_file, content="Neue Paarungen:")
+    #     round.message_id_pairings = pairings_message.id
+
+    await tournament.save_tournament()
+
 
 class ConfirmDropModal(discord.ui.Modal):
     def __init__(self, player:swiss_mtg.Player, tournament:SpelltableTournament):
@@ -145,7 +172,7 @@ class ConfirmDropModal(discord.ui.Modal):
         
         # update matchups, i.e. strike through dropped player
         current_round = self.tournament.swiss_tournament.current_round()
-        await self.tournament.update_pairings(current_round)
+        await update_pairings(self.tournament, current_round)
 
         # update standings, i.e. strike through dropped player
         await update_standings(self.tournament, interaction)
@@ -206,7 +233,7 @@ class ConfirmKickView(discord.ui.View):
             if player_to_drop:
                 player_to_drop.dropped = True
                 await update_standings(self.tournament, interaction)
-                await self.tournament.update_pairings(self.tournament.swiss_tournament.current_round())
+                await update_pairings(self.tournament, self.tournament.swiss_tournament.current_round())
             else:
                 log.error(f"Player with id {self.user_to_kick.id} in Swiss Tournament not found")
         else:
@@ -313,7 +340,7 @@ class ReportMatchView(discord.ui.View):
         if env.DEBUG:
             swiss_mtg.simulate_remaining_matches(tournament.swiss_tournament)
 
-            await tournament.update_pairings(round)
+            await update_pairings(tournament, round)
             await update_standings(tournament, interaction)
 
     @discord.ui.button(label="Report Match Result", style=discord.ButtonStyle.primary)
