@@ -36,7 +36,7 @@ class ArenaDailyDeals(Cog):
             latest_post = bluesky.check_for_new_post(self.author_did)
             return latest_post
         except Exception as e:
-            log.error(e)
+            log.error(f"An error occured checking for lastest posts: {e}")
 
     @discord.ext.tasks.loop(minutes=15)
     async def check_bsky_posts(self):

@@ -12,6 +12,9 @@ import os
 from discord.ui import Modal
 from discord.utils import format_dt
 from modules.date_time_interpretation import parse_date
+import logging
+
+link_log = logging.getLogger("link_logger")
 
 DB_ID_REMIND_ME = os.getenv("DATABASE_ID_REMIND_ME")
 DB_FIELD_DATE = "Timestamp"
@@ -163,13 +166,13 @@ class RemindMe(commands.Cog):
         modal = ReminderModal(user=ctx.author, message=message)
         await ctx.send_modal(modal)
 
-    async def send_reminder_message(self, guild, message_id, channel_id, user_id, reason=None):
+    async def send_reminder_message(self, guild:discord.Guild, message_id, channel_id, user_id, reason=None):
         bot = self.bot
         try:
             # Fetch the channel
             channel = bot.get_channel(channel_id)
             if channel is None:
-                log.debug("couln't 'get' channel. Fetching channel")
+                link_log.debug(f"couldn't 'get' channel with id {channel_id}({guild.jump_url}/{channel_id}). Fetching channel")
                 channel = await bot.fetch_channel(channel_id)
             
             if channel is None:
@@ -232,9 +235,9 @@ class RemindMe(commands.Cog):
             log.debug(f"Message forwarded to {user.name} via DM.")
             return True
         except discord.NotFound:
-            log.error("Message or channel not found!")
+            link_log.error(f"Message or channel not found! {guild.jump_url}/{channel_id} {guild.jump_url}/{channel_id}/{message_id} or user <@{user_id}>")
         except discord.Forbidden as e:
-            log.error("I don't have permission to access this channel or DM the user!")
+            link_log.error(f"I don't have permission to access this channel {guild.jump_url}/{channel_id} or DM the user <@{user_id}>!")
         except discord.HTTPException as e:
             log.error(f"An error occurred: {e}")
         return False
