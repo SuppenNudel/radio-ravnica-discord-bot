@@ -70,3 +70,4 @@ if __name__ == "__main__":
     os.makedirs("tmp", exist_ok=True)
     bot.load_cogs(subdirectories=True, ignored_cogs=["format_overlap_check"])
     bot.run(os.getenv("TOKEN"))
+
