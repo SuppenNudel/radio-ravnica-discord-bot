@@ -43,7 +43,7 @@ intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
 
-debug_guilds = [os.getenv("GUILD"), os.getenv("DEBUG_GUILD2_ID")] if IS_DEBUG else []
+debug_guilds = [env.GUILD_ID, os.getenv("DEBUG_GUILD2_ID")] if IS_DEBUG else []
 
 bot:Bot = Bot(
     intents=intents,
