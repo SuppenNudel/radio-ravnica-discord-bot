@@ -24,7 +24,8 @@ class ArenaDailyDeals(Cog):
         #     if guild.id != 783441128119730236: # RR Server
         #         link_log.info(f"Owner: {guild.owner.mention}\nIcon: {guild.icon.url if guild.icon else 'No icon'}")
         # log.info(guilds_str)
-        # self.author_did = bluesky.get_target_did(BSKY_ARENA_DAILY_DEALS_HANDLE)
+        
+        self.author_did = bluesky.get_target_did(BSKY_ARENA_DAILY_DEALS_HANDLE)
 
         if not self.check_bsky_posts.is_running():
             self.check_bsky_posts.start()

@@ -372,7 +372,7 @@ class AskUsAnything(Cog):
                 # Find the index where question_text is contained in comment_text
                 index = next((i for i, comment in enumerate(comment_text) if question_text in comment), -1)
                 if index < 0:
-                    video_page_public_url = video_page['public_url']
+                    video_page_public_url = video_page.public_url
                     link_log.error(f"Could not find question text in comments: `{question_text}` for {video_page_public_url}")
                     continue
                 question_no = index + 1 if index != -1 else "unbekannt"
