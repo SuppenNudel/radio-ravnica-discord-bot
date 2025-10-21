@@ -361,7 +361,7 @@ class AskUsAnything(Cog):
             # Create a thread from the message if not already in a thread
             if not message.thread:
                 video_page_id = entry.get_property("Video")[0]['id']
-                video_page = notion.get_page_by_id(video_page_id)
+                video_page:notion.Entry = notion.get_page_by_id(video_page_id)
                 if not video_page:
                     log.error(f"Could not find Notion page with id: {video_page_id}")
                     continue
@@ -372,7 +372,8 @@ class AskUsAnything(Cog):
                 # Find the index where question_text is contained in comment_text
                 index = next((i for i, comment in enumerate(comment_text) if question_text in comment), -1)
                 if index < 0:
-                    link_log.error(f"Could not find question text in comments: `{question_text}` for {video_page['public_url']}")
+                    video_page_public_url = video_page['public_url']
+                    link_log.error(f"Could not find question text in comments: `{question_text}` for {video_page_public_url}")
                     continue
                 question_no = index + 1 if index != -1 else "unbekannt"
 
@@ -395,7 +396,7 @@ class AskUsAnything(Cog):
                         await thread.send(youtube_timestamped_url)
                     log.debug(f"Thread '{thread_name}' created for message {message.jump_url}")
                 except Exception as e:
-                    log.error(f"An error occurred during thread creation: {e}")
+                    log.error(f"An error occurred during thread creation for message {message.jump_url}")
             else:
                 log.debug(f"Thread already exists for message {message.jump_url}")
 
