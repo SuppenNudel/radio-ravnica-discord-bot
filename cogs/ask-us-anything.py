@@ -10,6 +10,9 @@ import traceback
 from enum import Enum
 from modules import env
 import random
+import logging
+
+link_log = logging.getLogger("link_logger")
 
 EMOJI_THUMBS_UP = "👍"
 EMOJI_NOTEPAD = "🗒️"
@@ -369,7 +372,7 @@ class AskUsAnything(Cog):
                 # Find the index where question_text is contained in comment_text
                 index = next((i for i, comment in enumerate(comment_text) if question_text in comment), -1)
                 if index < 0:
-                    log.error(f"Could not find question text in comments: {question_text}")
+                    link_log.error(f"Could not find question text in comments: `{question_text}` for {video_page['public_url']}")
                     continue
                 question_no = index + 1 if index != -1 else "unbekannt"
 
