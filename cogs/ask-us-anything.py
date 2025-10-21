@@ -11,6 +11,7 @@ from enum import Enum
 from modules import env
 import random
 import logging
+import re
 
 link_log = logging.getLogger("link_logger")
 
@@ -365,15 +366,19 @@ class AskUsAnything(Cog):
                 if not video_page:
                     log.error(f"Could not find Notion page with id: {video_page_id}")
                     continue
-                question_text = entry.get_text_property("Text")
+                question_text = entry.get_text_property("Text").replace("\n", " ")
                 upload_date = video_page.get_date_property("Upload Date")['start']
-                comment_text = video_page.get_formula_property("Comment Text").split("\n")
+                comment_text_raw = video_page.get_formula_property("Comment Text")
+                # Split at timestamps like 00:00, 12:34, etc.
+                comment_text = re.split(r"\d{1,2}:\d{2}", comment_text_raw)
+                # Remove empty strings and strip whitespace
+                comment_text = [c.strip() for c in comment_text if c.strip()]
 
                 # Find the index where question_text is contained in comment_text
                 index = next((i for i, comment in enumerate(comment_text) if question_text in comment), -1)
                 if index < 0:
                     video_page_public_url = video_page.public_url
-                    link_log.error(f"Could not find question text in comments: `{question_text}` for {video_page_public_url}")
+                    link_log.error(f"Could not find question text {discord_link} in comments for {video_page_public_url}\n>>> {comment_text_raw}")
                     continue
                 question_no = index + 1 if index != -1 else "unbekannt"
 
