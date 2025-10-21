@@ -511,6 +511,13 @@ def get_select_options(database_id: str, field_name: str) -> list[str]:
     else:
         raise Exception(f"Field '{field_name}' not found or not a select/multi-select field.")
 
+def get_page_by_id(page_id: str) -> Entry:
+    """
+    Retrieves a Notion page by its ID and returns it as an Entry object.
+    """
+    response = retry_with_rate_limit(notion.pages.retrieve, page_id=page_id)
+    return Entry(response)
+
 if __name__ == "__main__":
     EVENT_DATABASE_ID="f05d532cf91f4f9cbce38e27dc85b522"
     db_id_card_score = "179f020626c280599916d453caeb0123"
