@@ -228,9 +228,9 @@ class AskUsAnything(Cog):
         if aua_entries and len(aua_entries) == 1:
             entry = aua_entries[0]
             notion.remove_entry(entry)
-            log.debug(f"Deleted Notion entry for message: {url}")
+            log.info(f"Deleted Notion entry for message: {url}")
         else:
-            log.error(f"Could not find Notion entry for deleted message: {url}")
+            log.debug(f"Could not find Notion entry for deleted message: {url}")
 
     # when user posts message in #ask-us-anything
     # write to notion
