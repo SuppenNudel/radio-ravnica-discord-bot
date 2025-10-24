@@ -76,8 +76,6 @@ async def generate_tournament_message(tournaments: list["SpelltableTournament"])
     upcoming = []
 
     for tourney in tournaments:
-        if tourney.swiss_tournament and (tourney.swiss_tournament.winner or tourney.cancelled):
-            continue
         start = tourney.time
         end = tourney.calc_end() if start else None
         if tourney.swiss_tournament:
@@ -129,6 +127,11 @@ async def update_tournament_message(bot:discord.Bot, trigger_guild:discord.Guild
     guild:discord.Guild = bot.get_guild(env.GUILD_ID)
     log.info(f"Updating tournament message")
     rr_tournaments:list["SpelltableTournament"] = [t for t in active_tournaments.values() if t.guild.id == guild.id]
+    # Remove concluded or cancelled tournaments from rr_tournaments
+    rr_tournaments = [
+        tourney for tourney in rr_tournaments
+        if not (tourney.swiss_tournament and (tourney.swiss_tournament.winner or tourney.cancelled))
+    ]
     tourney_list_message = await generate_tournament_message(rr_tournaments)
     calendar_img = generate_calendar(rr_tournaments)
     calendar_file = None
