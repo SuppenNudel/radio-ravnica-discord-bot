@@ -76,7 +76,7 @@ async def generate_tournament_message(tournaments: list["SpelltableTournament"])
     upcoming = []
 
     for tourney in tournaments:
-        if tourney.swiss_tournament.winner or tourney.cancelled:
+        if tourney.swiss_tournament and (tourney.swiss_tournament.winner or tourney.cancelled):
             continue
         start = tourney.time
         end = tourney.calc_end() if start else None
