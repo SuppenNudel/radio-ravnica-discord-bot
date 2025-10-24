@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 import asyncio
 
 from modules.spelltable.tournament_model import TOURNAMENTS_FOLDER, SpelltableTournament, load_tournaments, active_tournaments, update_tournament_message
-from modules.spelltable.common_views import FinishTournamentView, KickPlayerModal, ParticipationState, ReportMatchView, StartNextRoundView, next_round
+from modules.spelltable.common_views import SubmitDeckView, KickPlayerModal, ParticipationState, StartNextRoundView, next_round
 from modules.spelltable import common_views
 
 link_log = logging.getLogger("link_logger")
@@ -282,7 +282,7 @@ class EditTournamentView(discord.ui.View):
 class SpelltableTournamentManager(Cog):
     def __init__(self, bot:Bot):
         self.bot = bot
-        self.update_task.start()
+        self.schedule_midnight_update.start()
 
     @Cog.listener()
     async def on_ready(self):
@@ -294,40 +294,54 @@ class SpelltableTournamentManager(Cog):
                 active_tournaments[message_path] = tournament
                 tournament_message = await tournament.message
 
-                if tournament.swiss_tournament:
-                    # await tournament_message.edit(view=None)
-
-                    # tournament has been started started
-                    current_round = tournament.swiss_tournament.current_round()
-                    if current_round.message_id_standings:
-                        # standings have been posted
-                        message = await tournament.get_message(current_round.message_id_standings)
-                        if current_round.round_number < tournament.swiss_tournament.rounds_count:
-                            view = await StartNextRoundView.create(current_round, tournament)
-                        else:
-                            # Tournament is concluded
-                            view = await FinishTournamentView.create(tournament)
-                            standings_message = await tournament.get_message(current_round.message_id_standings)
-                            if standings_message:
-                                await standings_message.edit(view=view)
-                            
-                        if message.channel.archived:
-                            await message.channel.edit(archived=False)
-                        await message.edit(view=view)
-                    if current_round.message_id_pairings:
-                        # pairings have been posted
-                        message = await tournament.get_message(current_round.message_id_pairings)
-                        
-                        if message.channel.archived:
-                            await message.channel.edit(archived=False)
-                        await common_views.update_pairings(tournament, current_round)
-                    else:
-                        # pairings have not been posted yet
-                        await common_views.update_pairings(tournament, current_round)
-                else:
+                if not tournament.swiss_tournament:
+                    # tournament has not been started yet
+                    # sign-up is still open
                     view = await ParticipationView.create(tournament)
                     await tournament_message.edit(view=view)
-                
+                    continue
+
+                # tournament has been started
+                swiss_tournament = tournament.swiss_tournament
+                tournament_concluded = swiss_tournament.winner is not None
+                current_round = swiss_tournament.current_round()
+
+                if tournament_concluded:
+                    # Tournament is concluded
+                    submit_deck_view = await SubmitDeckView.create(tournament)
+                    
+                    # unarchive thread if needed
+                    if tournament_message and isinstance(tournament_message.channel, discord.Thread) and tournament_message.channel.archived:
+                        await tournament_message.channel.edit(archived=False)
+
+                    # activate deck submission button
+                    
+                    if current_round.message_id_standings:
+                        message = await tournament.get_message(current_round.message_id_standings)
+                        if message:
+                            await message.edit(view=submit_deck_view)
+                        else:
+                            link_log.error(f"Could not find standings message for concluded tournament: {tournament_message.jump_url}")
+                    continue
+
+                if current_round.message_id_standings:
+                    # standings have been posted
+                    message = await tournament.get_message(current_round.message_id_standings)
+                    if current_round.round_number < swiss_tournament.rounds_count:
+                        view = await StartNextRoundView.create(current_round, tournament)
+                        if message and isinstance(message.channel, discord.Thread) and message.channel.archived:
+                            await message.channel.edit(archived=False)
+                        if message:
+                            await message.edit(view=view)
+                if current_round.message_id_pairings:
+                    # pairings have been posted
+                    message = await tournament.get_message(current_round.message_id_pairings)
+                    if message.channel.archived:
+                        await message.channel.edit(archived=False)
+                    await common_views.update_pairings(tournament, current_round)
+                else:
+                    # pairings have not been posted yet
+                    await common_views.update_pairings(tournament, current_round)                
 
                 link_log.info(f"Turnier wurde geladen: {tournament_message.jump_url}")
             except discord.errors.NotFound:
@@ -388,7 +402,7 @@ class SpelltableTournamentManager(Cog):
         )
 
     @tasks.loop(hours=24)
-    async def update_task(self):
+    async def schedule_midnight_update(self):
         """
         Task to update the tournament message shortly after midnight.
         """
@@ -405,7 +419,7 @@ class SpelltableTournamentManager(Cog):
         # Execute the update
         await update_tournament_message(self.bot)
 
-    @update_task.before_loop
+    @schedule_midnight_update.before_loop
     async def before_update_task(self):
         """
         Wait until the bot is ready before starting the task.

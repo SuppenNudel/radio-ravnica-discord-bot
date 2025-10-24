@@ -37,7 +37,7 @@ ezcord.set_log(
     discord_log_level=logging.INFO,
     webhook_url=LOG_WEBHOOK,
     dc_codeblocks=False,
-    log_format="`{level}` {message}"
+    log_format="`%(levelname)s` %(message)s"
 )
 
 intents = discord.Intents.default()

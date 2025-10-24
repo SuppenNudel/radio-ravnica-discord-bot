@@ -21,23 +21,45 @@ def pad_ansi_text(text, width):
     visible_len = visible_length(text)
     return text + " " * (width - visible_len)
 
+class Deck(Serializable):
+    def __init__(self, link:str|None=None, archetype:str|None=None):
+        self.link = link
+        self.archetype = archetype
+
+    @classmethod
+    def deserialize(cls, data) -> "Deck":
+        if data is None:
+            return None
+        deck = Deck(data['link'] if 'link' in data else None, data['archetype'] if 'archetype' in data else None)
+        return deck
+
+    def serialize(self):
+        return {
+            "link": self.link,
+            "archetype": self.archetype
+        }
+
+
 class Player(Serializable):
     def __init__(self, name, player_id):
         self.name = name
         self.player_id:int = player_id
         self.match_history:list[Match] = []
         self.dropped = False
+        self.deck:Deck|None = None
 
     @classmethod
     def deserialize(cls, data) -> "Player":
         player = Player(data['name'], data['player_id'])
         player.dropped = data['dropped'] if 'dropped' in data else False
+        player.deck = Deck.deserialize(data['deck']) if 'deck' in data else None
         return player
 
     def serialize(self):
         my_dict = {
             "name": self.name,
             "player_id": self.player_id,
+            "deck": self.deck
         }
         if self.dropped:
             my_dict["dropped"] = self.dropped
@@ -189,7 +211,7 @@ class Match(Serializable):
         else:
             raise ValueError(f"{player} didn't participate in this match")
 
-    def get_winner(self):
+    def get_winner(self) -> Player|bool|None:
         if not self.is_finished():
             return False
         if self.wins[self.player1] > self.wins[self.player2]:
@@ -325,6 +347,8 @@ class SwissTournament(Serializable):
         if 'rounds' in data:
             player_map = {player.player_id: player for player in players}
             tournament.rounds = [Round.deserialize(round, player_map) for round in data['rounds']]
+        if 'winner' in data and isinstance(data['winner'], dict):
+            tournament.winner = Player.deserialize(data['winner'])
         return tournament
 
     def player_by_id(self, id):

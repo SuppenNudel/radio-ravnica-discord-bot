@@ -1,6 +1,6 @@
 ics
 pillow
-py-cord
+git+https://github.com/Pycord-Development/pycord
 ezcord
 scrapetube
 notion_client

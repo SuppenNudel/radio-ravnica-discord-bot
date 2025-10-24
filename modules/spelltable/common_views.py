@@ -7,6 +7,76 @@ from ezcord import log
 
 link_log = logging.getLogger("link_logger")
 
+class SubmitDeckView(discord.ui.View):
+    def __init__(self):
+        raise RuntimeError("Use 'await SubmitDeckView.create(...)' instead")
+
+    async def _init(self, tournament: SpelltableTournament):
+        super().__init__(timeout=None)
+        self.tournament = tournament
+
+    @classmethod
+    async def create(cls, tournament: SpelltableTournament):
+        instance = object.__new__(cls)
+        await instance._init(tournament)
+        return instance
+
+    @discord.ui.button(label="Deck einreichen", style=discord.ButtonStyle.primary, emoji="📝")
+    async def submit_deck_button(self, button: discord.ui.Button, interaction: discord.Interaction):
+        await interaction.response.send_modal(SubmitDeckModal(self.tournament, interaction.user))
+
+class SubmitDeckModal(discord.ui.DesignerModal):
+    def __init__(self, tournament: SpelltableTournament, player: discord.User):
+        super().__init__(title="Deck einreichen")
+        self.tournament = tournament
+        self.player = player
+
+        tournament_player:swiss_mtg.Player = tournament.swiss_tournament.player_by_id(self.player.id)
+        deck:swiss_mtg.Deck = tournament_player.deck if tournament_player and tournament_player.deck else None
+
+        self.decklist_input = discord.ui.InputText(
+            placeholder="https://moxfield.com/decks/...",
+            value=deck.link if deck else "",
+            required=False,
+        )
+        # self.archetype_input = discord.ui.Select(
+        #     placeholder="Wähle einen Archetyp...",
+        #     options=[
+        #         discord.SelectOption(label="Mono Red Burn", value="Mono Red Burn"),
+        #         discord.SelectOption(label="Mono Blue Terror", value="Mono Blue Terror"),
+        #         discord.SelectOption(label="Jund Wildfire", value="Jund Wildfire"),
+        #         discord.SelectOption(label="Mono Red Synthesizer", value="Mono Red Synthesizer"),
+        #         discord.SelectOption(label="Rakdos Madness", value="Rakdos Madness"),
+        #         discord.SelectOption(label="Mono Blue Faeries", value="Mono Blue Faeries"),
+        #     ],
+        #     max_values=1,
+        #     min_values=1,
+        #     required=False
+        # )
+        self.deck_name = discord.ui.InputText(
+            placeholder="Mono-Red Aggro, Jund Wildfire, ...",
+            required=False,
+        )
+        # self.add_item(discord.ui.Label("Archetyp", self.archetype_input, description="Wähle den Archetyp deines Decks aus."))
+        self.add_item(discord.ui.Label("Archetyp", self.deck_name, description="Wie sich das Deck nennt, das du gespielt hast"))
+        self.add_item(discord.ui.Label("Deckliste", self.decklist_input, description="Ein Link zu deiner Deckliste, z.B. Moxfield oder mtggoldfish."))
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        decklist = self.decklist_input.value.strip()
+        # Save the decklist to the tournament/player (implement as needed)
+        player:swiss_mtg.Player = self.tournament.swiss_tournament.player_by_id(self.player.id)
+        if not player:
+            await interaction.followup.send("Du bist kein Teilnehmer in diesem Turnier.", ephemeral=True)
+            return
+        archetype = None
+        # archetype = self.archetype_input.values[0] if self.archetype_input.values and len(self.archetype_input.values) == 1 else None
+        archetype = self.deck_name.value if self.deck_name.value else archetype
+        player.deck = swiss_mtg.Deck.deserialize({"link": decklist, "archetype": archetype})
+        await self.tournament.save_tournament()
+        await self.tournament.update_metagame()
+        await interaction.followup.send("Deine Deckliste wurde erfolgreich eingereicht!", ephemeral=True)
+
 class FinishTournamentView(discord.ui.View):
     def __init__(self):
         raise RuntimeError("Use 'await FinishTournamentView.create(...)' instead")
@@ -44,13 +114,29 @@ class FinishTournamentView(discord.ui.View):
 
             if pairings_message:
                 await pairings_message.edit(view=None)
+            submit_deck_view = await SubmitDeckView.create(self.tournament)
             if standings_message:
-                await standings_message.edit(view=None)
+                await standings_message.edit(content="🏆Finales Ergebnis", view=submit_deck_view)
+
 
             await interaction.response.send_message(content, ephemeral=False)
             link_log.info(f"Turnier abgeschlossen: `{self.tournament.title}`, Gewinner: <@{winner.player_id}>")
             self.tournament.swiss_tournament.winner = winner
             await self.tournament.save_tournament()
+
+            # contact players about tournament end
+            for player in self.tournament.swiss_tournament.players:
+                try:
+                    user = await self.tournament.get_member(player.player_id)
+                    if type(user) != discord.Member:
+                        user = None
+                except discord.NotFound:
+                    user = None
+                if user:
+                    try:
+                        await user.send(f"Das Turnier `{self.tournament.title}` ist abgeschlossen! Sieh dir das Endergebnis hier an: {standings_message.jump_url}")
+                    except discord.Forbidden:
+                        log.error(f"Konnte die Turnierende-Nachricht nicht an {user.mention} ({user.display_name}) senden")
         else:
             await interaction.respond("Kein Gewinner gefunden. Das sollte nicht passieren.", ephemeral=True)
 
@@ -190,11 +276,13 @@ async def update_standings(tournament:SpelltableTournament, interaction: discord
         return
     message_standings = await tournament.get_message(current_round.message_id_standings)
 
-    content = f"Platzierungen nach der {tournament.swiss_tournament.current_round().round_number}. Runde"
+    is_last_round = current_round.round_number >= tournament.swiss_tournament.rounds_count
+
+    content = f"Platzierungen nach der {current_round.round_number}.{' (und letzten)' if is_last_round else ''} Runde"
     standings_image = await tournament.standings_to_image()
     standings_file = discord.File(standings_image, filename=standings_image)
 
-    if current_round.round_number >= tournament.swiss_tournament.rounds_count:
+    if is_last_round:
         # letzte Runde
         view = await FinishTournamentView.create(tournament)
     else:
