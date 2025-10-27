@@ -263,7 +263,7 @@ class EditTournamentView(discord.ui.View):
                 return
             # Create new thread
             thread = await interaction.channel.create_thread(
-                name=self.tournament.title, type=discord.ChannelType.public_thread
+                name=self.tournament.title, type=discord.ChannelType.public_thread, auto_archive_duration=10080 # eine Woche
             )
             organizer = await self.tournament.organizer
             await interaction.channel.send(
@@ -308,7 +308,6 @@ class SpelltableTournamentManager(Cog):
 
                 if tournament_concluded:
                     # Tournament is concluded
-                    submit_deck_view = await SubmitDeckView.create(tournament)
                     
                     # unarchive thread if needed
                     if tournament_message and isinstance(tournament_message.channel, discord.Thread) and tournament_message.channel.archived:
@@ -319,6 +318,7 @@ class SpelltableTournamentManager(Cog):
                     if current_round.message_id_standings:
                         message = await tournament.get_message(current_round.message_id_standings)
                         if message:
+                            submit_deck_view = await SubmitDeckView.create(tournament)
                             await message.edit(view=submit_deck_view)
                         else:
                             link_log.error(f"Could not find standings message for concluded tournament: {tournament_message.jump_url}")
@@ -328,10 +328,10 @@ class SpelltableTournamentManager(Cog):
                     # standings have been posted
                     message = await tournament.get_message(current_round.message_id_standings)
                     if current_round.round_number < swiss_tournament.rounds_count:
-                        view = await StartNextRoundView.create(current_round, tournament)
                         if message and isinstance(message.channel, discord.Thread) and message.channel.archived:
                             await message.channel.edit(archived=False)
                         if message:
+                            view = await StartNextRoundView.create(current_round, tournament)
                             await message.edit(view=view)
                 if current_round.message_id_pairings:
                     # pairings have been posted
