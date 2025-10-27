@@ -67,7 +67,7 @@ class Youtube(commands.Cog):
                 skipped.append(content)
                 continue
             return content
-        log.warning(f"No 'non-badge' {content_type} in the last {limit} videos")
+        log.debug(f"No 'non-badge' {content_type} in the last {limit} videos")
         return None
 
     @tasks.loop(minutes=5)

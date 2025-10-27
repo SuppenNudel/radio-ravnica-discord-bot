@@ -353,6 +353,50 @@ class SpelltableTournamentManager(Cog):
 
         log.debug(self.__class__.__name__ + " is ready")
 
+    @slash_command(description="Pingt alle Spieler, die ihre Matches noch nicht gemeldet haben")
+    async def ping_missing_matches(
+        self,
+        ctx:ApplicationContext,
+        message:Option(str, description="Die Nachricht, die an die Spieler gesendet werden soll")
+    ):
+        # Check privilege and context
+        if not isinstance(ctx.channel, discord.Thread):
+            await ctx.respond("Dieser Befehl kann nur in einem Turnier-Thread ausgeführt werden.", ephemeral=True)
+            return
+        
+        this_tournament = None
+        for id, tournament in active_tournaments.items():
+            tournament_message = await tournament.message
+            if tournament_message.channel.id == ctx.channel.id:
+                this_tournament = tournament
+                break
+        if not this_tournament:
+            await ctx.respond("Kein Turnier in diesem Thread gefunden.", ephemeral=True)
+            return
+        
+        if not (
+            ctx.author.id == this_tournament.organizer_id or
+            any(role.name in ["Admin", "Moderator"] for role in ctx.author.roles)
+        ):
+            await ctx.respond("Nur der Turnier-Organisator, ein Admin oder ein Moderator darf diesen Befehl verwenden.", ephemeral=True)
+            return
+        # Privilege and context ok
+
+        current_round = this_tournament.swiss_tournament.current_round()
+        open_matches = []
+        for match in current_round.matches:
+            if not match.is_finished():
+                open_matches.append(match)
+
+        message_str = "Die folgenden Matches sind noch offen:"
+        for open_match in open_matches:
+            open_match:swiss_mtg.Match
+
+            message_str += f"\n<@{open_match.player1.player_id}> vs <@{open_match.player2.player_id}>"
+
+        message_str += f"\n\nNachricht von der Organisation:\n>>> {message}"
+        await ctx.channel.send(message_str)
+
     # @has_role("Moderator")
     @slash_command(description="Erstelle ein Spelltable Turnier für den Server")
     async def erstelle_turnier(
