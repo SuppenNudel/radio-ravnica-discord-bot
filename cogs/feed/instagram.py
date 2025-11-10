@@ -7,7 +7,7 @@ from ezcord import log
 from modules import env
 import json
 
-MOCK = True  # Set to True to use mock data from ig_return.json
+MOCK = False  # Set to True to use mock data from ig_return.json
 
 class InstagramProfile():
     def __init__(self, name:str, dc_user_id:int):
@@ -19,7 +19,8 @@ class InstagramMonitor(commands.Cog):
     def __init__(self, bot:Bot):
         self.bot = bot
         self.channels = [
-            InstagramProfile("gamerii93", 270288996666441728)
+            InstagramProfile("gamerii93", 270288996666441728),
+            InstagramProfile("radioravnica", 270288996666441728),
         ]
 
         channel_id_str = os.getenv("CHANNEL_INSTAGRAM")
@@ -36,8 +37,8 @@ class InstagramMonitor(commands.Cog):
         guild_ids=[env.GUILD_ID]
     )
     async def share_instagram_post(self, ctx: discord.ApplicationContext, post: str):
-        # Restrict command to user with ID 356120044754698252
-        if ctx.user.id != 356120044754698252:
+        # Restrict command to user with ID 356120044754698252 or 270288996666441728
+        if ctx.user.id != 356120044754698252 and ctx.user.id != 270288996666441728:
             await ctx.respond("Du hast keine Berechtigung, diesen Befehl zu verwenden.", ephemeral=True)
             return
 
@@ -51,16 +52,16 @@ class InstagramMonitor(commands.Cog):
 
             post_data = instagram.get_post_by_id(post_id, apify_token=os.getenv("API_KEY_INSTAGRAM"))
             if not post_data:
-                await ctx.respond("Kein Beitrag gefunden für diese ID/URL.", ephemeral=True)
+                await ctx.followup.send("Kein Beitrag gefunden für diese ID/URL.", ephemeral=True)
                 return
 
             # Use the first channel as the author for the post
             ig_channel = self.channels[0]
             await self.post_content(ig_channel, post_data)
-            await ctx.respond("Instagram-Post wurde geteilt.", ephemeral=True)
+            await ctx.followup.send("Instagram-Post wurde geteilt.", ephemeral=True)
         except Exception as e:
             log.error(f"Fehler beim Teilen des Instagram-Posts: {e}")
-            await ctx.respond("Fehler beim Teilen des Instagram-Posts.", ephemeral=True)
+            await ctx.followup.send("Fehler beim Teilen des Instagram-Posts.", ephemeral=True)
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -70,10 +71,10 @@ class InstagramMonitor(commands.Cog):
             raise Exception("discord_channel is not a discord.TextChannel")
         self.discord_channel:discord.TextChannel = discord_channel
 
-        log.debug(self.__class__.__name__ + " is ready")
-
         if not self.check_channels.is_running():
             self.check_channels.start()
+            
+        log.debug(self.__class__.__name__ + " is ready")
 
     async def post_content(self, ig_channel:InstagramProfile, new_post):
         caption = new_post.get("caption")
@@ -85,13 +86,14 @@ class InstagramMonitor(commands.Cog):
         tagged_users = new_post.get("taggedUsers")
         # await self.discord_channel.send(f"<@&{os.getenv('ROLE_ANNOUNCEMENT')}>\nneuer Instagram Post von **<@{ig_channel.dc_user_id}>**\n\n{url}")
 
-        quoted_caption = '\n'.join([f"> {line}" for line in caption.split('\n')])
-        header = f"📷 Neuer Instagram Post von **<@{ig_channel.dc_user_id}>**\n <{url}>\n{quoted_caption}"
+        quoted_caption = '\n'.join([f"{line}" for line in caption.split('\n')])
+        header = f"📷 Neuer Instagram Post von **<@{ig_channel.dc_user_id}>**\n<{url}>\n{quoted_caption}"
         if type == "Video":
             await self.discord_channel.send(content=f"{header}\n[Video]({video_url})")
+            # await self.discord_channel.send(content=f"{video_url}")
         elif type == "Sidecar":
             images = new_post.get("images")
-            if len(images) == 1:
+            if len(images) == 1: 
                 await self.discord_channel.send(content=f"{header}\n{images[0]}")
             else:
                 await self.discord_channel.send(content=f"{header}")
@@ -100,7 +102,8 @@ class InstagramMonitor(commands.Cog):
         elif type == "Image":
             display_url = new_post.get("displayUrl")
             display_url = display_url.replace("https://instagram.fosu2-1.fna.fbcdn.net", "https://scontent-dus1-1.cdninstagram.com")
-            await self.discord_channel.send(content=f"{header}\n{display_url}")
+            await self.discord_channel.send(content=f"{header}")#\n[Bild]({display_url})")
+            await self.discord_channel.send(content=f"{display_url}")
 
     async def get_latest_posts(self, channel:InstagramProfile):
         latest_posts = None
@@ -113,7 +116,7 @@ class InstagramMonitor(commands.Cog):
             latest_posts = [post for post in posts if post not in channel.content_cache]
         return latest_posts
 
-    @tasks.loop(hours=12)
+    @tasks.loop(hours=1)
     async def check_channels(self):
         for ig_channel in self.channels:
             latest_posts = await self.get_latest_posts(ig_channel)

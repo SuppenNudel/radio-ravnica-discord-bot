@@ -80,19 +80,22 @@ def get_latest_instagram_posts(profile_username: str, max_posts: int = 5, apify_
 
 # alle zwei Stunden abfragen
 if __name__ == "__main__":
+    import dotenv
+
+    dotenv.load_dotenv()
     # Example usage
     apify_token = os.getenv("API_KEY_INSTAGRAM")
 
     post = get_post_by_id("DLUOyLHCZtl", apify_token=apify_token)
-    # try:
-    #     posts = get_latest_instagram_posts("gamerii93", max_posts=5, apify_token=apify_token)
-    #     for post in posts:
-    #         print(f"is pinned: {post.get('isPinned', False)}")
-    #         print(f"Post ID: {post['id']}")
-    #         print(f"Caption: {post['caption']}")
-    #         print(f"Image URL: {post['image_url']}")
-    #         print(f"Timestamp: {post['timestamp']}")
-    #         print(f"Post URL: {post['post_url']}")
-    #         print("-" * 40)
-    # except Exception as e:
-    #     print(f"Error fetching posts: {e}")
+    try:
+        posts = get_latest_instagram_posts("gamerii93", max_posts=5, apify_token=apify_token)
+        for post in posts:
+            print(f"is pinned: {post.get('isPinned', False)}")
+            print(f"Post ID: {post['id']}")
+            print(f"Caption: {post['caption']}")
+            print(f"Image URL: {post['image_url']}")
+            print(f"Timestamp: {post['timestamp']}")
+            print(f"Post URL: {post['post_url']}")
+            print("-" * 40)
+    except Exception as e:
+        print(f"Error fetching posts: {e}")
