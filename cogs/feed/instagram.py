@@ -121,7 +121,7 @@ class InstagramMonitor(commands.Cog):
         for ig_channel in self.channels:
             latest_posts = await self.get_latest_posts(ig_channel)
             if self.check_channels.current_loop == 0:
-                log.info("Initializing content cache for Instagram channel")
+                log.info(f"Initializing content cache for Instagram channel {ig_channel.name}")
                 ig_channel.content_cache.extend(post['id'] for post in latest_posts)
                 continue
             for post in latest_posts:
