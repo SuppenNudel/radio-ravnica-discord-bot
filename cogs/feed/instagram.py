@@ -9,11 +9,12 @@ import json
 
 MOCK = False  # Set to True to use mock data from ig_return.json
 
+content_cache = []
+
 class InstagramProfile():
     def __init__(self, name:str, dc_user_id:int):
         self.name = name
         self.dc_user_id = dc_user_id
-        self.content_cache = []
 
 class InstagramMonitor(commands.Cog):
     def __init__(self, bot:Bot):
@@ -52,16 +53,16 @@ class InstagramMonitor(commands.Cog):
 
             post_data = instagram.get_post_by_id(post_id, apify_token=os.getenv("API_KEY_INSTAGRAM"))
             if not post_data:
-                await ctx.followup.send("Kein Beitrag gefunden für diese ID/URL.", ephemeral=True)
+                # await ctx.followup.send("Kein Beitrag gefunden für diese ID/URL.", ephemeral=True)
                 return
 
             # Use the first channel as the author for the post
             ig_channel = self.channels[0]
             await self.post_content(ig_channel, post_data)
-            await ctx.followup.send("Instagram-Post wurde geteilt.", ephemeral=True)
+            # await ctx.followup.send("Instagram-Post wurde geteilt.", ephemeral=True)
         except Exception as e:
             log.error(f"Fehler beim Teilen des Instagram-Posts: {e}")
-            await ctx.followup.send("Fehler beim Teilen des Instagram-Posts.", ephemeral=True)
+            # await ctx.followup.send("Fehler beim Teilen des Instagram-Posts.", ephemeral=True)
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -110,27 +111,28 @@ class InstagramMonitor(commands.Cog):
         if MOCK:
             with open("ig_return.json", "r", encoding="utf-8") as f:
                 posts = json.load(f)
-            latest_posts = [post for post in posts if post not in channel.content_cache]
+            latest_posts = [post for post in posts if post not in content_cache]
         else:
             posts = instagram.get_latest_instagram_posts(channel.name, max_posts=5, apify_token=os.getenv("API_KEY_INSTAGRAM"))
-            latest_posts = [post for post in posts if post not in channel.content_cache]
+            latest_posts = [post for post in posts if post not in content_cache]
         return latest_posts
 
     @tasks.loop(hours=1)
     async def check_channels(self):
         for ig_channel in self.channels:
             latest_posts = await self.get_latest_posts(ig_channel)
+            log.debug(f"Latest posts for channel {ig_channel.name}: {latest_posts}")
             if self.check_channels.current_loop == 0:
                 log.info(f"Initializing content cache for Instagram channel {ig_channel.name}")
-                ig_channel.content_cache.extend(post['id'] for post in latest_posts)
+                content_cache.extend(post['id'] for post in latest_posts)
                 continue
             for post in latest_posts:
-                if post['id'] in ig_channel.content_cache:
+                if post['id'] in content_cache:
                     pass
                     # log.debug(f"Post already in cache: {post.get('id')}")
                 else:
                     await self.post_content(ig_channel, post)
-                    ig_channel.content_cache.append(post['id'])
+                    content_cache.append(post['id'])
 
 def setup(bot:Bot):
     bot.add_cog(InstagramMonitor(bot))
