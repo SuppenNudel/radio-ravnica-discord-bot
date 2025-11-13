@@ -74,7 +74,8 @@ class AskUsAnything(Cog):
 
     @Cog.listener()
     async def on_ready(self):
-        self.check_to_post_threads.start()
+        if not self.check_to_post_threads.is_running():
+            self.check_to_post_threads.start()
         log.debug(self.__class__.__name__ + " is ready")
 
     async def write_or_update_notion(self, message_text, author, date:datetime, url, status:AuaStatus|None=None, initial_response:discord.Interaction|None=None, current_message=None):
