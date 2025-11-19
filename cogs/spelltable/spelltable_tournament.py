@@ -404,14 +404,16 @@ class SpelltableTournamentManager(Cog):
         ctx:ApplicationContext,
         titel:Option(str, description="Der Titel, den das Turnier tragen soll")
     ):
+        # Defer the interaction response to avoid timeout
+        await ctx.defer(ephemeral=True)
         if type(ctx.channel) != discord.TextChannel:
-            await ctx.respond("Dieser Befehl kann nur in einem Textkanal ausgeführt werden.", ephemeral=True)
+            await ctx.followup.send("Dieser Befehl kann nur in einem Textkanal ausgeführt werden.", ephemeral=True)
             return
         if type(ctx.author) != discord.Member:
-            await ctx.respond("Du bist kein Mitglied dieses Servers!", ephemeral=True)
+            await ctx.followup.send("Du bist kein Mitglied dieses Servers!", ephemeral=True)
             return
         if ctx.guild is None:
-            await ctx.respond("Dieser Befehl kann nur in einem Server verwendet werden.", ephemeral=True)
+            await ctx.followup.send("Dieser Befehl kann nur in einem Server verwendet werden.", ephemeral=True)
             return
 
         # Nur Turnierorganisatoren dürfen in Känalen unter der Kategorie "Spelltable Turniere" Turniere erstellen
@@ -430,11 +432,8 @@ class SpelltableTournamentManager(Cog):
                 message += f"Du hast keine der Rolle(n) {roles_mentions} und darfst daher keine offiziellen Radio Ravnica Turniere erstellen!\nDu darfst gerne in einem anderen Kanal, der nicht unter der Kategorie \"Spelltable Turniere\" steht, ein Turnier erstellen."
             if not_found_roles:
                 message += f"\nDie Rolle(n) {', '.join(f'`{name}`' for name in not_found_roles)} existieren nicht... Bitte benachrichtige einen Moderator des Servers!"
-            await ctx.respond(message.strip(), ephemeral=True)
+            await ctx.followup.send(message.strip(), ephemeral=True)
             return
-        
-        # Defer the interaction response to avoid timeout
-        await ctx.defer(ephemeral=True)
 
         tournament = SpelltableTournament(ctx.guild, titel, ctx.author.id, self.bot)
         tournament.organizer = ctx.author

@@ -403,7 +403,7 @@ class SpelltableTournament(Serializable):
 
         embed.add_field(name="\u200b", value="\u200b", inline=False)
 
-        await self.guild.chunk()
+        # await self.guild.chunk()
 
         participants = self.get_users_by_state(ParticipationState.PARTICIPATE)
         participant_members:list[discord.User] = []
