@@ -120,19 +120,22 @@ class InstagramMonitor(commands.Cog):
     @tasks.loop(hours=24)
     async def check_channels(self):
         for ig_channel in self.channels:
-            latest_posts = await self.get_latest_posts(ig_channel)
-            log.debug(f"Latest posts for channel {ig_channel.name}: {latest_posts}")
-            if self.check_channels.current_loop == 0:
-                log.info(f"Initializing content cache for Instagram channel {ig_channel.name}")
-                content_cache.extend(post['id'] for post in latest_posts)
-                continue
-            for post in latest_posts:
-                if post['id'] in content_cache:
-                    pass
-                    # log.debug(f"Post already in cache: {post.get('id')}")
-                else:
-                    await self.post_content(ig_channel, post)
-                    content_cache.append(post['id'])
+            try:
+                latest_posts = await self.get_latest_posts(ig_channel)
+                log.debug(f"Latest posts for channel {ig_channel.name}: {latest_posts}")
+                if self.check_channels.current_loop == 0:
+                    log.info(f"Initializing content cache for Instagram channel {ig_channel.name}")
+                    content_cache.extend(post['id'] for post in latest_posts)
+                    continue
+                for post in latest_posts:
+                    if post['id'] in content_cache:
+                        pass
+                        # log.debug(f"Post already in cache: {post.get('id')}")
+                    else:
+                        await self.post_content(ig_channel, post)
+                        content_cache.append(post['id'])
+            except Exception as e:
+                log.error(f"Error checking Instagram channel {ig_channel.name}: {e}")
 
 def setup(bot:Bot):
     bot.add_cog(InstagramMonitor(bot))
