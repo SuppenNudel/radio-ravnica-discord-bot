@@ -1,7 +1,7 @@
 ics
 pillow
-py-cord
-ezcord
+py-cord==2.7.1
+ezcord==0.7.4
 scrapetube
 notion_client
 googlemaps
