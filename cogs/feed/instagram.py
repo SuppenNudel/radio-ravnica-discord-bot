@@ -20,7 +20,7 @@ class InstagramMonitor(commands.Cog):
     def __init__(self, bot:Bot):
         self.bot = bot
         self.channels = [
-            InstagramProfile("gamerii93", 270288996666441728),
+            # InstagramProfile("gamerii93", 270288996666441728),
             InstagramProfile("radioravnica", 270288996666441728),
         ]
 
