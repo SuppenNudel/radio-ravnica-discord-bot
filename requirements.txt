@@ -3,7 +3,7 @@ pillow
 py-cord
 ezcord
 scrapetube
-notion_client
+notion_client==2.2.1
 googlemaps
 beautifulsoup4
 python-dateutil
