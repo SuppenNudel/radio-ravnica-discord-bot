@@ -525,10 +525,18 @@ if __name__ == "__main__":
     # db_id_aua_questions = "159f020626c2807d839eec8dc4bfb0a0"
     # update_database_description(db_id_card_score, "Test")
     # get_select_options(EVENT_DATABASE_ID, "Format(e)")
-    payload = (NotionPayloadBuilder()
-     .add_file("Cover Bild", "https://galerie.ultracomix-shop.de/cdn/shop/files/1.png", "Cover Image")
-     .add_title("Event Titel", "Test Titel")
-     .add_checkbox("For Test", True)).build()
-    add_or_update_entry(EVENT_DATABASE_ID, payload=payload)
+
+    # entries = get_all_entries(EVENT_DATABASE_ID, filter=NotionFilterBuilder()
+    #     .add_date_filter("Start (und Ende)", DateCondition.AFTER, datetime.now())
+    # .build())
+    # print()
+
+    page = get_page_by_id("29ff0206-26c2-81b0-988f-f7b5de7fe462")
+    print(page)
+    # payload = (NotionPayloadBuilder()
+    #  .add_file("Cover Bild", "https://galerie.ultracomix-shop.de/cdn/shop/files/1.png", "Cover Image")
+    #  .add_title("Event Titel", "Test Titel")
+    #  .add_checkbox("For Test", True)).build()
+    # add_or_update_entry(EVENT_DATABASE_ID, payload=payload)
 
 # Decks seit 16.07.2024, COMP, MAJOR, PROFESSIONAL -> 4516 decks
