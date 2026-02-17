@@ -24,12 +24,13 @@ NEWS_URLS = {
 }
 
 SELECTORS = {
-    "title": "h3.css-9f4rq",
-    "authors": ".css-l31Oj",
-    "type": ".css-kId4u",
-    "type_url": (".css-kId4u", "href"),
-    "url": (".css-3qxBv > a", "href"),
-    "description": ".css-p4BJO > p"
+    "title": "h3.css-mbeyN",
+    "authors": ".css-IERJH",  # Special handling in code above
+    "type": ".css-e7rj5",
+    "type_url": (".css-e7rj5", "href"),
+    "url": (".css-0c84N > a", "href"),
+    "description": ".css-RvQUy > p",
+    # "img": ("picture img", "src") # not needed, because the url will already generate a previrew in discord
 }
 
 def html_to_discord(text):

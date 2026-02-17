@@ -16,11 +16,11 @@ def request_website(url, list_selector: str = None, selectors: dict[str, str|tup
                     if key == "authors":
                         # Collect all authors under .css-l31Oj
                         authors = []
-                        for author_el in element.select(".css-l31Oj"):
+                        for author_el in element.select(selector):
                             author = {
-                                "avatar": author_el.select_one(".css-UZpTh > img")["src"] if author_el.select_one(".css-UZpTh > img") else None,
-                                "name": author_el.select_one(".css-Z5ZSx").get_text(strip=True) if author_el.select_one(".css-Z5ZSx") else None,
-                                "link": author_el.select_one(".css-Z5ZSx")["href"] if author_el.select_one(".css-Z5ZSx") else None,
+                                "avatar": author_el.select_one(".css-UJQPz > img")["src"] if author_el.select_one(".css-UJQPz > img") else None,
+                                "name": author_el.select_one(".css-VxlIl").get_text(strip=True) if author_el.select_one(".css-VxlIl") else None,
+                                "link": author_el.select_one(".css-VxlIl")["href"] if author_el.select_one(".css-VxlIl") else None,
                             }
                             authors.append(author)
                         item[key] = authors
@@ -53,13 +53,13 @@ def request_website(url, list_selector: str = None, selectors: dict[str, str|tup
 
 if __name__ == "__main__":
     selectors = {
-        "title": "h3.css-9f4rq",
-        "authors": ".css-l31Oj",  # Special handling in code above
-        "type": ".css-kId4u",
-        "type_url": (".css-kId4u", "href"),
-        "url": (".css-3qxBv > a", "href"),
-        "description": ".css-p4BJO > p",
-        # "img": ("picture img", "src")
+        "title": "h3.css-mbeyN",
+        "authors": ".css-IERJH",  # Special handling in code above
+        "type": ".css-e7rj5",
+        "type_url": (".css-e7rj5", "href"),
+        "url": (".css-0c84N > a", "href"),
+        "description": ".css-RvQUy > p",
+        # "img": ("picture img", "src") # not needed, because the url will already generate a previrew in discord
     }
     result = request_website("https://magic.wizards.com/en/news", "article", selectors)
     print(result)
