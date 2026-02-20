@@ -230,7 +230,7 @@ class ReportMatchAdminModal(discord.ui.DesignerModal):
         await update_pairings(self.tournament, self.round)
         await update_standings(self.tournament, interaction)
 
-class ReportMatchModal(discord.ui.Modal):
+class ReportMatchModal(discord.ui.DesignerModal):
     def __init__(self):
         raise RuntimeError("Use 'await ReportMatchModal.create(...)' instead")
 
@@ -242,36 +242,38 @@ class ReportMatchModal(discord.ui.Modal):
 
         self.player1_user = await tournament.get_member(match.player1.player_id)
         self.player2_user = await tournament.get_member(match.player2.player_id)
-        self.p1_score = discord.ui.InputText(
-            label=f"Player 1 - {self.player1_user.display_name}",
+        
+        # Create Labels with set_input_text() for proper required/optional handling
+        self.p1_label = discord.ui.Label(f"Player 1 - {self.player1_user.display_name}")
+        self.p1_label.set_input_text(
             placeholder="",
             required=True,
-            value=match.wins[match.player1] or "0" if match.is_finished() else ""
+            value=str(match.wins[match.player1] or "0") if match.is_finished() else ""
         )
-        self.add_item(self.p1_score)
-        self.p2_score = discord.ui.InputText(
-            label=f"Player 2 - {self.player2_user.display_name}",
+        self.add_item(self.p1_label)
+        
+        self.p2_label = discord.ui.Label(f"Player 2 - {self.player2_user.display_name}")
+        self.p2_label.set_input_text(
             placeholder="",
             required=True,
-            value=match.wins[match.player2] or "0" if match.is_finished() else ""
+            value=str(match.wins[match.player2] or "0") if match.is_finished() else ""
         )
-        self.add_item(self.p2_score)
-        self.draw_score = discord.ui.InputText(
-            label=f"Draws",
+        self.add_item(self.p2_label)
+        
+        self.draw_label = discord.ui.Label("Draws")
+        self.draw_label.set_input_text(
             placeholder="",
-            required=False,
-            value=match.wins["draws"],
-            min_length=0
+            value=str(match.wins["draws"]),
+            required=False
         )
-        self.add_item(self.draw_score)
+        self.add_item(self.draw_label)
 
-        self.personalized_message = discord.ui.InputText(
-            label=f"Nachricht an deinen Gegner",
+        self.message_label = discord.ui.Label("Nachricht an deinen Gegner")
+        self.message_label.set_input_text(
             placeholder="Schreib eine nette Nachricht, wenn du möchtest :)",
-            required=False,
-            min_length=0
+            required=False
         )
-        self.add_item(self.personalized_message)
+        self.add_item(self.message_label)
 
     @classmethod
     async def create(cls, tournament:SpelltableTournament, round:swiss_mtg.Round, match:swiss_mtg.Match):
@@ -280,9 +282,10 @@ class ReportMatchModal(discord.ui.Modal):
         return instance
 
     async def callback(self, interaction: discord.Interaction):
-        score1 = int(self.p1_score.value) if self.p1_score.value else 0
-        score2 = int(self.p2_score.value) if self.p2_score.value else 0
-        draw_score = int(self.draw_score.value) if self.draw_score.value else 0
+        # Access values from Label items
+        score1 = int(self.p1_label.item.value) if self.p1_label.item.value else 0  # type: ignore
+        score2 = int(self.p2_label.item.value) if self.p2_label.item.value else 0  # type: ignore
+        draw_score = int(self.draw_label.item.value) if self.draw_label.item.value else 0  # type: ignore
         try:
             self.match.set_result(score1, score2, draw_score)
         except ValueError as e:
@@ -290,7 +293,7 @@ class ReportMatchModal(discord.ui.Modal):
             return
         
         await interaction.response.defer()
-        message_to_opponend = f"{interaction.user.mention} lässt ausrichten:\n> {self.personalized_message.value}" if self.personalized_message.value else "GGs!"
+        message_to_opponend = f"{interaction.user.mention} lässt ausrichten:\n> {self.message_label.item.value}" if self.message_label.item.value else "GGs!"  # type: ignore
         gg_message = await interaction.followup.send(f"{self.player1_user.mention} {score1} - {score2} {self.player2_user.mention}{f' ({draw_score} Unentschieden)' if draw_score else ''}\n{message_to_opponend}", wait=True)
 
         if env.DEBUG:
