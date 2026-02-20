@@ -56,6 +56,7 @@ class SubmitDeckModal(discord.ui.DesignerModal):
         )
         self.deck_name_label.set_input_text(
             placeholder="Mono-Red Aggro, Jund Wildfire, ...",
+            min_length=0,
             required=False
         )
         self.add_item(self.deck_name_label)
@@ -64,11 +65,20 @@ class SubmitDeckModal(discord.ui.DesignerModal):
             "Deckliste", 
             description="Ein Link zu deiner Deckliste, z.B. Moxfield oder mtggoldfish."
         )
-        self.decklist_label.set_input_text(
-            placeholder="https://moxfield.com/decks/...",
-            value=deck.link if deck else "",
-            required=False
-        )
+        # Only set value if there's a deck with a link
+        if deck and deck.link:
+            self.decklist_label.set_input_text(
+                placeholder="https://moxfield.com/decks/...",
+                value=deck.link,
+                min_length=0,
+                required=False
+            )
+        else:
+            self.decklist_label.set_input_text(
+                placeholder="https://moxfield.com/decks/...",
+                min_length=0,
+                required=False
+            )
         self.add_item(self.decklist_label)
         
         # self.add_item(discord.ui.Label("Archetyp", self.archetype_input, description="Wähle den Archetyp deines Decks aus."))
@@ -189,7 +199,7 @@ class ReportMatchAdminModal(discord.ui.DesignerModal):
         self.add_item(self.p2_label)
 
         self.draw_label = discord.ui.Label("Unentschieden")
-        self.draw_label.set_input_text(placeholder="0,1,2", value="0", required=False)
+        self.draw_label.set_input_text(placeholder="0,1,2", value="0", min_length=0, required=False)
         self.add_item(self.draw_label)
 
         self.message_label = discord.ui.Label("Nachricht an die Spieler")
@@ -264,6 +274,7 @@ class ReportMatchModal(discord.ui.DesignerModal):
         self.draw_label.set_input_text(
             placeholder="",
             value=str(match.wins["draws"]),
+            min_length=0,
             required=False
         )
         self.add_item(self.draw_label)
@@ -271,6 +282,7 @@ class ReportMatchModal(discord.ui.DesignerModal):
         self.message_label = discord.ui.Label("Nachricht an deinen Gegner")
         self.message_label.set_input_text(
             placeholder="Schreib eine nette Nachricht, wenn du möchtest :)",
+            min_length=0,
             required=False
         )
         self.add_item(self.message_label)
