@@ -38,6 +38,7 @@ class SubmitDeckModal(discord.ui.DesignerModal):
             placeholder="https://moxfield.com/decks/...",
             value=deck.link if deck else "",
             required=False,
+            min_length=0
         )
         # self.archetype_input = discord.ui.Select(
         #     placeholder="Wähle einen Archetyp...",
@@ -56,6 +57,7 @@ class SubmitDeckModal(discord.ui.DesignerModal):
         self.deck_name = discord.ui.InputText(
             placeholder="Mono-Red Aggro, Jund Wildfire, ...",
             required=False,
+            min_length=0
         )
         # self.add_item(discord.ui.Label("Archetyp", self.archetype_input, description="Wähle den Archetyp deines Decks aus."))
         self.add_item(discord.ui.Label("Archetyp", self.deck_name, description="Wie sich das Deck nennt, das du gespielt hast"))
@@ -176,7 +178,8 @@ class ReportMatchAdminModal(discord.ui.DesignerModal):
         self.draw_score = discord.ui.InputText(
             placeholder="0,1,2",
             required=False,
-            value="0"
+            value="0",
+            min_length=0
         )
 
         self.message = discord.ui.InputText(
@@ -250,14 +253,16 @@ class ReportMatchModal(discord.ui.Modal):
             label=f"Draws",
             placeholder="",
             required=False,
-            value=match.wins["draws"]
+            value=match.wins["draws"],
+            min_length=0
         )
         self.add_item(self.draw_score)
 
         self.personalized_message = discord.ui.InputText(
             label=f"Nachricht an deinen Gegner",
             placeholder="Schreib eine nette Nachricht, wenn du möchtest :)",
-            required=False
+            required=False,
+            min_length=0
         )
         self.add_item(self.personalized_message)
 
