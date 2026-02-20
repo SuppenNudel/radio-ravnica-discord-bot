@@ -34,12 +34,6 @@ class SubmitDeckModal(discord.ui.DesignerModal):
         tournament_player:swiss_mtg.Player = tournament.swiss_tournament.player_by_id(self.player.id)
         deck:swiss_mtg.Deck = tournament_player.deck if tournament_player and tournament_player.deck else None
 
-        self.decklist_input = discord.ui.InputText(
-            placeholder="https://moxfield.com/decks/...",
-            value=deck.link if deck else "",
-            required=False,
-            min_length=0
-        )
         # self.archetype_input = discord.ui.Select(
         #     placeholder="Wähle einen Archetyp...",
         #     options=[
@@ -54,26 +48,43 @@ class SubmitDeckModal(discord.ui.DesignerModal):
         #     min_values=1,
         #     required=False
         # )
-        self.deck_name = discord.ui.InputText(
-            placeholder="Mono-Red Aggro, Jund Wildfire, ...",
-            required=False,
-            min_length=0
+        
+        # Create Labels and use set_input_text() method for optional fields
+        self.deck_name_label = discord.ui.Label(
+            "Archetyp", 
+            description="Wie sich das Deck nennt, das du gespielt hast"
         )
+        self.deck_name_label.set_input_text(
+            placeholder="Mono-Red Aggro, Jund Wildfire, ...",
+            required=False
+        )
+        self.add_item(self.deck_name_label)
+        
+        self.decklist_label = discord.ui.Label(
+            "Deckliste", 
+            description="Ein Link zu deiner Deckliste, z.B. Moxfield oder mtggoldfish."
+        )
+        self.decklist_label.set_input_text(
+            placeholder="https://moxfield.com/decks/...",
+            value=deck.link if deck else "",
+            required=False
+        )
+        self.add_item(self.decklist_label)
+        
         # self.add_item(discord.ui.Label("Archetyp", self.archetype_input, description="Wähle den Archetyp deines Decks aus."))
-        self.add_item(discord.ui.Label("Archetyp", self.deck_name, description="Wie sich das Deck nennt, das du gespielt hast"))
-        self.add_item(discord.ui.Label("Deckliste", self.decklist_input, description="Ein Link zu deiner Deckliste, z.B. Moxfield oder mtggoldfish."))
 
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        decklist = self.decklist_input.value.strip()
+        # Get values from Label items
+        decklist = self.decklist_label.item.value.strip() if self.decklist_label.item.value else ""  # type: ignore
+        archetype = self.deck_name_label.item.value if self.deck_name_label.item.value else None  # type: ignore
+        
         # Save the decklist to the tournament/player (implement as needed)
         player:swiss_mtg.Player = self.tournament.swiss_tournament.player_by_id(self.player.id)
         if not player:
             await interaction.followup.send("Du bist kein Teilnehmer in diesem Turnier.", ephemeral=True)
             return
-        archetype = None
-        # archetype = self.archetype_input.values[0] if self.archetype_input.values and len(self.archetype_input.values) == 1 else None
-        archetype = self.deck_name.value if self.deck_name.value else archetype
+        
         player.deck = swiss_mtg.Deck.deserialize({"link": decklist, "archetype": archetype})
         await self.tournament.save_tournament()
         await self.tournament.update_metagame()
@@ -159,39 +170,34 @@ class ReportMatchAdminModal(discord.ui.DesignerModal):
             label = f"{match.player1.name if match.player1 else 'BYE'} vs {match.player2.name if match.player2 else 'BYE'}"
             match_options.append(discord.SelectOption(label=label, value=str(i)))
         
-        self.match = discord.ui.StringSelect(
+        self.match_select = discord.ui.StringSelect(
             placeholder="Wähle ein Match aus...",
             options=match_options,
             max_values=1,
             min_values=1,
             required=True
         )
+        self.add_item(discord.ui.Label(f"Welches Match möchtest du setzen?", self.match_select))
 
-        self.p1_score = discord.ui.InputText(
-            placeholder="0,1,2",
-            required=True
-        )
-        self.p2_score = discord.ui.InputText(
-            placeholder="0,1,2",
-            required=True
-        )
-        self.draw_score = discord.ui.InputText(
-            placeholder="0,1,2",
-            required=False,
-            value="0",
-            min_length=0
-        )
+        # Create Labels with set_input_text() for proper required/optional handling
+        self.p1_label = discord.ui.Label("Spieler 1 Siege")
+        self.p1_label.set_input_text(placeholder="0,1,2", required=True)
+        self.add_item(self.p1_label)
 
-        self.message = discord.ui.InputText(
+        self.p2_label = discord.ui.Label("Spieler 2 Siege")
+        self.p2_label.set_input_text(placeholder="0,1,2", required=True)
+        self.add_item(self.p2_label)
+
+        self.draw_label = discord.ui.Label("Unentschieden")
+        self.draw_label.set_input_text(placeholder="0,1,2", value="0", required=False)
+        self.add_item(self.draw_label)
+
+        self.message_label = discord.ui.Label("Nachricht an die Spieler")
+        self.message_label.set_input_text(
             placeholder="Was ist der Grund dieses Resultat zu setzen/überscheiben?",
             required=True
         )
-
-        self.add_item(discord.ui.Label(f"Welches Match möchtest du setzen?", self.match))
-        self.add_item(discord.ui.Label("Spieler 1 Siege", self.p1_score))
-        self.add_item(discord.ui.Label("Spieler 2 Siege", self.p2_score))
-        self.add_item(discord.ui.Label("Unentschieden", self.draw_score))
-        self.add_item(discord.ui.Label("Nachricht an die Spieler", self.message))
+        self.add_item(self.message_label)
 
     @classmethod
     async def create(cls, tournament:SpelltableTournament, round:swiss_mtg.Round):
@@ -200,10 +206,11 @@ class ReportMatchAdminModal(discord.ui.DesignerModal):
         return instance
 
     async def callback(self, interaction: discord.Interaction):
-        score1 = int(self.p1_score.value) if self.p1_score.value else 0
-        score2 = int(self.p2_score.value) if self.p2_score.value else 0
-        draw_score = int(self.draw_score.value) if self.draw_score.value else 0
-        match_index = int(self.match.values[0])
+        # Access values from Label items
+        score1 = int(self.p1_label.item.value) if self.p1_label.item.value else 0  # type: ignore
+        score2 = int(self.p2_label.item.value) if self.p2_label.item.value else 0  # type: ignore
+        draw_score = int(self.draw_label.item.value) if self.draw_label.item.value else 0  # type: ignore
+        match_index = int(self.match_select.values[0])
         match = self.round.matches[match_index]
         try:
             match.set_result(score1, score2, draw_score)
@@ -212,7 +219,7 @@ class ReportMatchAdminModal(discord.ui.DesignerModal):
             return
         
         await interaction.response.defer()
-        message_to_opponend = f"Nachricht von der Turnierorganisation:\n> {self.message.value}"
+        message_to_opponend = f"Nachricht von der Turnierorganisation:\n> {self.message_label.item.value}"  # type: ignore
         message_result = await interaction.followup.send(f"<@{match.player1.player_id}> {score1} - {score2} <@{match.player2.player_id}>{f' ({draw_score} Unentschieden)' if draw_score else ''}\n{message_to_opponend}", wait=True)
 
         if env.DEBUG:
