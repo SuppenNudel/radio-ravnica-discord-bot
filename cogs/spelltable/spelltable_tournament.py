@@ -294,6 +294,10 @@ class SpelltableTournamentManager(Cog):
                 active_tournaments[message_path] = tournament
                 tournament_message = await tournament.message
 
+                # Unarchive thread if needed before any edits
+                if tournament_message and isinstance(tournament_message.channel, discord.Thread) and tournament_message.channel.archived:
+                    await tournament_message.channel.edit(archived=False)
+
                 if not tournament.swiss_tournament:
                     # tournament has not been started yet
                     # sign-up is still open
@@ -336,7 +340,7 @@ class SpelltableTournamentManager(Cog):
                 if current_round.message_id_pairings:
                     # pairings have been posted
                     message = await tournament.get_message(current_round.message_id_pairings)
-                    if message.channel.archived:
+                    if message and isinstance(message.channel, discord.Thread) and message.channel.archived:
                         await message.channel.edit(archived=False)
                     await common_views.update_pairings(tournament, current_round)
                 else:
@@ -396,6 +400,49 @@ class SpelltableTournamentManager(Cog):
 
         message_str += f"\n\nNachricht von der Organisation:\n>>> {message}"
         await ctx.channel.send(message_str)
+
+    @slash_command(description="Pingt alle Turnierteilnehmer")
+    async def ping_all_participants(
+        self,
+        ctx:ApplicationContext,
+        message:Option(str, description="Die Nachricht, die an alle Teilnehmer gesendet werden soll")
+    ):
+        # Check privilege and context
+        if not isinstance(ctx.channel, discord.Thread):
+            await ctx.respond("Dieser Befehl kann nur in einem Turnier-Thread ausgeführt werden.", ephemeral=True)
+            return
+        
+        this_tournament = None
+        for id, tournament in active_tournaments.items():
+            tournament_message = await tournament.message
+            if tournament_message.channel.id == ctx.channel.id:
+                this_tournament = tournament
+                break
+        if not this_tournament:
+            await ctx.respond("Kein Turnier in diesem Thread gefunden.", ephemeral=True)
+            return
+        
+        if not (
+            ctx.author.id == this_tournament.organizer_id or
+            any(role.name in ["Admin", "Moderator"] for role in ctx.author.roles)
+        ):
+            await ctx.respond("Nur der Turnier-Organisator, ein Admin oder ein Moderator darf diesen Befehl verwenden.", ephemeral=True)
+            return
+        # Privilege and context ok
+
+        players = this_tournament.swiss_tournament.players
+        
+        if not players:
+            await ctx.respond("Keine Teilnehmer in diesem Turnier gefunden.", ephemeral=True)
+            return
+
+        message_str = "📣 **Nachricht an alle Turnierteilnehmer:**\n"
+        for player in players:
+            message_str += f"<@{player.player_id}> "
+
+        message_str += f"\n\n>>> {message}"
+        await ctx.channel.send(message_str)
+        await ctx.respond("Alle Teilnehmer wurden gepingt.", ephemeral=True)
 
     # @has_role("Moderator")
     @slash_command(description="Erstelle ein Spelltable Turnier für den Server")
