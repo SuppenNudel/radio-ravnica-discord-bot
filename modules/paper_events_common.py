@@ -3,7 +3,13 @@ from datetime import datetime
 from typing import Literal, Optional
 import discord
 from modules import gmaps, env, ics, notion
+from modules.paper_events_calendar import update_paper_events_calendar
 from enum import Enum
+
+# Import will be done at runtime to avoid circular dependency
+def _get_schedule_function():
+    from cogs.paper_events.paper_events_status_monitor import schedule_event_timers
+    return schedule_event_timers
 from modules import date_time_interpretation as dti
 import re
 import textwrap
@@ -294,6 +300,14 @@ class SubmitButton(discord.ui.Button):
                 message:discord.Message = await self.event.thread.fetch_message(self.event.thread.id)
                 notion_result = self.event.save_in_notion()
                 await edit_event_post(self.event, message, EditPostView(self.event))
+                await update_paper_events_calendar(interaction.client, self.event.guild)
+                
+                # Reschedule timers for the edited event
+                schedule_fn = _get_schedule_function()
+                start = self.event.fields[FieldName.START].value
+                end = self.event.fields[FieldName.END].value
+                await schedule_fn(interaction.client, self.event.guild, self.event.thread.id, start, end)
+                
                 await response_message.edit(content=f"Post und Notioneintrag wurden bearbeitet: \n{message.jump_url}\n{notion_result['public_url']}")
             else:
                 await orig_view.send_forum_post(interaction)
@@ -342,6 +356,13 @@ class EditTourneyView(discord.ui.View):
         
         thread = await self.event.create_and_send_thread(forum_channel)
         notion_result = self.event.save_in_notion()
+        await update_paper_events_calendar(interaction.client, self.event.guild)
+        
+        # Schedule timers for the new event
+        schedule_fn = _get_schedule_function()
+        start = self.event.fields[FieldName.START].value
+        end = self.event.fields[FieldName.END].value
+        await schedule_fn(interaction.client, self.event.guild, thread.id, start, end)
 
         await interaction.followup.send(f"Forum Post erstellt: {thread.jump_url}\n[Notion Eintrag]({notion_result['public_url']}) erstellt")
     

@@ -149,7 +149,7 @@ def rotated_text(text, draw:ImageDraw.ImageDraw, img:ImageDraw.Image.Image, x, y
     # Paste it onto the base image at desired position
     img.paste(rotated_text, (x, y), rotated_text)  # Third argument is mask for transparency
 
-def generate_calendar(tournaments: list["SpelltableTournament"] = []):
+def generate_calendar(tournaments: list = []):
     if not tournaments:
         return None
     tournaments = tournaments or []

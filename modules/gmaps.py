@@ -57,8 +57,29 @@ class Location():
         self.url = None
 
     def __str__(self):
+        parts = []
+        if self.name:
+            parts.append(self.name)
+        
+        address_parts = []
+        if self.street:
+            address_parts.append(self.street.get('long_name', ''))
+        if self.street_number:
+            address_parts.append(self.street_number.get('long_name', ''))
+        
+        if address_parts:
+            parts.append(" ".join(address_parts))
+        
+        location_parts = []
+        if self.zip:
+            location_parts.append(self.zip.get('long_name', ''))
         if self.city:
-            return f"{self.name} - {self.street['long_name']} {self.street_number['long_name']}, {self.zip['long_name']} {self.city['long_name']}"
+            location_parts.append(self.city.get('long_name', ''))
+        
+        if location_parts:
+            parts.append(" ".join(location_parts))
+        
+        return " - ".join(parts) if parts else self.formatted_address or "Location"
 
     @classmethod
     def from_geocode_result(cls, geocode_result, place_details) -> "Location":#:type:Literal['geocode', 'places']):
