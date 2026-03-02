@@ -131,10 +131,22 @@ class PaperEventSubmit(Cog):
                 # thread does not have get_message method, so we need to fetch the message
                 message:discord.Message = await thread.fetch_message(thread_id)
                 view = pe_common.EditPostView(paper_event)
+                
+                # Unarchive thread temporarily if needed to edit the message
+                was_archived = thread.archived
+                if was_archived:
+                    await thread.edit(archived=False)
+                    link_log.debug(f"Temporarily unarchived thread {thread_id} to edit message")
+                
                 await message.edit(view=view)
 
             except discord.NotFound as e:
                 link_log.error(f"Gilde/Server oder Author/Servermitglied für https://discord.com/channels/{server_id}/{thread_id} wurde konnte nicht gefunden werden: {server_id}, Author <@{author_id}>")
+            except discord.errors.HTTPException as e:
+                if e.code == 50083:  # Thread is archived
+                    link_log.warning(f"Thread {thread_id} is archived and could not be unarchived: {e}")
+                else:
+                    link_log.error(f"HTTP error when editing message in thread {thread_id}: {e}")
             # except Exception as e:
             #     log.error(f"Error when trying to parse {event}: {e}")
         log.debug(self.__class__.__name__ + " is ready")
