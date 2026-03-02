@@ -622,10 +622,22 @@ async def post_pairings(round:swiss_mtg.Round, tournament:SpelltableTournament, 
             message_to_reply_to = await tournament.get_message(previous_round.message_id_pairings)
         new_pairings_message:discord.Message = await message_to_reply_to.reply(content=f"Paarungen für die {round.round_number}. Runde:\n\n{pairings}", file=pairings_file, view=reportMatchView)
     
-    if previous_round:
-        previous_pairings_message = await new_pairings_message.channel.fetch_message(previous_round.message_id_pairings)
-        await previous_pairings_message.unpin()
-    await new_pairings_message.pin()
+    # Try to pin/unpin messages, but continue if permissions are missing
+    try:
+        if previous_round:
+            previous_pairings_message = await new_pairings_message.channel.fetch_message(previous_round.message_id_pairings)
+            try:
+                await previous_pairings_message.unpin()
+            except discord.errors.Forbidden:
+                link_log.warning(f"Missing permission to unpin message {previous_round.message_id_pairings}")
+        await new_pairings_message.pin()
+    except discord.errors.Forbidden as e:
+        link_log.warning(f"Missing permission to pin message in channel {new_pairings_message.channel.id}: {e}")
+        if interaction:
+            await interaction.followup.send("⚠️ Hinweis: Ich konnte die Paarungen nicht anpinnen. Bitte gib mir 'Nachrichten verwalten' Berechtigung.", ephemeral=True)
+    except Exception as e:
+        link_log.error(f"Unexpected error while pinning message: {e}")
+    
     round.message_id_pairings = new_pairings_message.id
     return new_pairings_message
 
@@ -635,9 +647,20 @@ async def next_round(tournament:SpelltableTournament, interaction:discord.Intera
         round = tournament.swiss_tournament.pair_players()
         try:
             new_pairings_message:discord.Message = await post_pairings(round, tournament, previous_round, interaction)
+        except discord.errors.Forbidden as e:
+            log.error(f"Missing permissions to send pairings message: {e}")
+            error_msg = "❌ Fehlende Berechtigungen zum Senden der Paarungen.\n"
+            if e.code == 50013:
+                error_msg += "Der Bot benötigt folgende Berechtigungen:\n• Nachrichten senden\n• Dateien anhängen\n• Nachrichten verwalten (zum Anpinnen)"
+            await interaction.followup.send(error_msg, ephemeral=True)
+            previous_standings_message = await tournament.get_message(previous_round.message_id_standings)
+            standings_image = await tournament.standings_to_image(previous_round)
+            standings_file = discord.File(standings_image, filename=standings_image)
+            await previous_standings_message.edit(attachments=[], file=standings_file, view=await StartNextRoundView.create(previous_round, tournament))
+            return
         except discord.errors.HTTPException as e:
             log.error(f"Failed to send pairings message: {e}")
-            await interaction.followup.send("Fehler beim Senden der Paarungen. Bitte versuche es später erneut.", ephemeral=True)
+            await interaction.followup.send(f"Fehler beim Senden der Paarungen: {e}\nBitte versuche es später erneut.", ephemeral=True)
             previous_standings_message = await tournament.get_message(previous_round.message_id_standings)
             standings_image = await tournament.standings_to_image(previous_round)
             standings_file = discord.File(standings_image, filename=standings_image)
