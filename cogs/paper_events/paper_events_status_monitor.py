@@ -1,12 +1,15 @@
-from discord.ext import commands, tasks
+from discord.ext import commands
 import discord
 from ezcord import Cog
 from discord import Bot
 from ezcord import log
 import modules.notion as notion
+from modules import env
+from modules.paper_events_calendar import update_paper_events_calendar
 from datetime import datetime, timedelta
 import os
 import logging
+import asyncio
 
 link_log = logging.getLogger("link_logger")
 
@@ -24,81 +27,164 @@ CHANNEL_PAPER_EVENTS_ID = os.getenv("CHANNEL_PAPER_EVENTS")
 DEBUG = get_bool_from_env("DEBUG")
 DB_PAPER_EVENTS_ID = "f05d532cf91f4f9cbce38e27dc85b522"
 
+# Global registry to track active timers
+_active_timers: dict[int, dict[str, asyncio.Task]] = {}
+
 class PaperEventsStatusMonitor(Cog):
 
     def __init__(self, bot:Bot):
         self.bot = bot
+        self.guild: discord.Guild | None = None
 
     @Cog.listener()
     async def on_ready(self):
         self.guild = self.bot.get_guild(GUILD_ID)
         if self.guild:
-            if not self.check.is_running():
-                self.check.start()
+            await self._restore_timers()
+            # Update the calendar on startup
+            await update_paper_events_calendar(self.bot, self.guild)
         else:
             log.error("Guild not found")
         log.debug(self.__class__.__name__ + " is ready")
 
-    @tasks.loop(minutes=15)
-    async def check(self):
-        if self.guild == None:
+    async def _restore_timers(self):
+        """Restore timers for all existing events on bot startup."""
+        if not self.guild:
             return
-        # check if there are events that have passed
-        # close corresponding threads
-        # delete even older threads
-        filter = (
+            
+        filter_builder = (
             notion.NotionFilterBuilder()
-            .add_url_filter("Link", notion.URLCondition.IS_NOT_EMPTY, True)
             .add_checkbox_filter("For Test", notion.CheckboxCondition.EQUALS, DEBUG)
-            .build()
+            .add_text_filter("Thread ID", notion.TextCondition.IS_NOT_EMPTY, True)
         )
         entries = notion.get_all_entries(
             database_id=DB_PAPER_EVENTS_ID,
-            filter = filter
+            filter=filter_builder.build()
         )
+        
         for entry in entries:
             date = entry.get_date_property('Start (und Ende)')
-            event_start:datetime = date['start']
-            event_end:datetime = date['end']
-            event_discord_channel_id = entry.get_text_property("Thread ID")
-            event_title = entry.get_text_property("Event Titel")
-            now = datetime.now(tz=event_start.tzinfo)
-            if not event_discord_channel_id:
-                log.error(f"Event {event_title} has no Channel ID")
+            event_start: datetime = date['start']
+            event_end: datetime = date['end']
+            thread_id_str = entry.get_text_property("Thread ID")
+            
+            if not thread_id_str:
                 continue
-            thread_id = int(event_discord_channel_id)
+                
+            thread_id = int(thread_id_str)
+            
+            # Check if thread still exists
             try:
                 thread = await self.guild.fetch_channel(thread_id)
-            except discord.errors.NotFound:
-                # Event Post already deleted
-                # log.debug(f"Thread not found: {thread_id}")
+                if not isinstance(thread, discord.Thread):
+                    continue
+            except (discord.errors.NotFound, discord.errors.Forbidden):
                 continue
-            if not isinstance(thread, discord.Thread):
-                log.error(f"Not a Thread")
-                continue
+            
+            # Schedule timers for this event
+            await schedule_event_timers(self.bot, self.guild, thread_id, event_start, event_end)
 
-            date_to_compare = event_start
-            if event_end:
-                date_to_compare = event_end
+    async def _archive_thread(self, thread_id: int):
+        """Archive a thread when the event has passed."""
+        if not self.guild:
+            return
+            
+        try:
+            thread = await self.guild.fetch_channel(thread_id)
+            if isinstance(thread, discord.Thread) and not thread.archived:
+                await thread.edit(archived=True)
+                log.info(f"Archived event thread {thread.name} (ID: {thread_id})")
+        except discord.errors.NotFound:
+            log.debug(f"Thread {thread_id} not found, may have been already deleted")
+        except discord.Forbidden:
+            log.warning(f"Missing permissions to archive thread {thread_id}")
+        except Exception as e:
+            log.error(f"Error archiving thread {thread_id}: {e}")
+        finally:
+            # Clean up timer reference
+            if thread_id in _active_timers and 'archive' in _active_timers[thread_id]:
+                del _active_timers[thread_id]['archive']
 
-            # geschlossen = archived
-            # sperren = locked
-            is_archived = thread.archived
-            is_passed = date_to_compare < now
-            is_way_passed = date_to_compare < now - timedelta(days=30)
-
-            if is_way_passed:
+    async def _delete_thread(self, thread_id: int):
+        """Delete a thread 30 days after the event has ended."""
+        if not self.guild:
+            return
+            
+        try:
+            thread = await self.guild.fetch_channel(thread_id)
+            if isinstance(thread, discord.Thread):
                 await thread.delete()
-                log.info(f"Deleted Event {thread.name}. It was over a month passed.")
-            else:
-                if (is_passed and not is_archived) or (not is_passed and is_archived):
-                    try:
-                        await thread.edit(archived=is_passed)
-                        log.info(f"{thread.name} - changed thread archive state to: {is_passed}")
-                    except discord.Forbidden:
-                        log.info(f"Missing permissions to edit thread: {thread.name}")
-                    except discord.HTTPException as e:
-                        log.info(f"Failed to edit thread {thread.name}: {e}")
+                log.info(f"Deleted event thread {thread.name} (ID: {thread_id}) - over 30 days past")
+        except discord.errors.NotFound:
+            log.debug(f"Thread {thread_id} not found, may have been already deleted")
+        except discord.Forbidden:
+            log.warning(f"Missing permissions to delete thread {thread_id}")
+        except Exception as e:
+            log.error(f"Error deleting thread {thread_id}: {e}")
+        finally:
+            # Clean up timer references
+            if thread_id in _active_timers:
+                del _active_timers[thread_id]
+
+
+async def schedule_event_timers(bot: Bot, guild: discord.Guild, thread_id: int, event_start: datetime, event_end: datetime | None):
+    """
+    Schedule timers to archive and delete event threads at appropriate times.
+    Called when an event is created or on bot startup.
+    """
+    now = datetime.now(tz=event_start.tzinfo)
+    date_to_compare = event_end if event_end else event_start
+    
+    # Cancel any existing timers for this thread
+    if thread_id in _active_timers:
+        for task in _active_timers[thread_id].values():
+            if not task.done():
+                task.cancel()
+        _active_timers[thread_id].clear()
+    else:
+        _active_timers[thread_id] = {}
+    
+    # Get the cog instance
+    cog: PaperEventsStatusMonitor | None = bot.get_cog("PaperEventsStatusMonitor")  # type: ignore
+    if not cog:
+        log.error("PaperEventsStatusMonitor cog not found")
+        return
+    
+    # Calculate time until archive
+    archive_time = date_to_compare
+    delete_time = date_to_compare + timedelta(days=30)
+    
+    # If event already ended more than 30 days ago, delete immediately
+    if delete_time < now:
+        await cog._delete_thread(thread_id)
+        return
+    
+    # If event already ended, archive immediately and schedule delete
+    if archive_time < now:
+        await cog._archive_thread(thread_id)
+        seconds_until_delete = (delete_time - now).total_seconds()
+        if seconds_until_delete > 0:
+            async def delayed_delete():
+                await asyncio.sleep(seconds_until_delete)
+                await cog._delete_thread(thread_id)
+            
+            _active_timers[thread_id]['delete'] = asyncio.create_task(delayed_delete())
+    else:
+        # Schedule both archive and delete
+        seconds_until_archive = (archive_time - now).total_seconds()
+        seconds_until_delete = (delete_time - now).total_seconds()
+        
+        async def delayed_archive():
+            await asyncio.sleep(seconds_until_archive)
+            await cog._archive_thread(thread_id)
+        
+        async def delayed_delete():
+            await asyncio.sleep(seconds_until_delete)
+            await cog._delete_thread(thread_id)
+        
+        _active_timers[thread_id]['archive'] = asyncio.create_task(delayed_archive())
+        _active_timers[thread_id]['delete'] = asyncio.create_task(delayed_delete())
+
 
 def setup(bot:Bot):
     bot.add_cog(PaperEventsStatusMonitor(bot))
