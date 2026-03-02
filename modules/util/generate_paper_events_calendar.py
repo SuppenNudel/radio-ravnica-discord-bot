@@ -211,10 +211,21 @@ def generate_paper_events_calendar(events: list = []):
                 event_y = y + 16  # Start below weekday abbreviation
                 for event in event_list:
                     title = event.title
-                    # Truncate title to fit
-                    max_chars = int(col_width / 8)  # Approximate chars based on column width
-                    if len(title) > max_chars:
-                        title = title[:max_chars-1] + "…"
+                    # Truncate title based on actual text width
+                    max_width = col_width - 12  # Leave margin on both sides (5px left + 7px right)
+                    bbox = draw.textbbox((0, 0), title, font=TITLE_FONT)
+                    text_width = bbox[2] - bbox[0]
+                    
+                    if text_width > max_width:
+                        # Binary search for the right length
+                        while len(title) > 0:
+                            test_title = title + "…"
+                            bbox = draw.textbbox((0, 0), test_title, font=TITLE_FONT)
+                            if bbox[2] - bbox[0] <= max_width:
+                                title = test_title
+                                break
+                            title = title[:-1]
+                    
                     draw.text((x + 5, event_y), title, fill=TEXT_COLOR, font=TITLE_FONT)
                     event_y += EVENT_ROW_HEIGHT
             else:
