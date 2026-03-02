@@ -1,6 +1,5 @@
 import dateparser
 from datetime import datetime, timedelta
-from modules.util import google_ai
 import os
 from dateutil.relativedelta import relativedelta
 from babel.dates import format_timedelta
@@ -21,20 +20,9 @@ def parse_date(user_time_input) -> datetime | None:
     parsed_date = dateparser.parse(user_time_input, settings=settings, languages=["de"])
     if parsed_date:
         log.debug(f"Parsed by dateparser: '{user_time_input}' -> {parsed_date}")
-        return parsed_date
-
-    now = datetime.now(tz=timezone)
-
-    # Generate text
-    prompt = f"Jetzt ist {now}. Welches Datum und Uhrzeit ist {user_time_input}? Prüfe das Ergebnis nochmal nach! Gib mir nur das Datum mit Uhrzeit."
-    log.debug(f"Gemini Prompt: {prompt}")
-    response = google_ai.prompt(prompt)
-    log.debug(f"Gemini Response: {response}")
-    parsed_date = dateparser.parse(response, settings=settings)
-    log.debug(f"Parsed by dateparser after gemini: '{response}' -> {parsed_date}")
-
-    log.debug(f"using {google_ai.MODEL} {user_time_input} -> {parsed_date}")
-
+    else:
+        log.debug(f"Failed to parse: '{user_time_input}'")
+    
     return parsed_date
 
 def human_delta(datetime2:datetime, datetime1:datetime, locale='de'):

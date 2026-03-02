@@ -8,7 +8,6 @@ googlemaps
 beautifulsoup4
 python-dateutil
 dateparser
-google-genai
 atproto
 babel
 networkx

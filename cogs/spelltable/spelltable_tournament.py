@@ -185,7 +185,7 @@ class EditTournamentView(discord.ui.View):
     async def time_callback(self, button:discord.ui.Button, interaction:discord.Interaction):
         input = discord.ui.InputText(
             label="Startzeit/-datum",
-            placeholder="Die/Das Startzeit/-datum für das Turnier",
+            placeholder="z.B. morgen um 17 Uhr, am 24.12.2025 um 12:00 Uhr, in 2 Stunden",
             required=True,
             value=str(self.tournament.time) if self.tournament.time else "",
         )

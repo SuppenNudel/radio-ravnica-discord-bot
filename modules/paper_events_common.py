@@ -377,8 +377,8 @@ class PaperEvent():
         field_list = [
             InputField(FieldName.TITLE, FIELD_TYPE_TEXT, icon="📢", description=f"Wenn nicht angegeben: {FieldName.FORMATS.value} + {FieldName.TYPE.value}"),
             InputField(FieldName.DESCRIPTION, FIELD_TYPE_TEXT_LONG, icon="📜", description="Freitext"),
-            InputField(FieldName.START, FIELD_TYPE_TIME, mandatory=True, icon="⏰", description="Wann das Event/Turnier los geht"),
-            InputField(FieldName.END, FIELD_TYPE_TIME, icon="⏳", description="Wann das Event/Turnier zu Ende ist"),
+            InputField(FieldName.START, FIELD_TYPE_TIME, mandatory=True, icon="⏰", description="z.B. morgen um 17 Uhr, am 24.12.2025 um 12:00 Uhr, in 2 Stunden"),
+            InputField(FieldName.END, FIELD_TYPE_TIME, icon="⏳", description="z.B. morgen um 22 Uhr, am 24.12.2025 um 18:00 Uhr, in 5 Stunden"),
             InputField(FieldName.LOCATION, FIELD_TYPE_LOCATION, mandatory=True, icon="📍", description="Wo das Event/Turnier stattfindet"),
             InputField(FieldName.FEE, FIELD_TYPE_NUMBER, icon="💸"),
             InputField(FieldName.FORMATS, FieldType(parser=parse_list, max_items="max"), icon="🎮", description=f"Kommasepariert, welche(s) Format(e) gespielt wird/werden", mandatory=True, notion_column="Format(e)"),
