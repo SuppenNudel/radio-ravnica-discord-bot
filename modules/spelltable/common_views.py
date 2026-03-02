@@ -466,12 +466,22 @@ class CancelTournamentModal(discord.ui.Modal):
         self.add_item(self.cancel_input)
 
     async def callback(self, interaction: discord.Interaction):
-        await interaction.response.send_message("Das Turnier wird abgebrochen...", ephemeral=True)
+        try:
+            await interaction.response.send_message("Das Turnier wird abgebrochen...", ephemeral=True)
+        except (discord.errors.DiscordServerError, discord.errors.HTTPException) as e:
+            log.warning(f"Failed to send initial response for tournament cancellation: {e}")
+            # Continue with cancellation even if the response fails
+        
         tourney_message = await self.tournament.message
         self.tournament.cancelled = self.cancel_input.value
         cancel_message = await tourney_message.channel.send(f"🛑 Das Turnier `{self.tournament.title}` wurde abgebrochen:\n> {self.cancel_input.value}")
         link_log.info(f"Turnier `{self.tournament.title}` {cancel_message.jump_url} wurde abgebrochen")
-        await interaction.message.edit(view=None)
+        
+        try:
+            await interaction.message.edit(view=None)
+        except (discord.errors.DiscordServerError, discord.errors.HTTPException) as e:
+            log.warning(f"Failed to edit message after tournament cancellation: {e}")
+        
         await self.tournament.save_tournament()
 
 class KickPlayerModal(discord.ui.Modal):
