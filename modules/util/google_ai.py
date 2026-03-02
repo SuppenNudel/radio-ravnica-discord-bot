@@ -1,4 +1,4 @@
-import google.generativeai as genai
+from google import genai
 import os
 import dotenv
 
@@ -7,13 +7,16 @@ dotenv.load_dotenv()
 MODEL = "gemini-2.0-flash"
 
 # Set up API key
-genai.configure(api_key=os.getenv("GEMINI_KEY"), transport="rest")
-# Initialize the model
-model = genai.GenerativeModel(MODEL)
+client = genai.Client(api_key=os.getenv("GEMINI_KEY"))
+# Initialize the model - will be used per request
+# model = client.models.get(MODEL)
 
 
 def prompt(prompt):
-    response = model.generate_content(prompt)
+    response = client.models.generate_content(
+        model=MODEL,
+        contents=prompt
+    )
     return response.text.strip()
 
 if __name__ == "__main__":
