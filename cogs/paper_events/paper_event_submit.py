@@ -173,7 +173,7 @@ class PaperEventSubmit(Cog):
 
     @Cog.listener()
     async def on_application_command_error(self, ctx:ApplicationContext, error):
-        log.error(error)
+        log.exception("Command error occurred", exc_info=error)
         await ctx.respond(f"Es ist ein Fehler aufgetreten: ```{error}```", ephemeral=True)
         raise error
 
