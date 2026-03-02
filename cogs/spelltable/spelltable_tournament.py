@@ -386,6 +386,10 @@ class SpelltableTournamentManager(Cog):
             return
         # Privilege and context ok
 
+        if not this_tournament.swiss_tournament:
+            await ctx.respond("Dieser Befehl ist erst verfügbar, wenn das Turnier gestartet wurde.", ephemeral=True)
+            return
+
         current_round = this_tournament.swiss_tournament.current_round()
         open_matches = []
         for match in current_round.matches:
