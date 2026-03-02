@@ -732,9 +732,9 @@ class StartNextRoundView(discord.ui.View):
     async def next_round_button(self, button: discord.ui.Button, interaction: discord.Interaction):
         async def do_the_thing():
             # check if the user even is allowed to start the next round
-            # only Moderator or Organizer
-            if interaction.user.id != self.tournament.organizer_id and not any(role.name == "Moderator" for role in interaction.user.roles):
-                await interaction.respond("Nur der Turn Organisator darf dies tun.", ephemeral=True)
+            # only Organizer
+            if interaction.user.id != self.tournament.organizer_id:
+                await interaction.respond("Nur der Turnier-Organisator darf dies tun.", ephemeral=True)
                 return
             
             # Get or create a lock for this tournament
