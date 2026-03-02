@@ -369,7 +369,7 @@ class SpelltableTournamentManager(Cog):
             return
         
         this_tournament = None
-        for id, tournament in active_tournaments.items():
+        for id, tournament in list(active_tournaments.items()):
             tournament_message = await tournament.message
             if tournament_message.channel.id == ctx.channel.id:
                 this_tournament = tournament
@@ -413,7 +413,7 @@ class SpelltableTournamentManager(Cog):
             return
         
         this_tournament = None
-        for id, tournament in active_tournaments.items():
+        for id, tournament in list(active_tournaments.items()):
             tournament_message = await tournament.message
             if tournament_message.channel.id == ctx.channel.id:
                 this_tournament = tournament
