@@ -1,11 +1,15 @@
 import discord
 import logging
+import asyncio
 from modules import swiss_mtg
 from modules.spelltable.tournament_model import SpelltableTournament, use_custom_try, ParticipationState
 from modules import env
 from ezcord import log
 
 link_log = logging.getLogger("link_logger")
+
+# Global dictionary to store locks per tournament to prevent race conditions
+_tournament_round_locks: dict[str, asyncio.Lock] = {}
 
 class SubmitDeckView(discord.ui.View):
     def __init__(self):
@@ -709,23 +713,49 @@ class StartNextRoundView(discord.ui.View):
             if interaction.user.id != self.tournament.organizer_id and not any(role.name == "Moderator" for role in interaction.user.roles):
                 await interaction.respond("Nur der Turn Organisator darf dies tun.", ephemeral=True)
                 return
-            await interaction.response.defer()
+            
+            # Get or create a lock for this tournament
+            tournament_id = await self.tournament.get_id()
+            if tournament_id not in _tournament_round_locks:
+                _tournament_round_locks[tournament_id] = asyncio.Lock()
+            
+            lock = _tournament_round_locks[tournament_id]
+            
+            # Try to acquire the lock without blocking
+            if lock.locked():
+                await interaction.response.send_message(
+                    "Die nächste Runde wird bereits gestartet. Bitte warte einen Moment.",
+                    ephemeral=True
+                )
+                return
+            
+            async with lock:
+                # Double-check that the round hasn't already been started
+                current_round = self.tournament.swiss_tournament.current_round()
+                if current_round and current_round.round_number > self.previous_round.round_number:
+                    await interaction.response.send_message(
+                        "Die nächste Runde wurde bereits gestartet.",
+                        ephemeral=True
+                    )
+                    return
+                
+                await interaction.response.defer()
 
-            # update the previous round's messages
-            previous_standings_message = await self.tournament.get_message(self.previous_round.message_id_standings)
-            previous_pairings_message = await self.tournament.get_message(self.previous_round.message_id_pairings)
+                # update the previous round's messages
+                previous_standings_message = await self.tournament.get_message(self.previous_round.message_id_standings)
+                previous_pairings_message = await self.tournament.get_message(self.previous_round.message_id_pairings)
 
-            standings_image = await self.tournament.standings_to_image(self.previous_round)
-            standings_file = discord.File(standings_image, filename=standings_image)
-            await previous_standings_message.edit(attachments=[], file=standings_file, view=None) #content=previous_pairings_message.content, view=None, attachments=previous_pairings_message.attachments)
+                standings_image = await self.tournament.standings_to_image(self.previous_round)
+                standings_file = discord.File(standings_image, filename=standings_image)
+                await previous_standings_message.edit(attachments=[], file=standings_file, view=None) #content=previous_pairings_message.content, view=None, attachments=previous_pairings_message.attachments)
 
-            pairings_image = await self.tournament.pairings_to_image(self.previous_round)
-            pairings_file = discord.File(pairings_image, filename=pairings_image)
-            await previous_pairings_message.edit(attachments=[], file=pairings_file, view=None)
+                pairings_image = await self.tournament.pairings_to_image(self.previous_round)
+                pairings_file = discord.File(pairings_image, filename=pairings_image)
+                await previous_pairings_message.edit(attachments=[], file=pairings_file, view=None)
 
-            try:
-                await next_round(self.tournament, interaction)
-            except Exception as e:
-                await previous_standings_message.edit(attachments=[], file=standings_file, view=await StartNextRoundView.create(self.previous_round, self.tournament))
+                try:
+                    await next_round(self.tournament, interaction)
+                except Exception as e:
+                    await previous_standings_message.edit(attachments=[], file=standings_file, view=await StartNextRoundView.create(self.previous_round, self.tournament))
 
         await use_custom_try("Nächste Runde Erstellen", do_the_thing, self.tournament)
