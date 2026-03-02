@@ -27,6 +27,12 @@ class SubmitDeckView(discord.ui.View):
 
     @discord.ui.button(label="Deck einreichen", style=discord.ButtonStyle.primary, emoji="📝")
     async def submit_deck_button(self, button: discord.ui.Button, interaction: discord.Interaction):
+        # Check if user is part of the tournament first
+        player = self.tournament.swiss_tournament.player_by_id(interaction.user.id)
+        if not player:
+            await interaction.response.send_message("Du bist kein Teilnehmer in diesem Turnier.", ephemeral=True)
+            return
+        
         await interaction.response.send_modal(SubmitDeckModal(self.tournament, interaction.user))
 
 class SubmitDeckModal(discord.ui.DesignerModal):
