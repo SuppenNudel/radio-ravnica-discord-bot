@@ -85,12 +85,15 @@ def _build_calendar_message(items: list[PaperEventCalendarItem]) -> str:
             line = f"> 🏠 **{item.title}**"
         msg += line + "\n"
 
-        start_text = f"{format_dt(item.time, 'F')} ({format_dt(item.time, 'R')})"
-        msg += f"> \ud83d\uddd3\ufe0f Start: {start_text}\n"
+        # Use date-only format if time is 0:00
+        start_format = 'D' if item.time.hour == 0 and item.time.minute == 0 else 'F'
+        start_text = f"{format_dt(item.time, start_format)} ({format_dt(item.time, 'R')})"
+        msg += f"> 🗓️ Start: {start_text}\n"
 
         end = item.calc_end()
         if end and end != item.time:
-            end_text = f"{format_dt(end, 'F')} ({format_dt(end, 'R')})"
+            end_format = 'D' if end.hour == 0 and end.minute == 0 else 'F'
+            end_text = f"{format_dt(end, end_format)} ({format_dt(end, 'R')})"
             msg += f"> \u23f3 Ende: {end_text}\n"
         msg += "\n"
 
