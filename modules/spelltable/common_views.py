@@ -4,7 +4,9 @@ import asyncio
 from modules import swiss_mtg
 from modules.spelltable.tournament_model import SpelltableTournament, use_custom_try, ParticipationState
 from modules import env
+from modules.hall_of_fame import get_hall_of_fame
 from ezcord import log
+from datetime import datetime
 
 link_log = logging.getLogger("link_logger")
 
@@ -156,6 +158,9 @@ class FinishTournamentView(discord.ui.View):
             link_log.info(f"Turnier abgeschlossen: `{self.tournament.title}`, Gewinner: <@{winner.player_id}>")
             self.tournament.swiss_tournament.winner = winner
             await self.tournament.save_tournament()
+            
+            # Update hall of fame with tournament results
+            await update_hall_of_fame(self.tournament)
 
             # contact players about tournament end
             for player in self.tournament.swiss_tournament.players:
@@ -383,6 +388,46 @@ class ConfirmDropModal(discord.ui.Modal):
 
         link_log.info(f"User {interaction.user.mention} dropped from tournament {message_pairings.jump_url}")
         await interaction.response.send_message("Du wurdest aus dem Turnier entfernt", ephemeral=True)
+
+
+async def update_hall_of_fame(tournament: SpelltableTournament):
+    """Update the hall of fame with tournament results."""
+    try:
+        hof = get_hall_of_fame()
+        
+        # Get the tournament ID
+        message = await tournament.message
+        tournament_id = f"{message.guild.id}/{message.channel.id}/{message.id}"
+        
+        # Sort players by standings
+        swiss_mtg.sort_players_by_standings(tournament.swiss_tournament.players)
+        
+        # Collect results
+        results = []
+        placement = 1
+        for player in tournament.swiss_tournament.players:
+            if not player.dropped:
+                match_record = player.get_match_results()
+                results.append({
+                    "user_id": player.player_id,
+                    "username": player.name,
+                    "placement": placement,
+                    "match_record": match_record
+                })
+                placement += 1
+        
+        # Add tournament to hall of fame
+        hof.add_tournament_result(
+            tournament_id=tournament_id,
+            tournament_title=tournament.title,
+            guild_id=message.guild.id,
+            completed_date=datetime.now().isoformat(),
+            results=results
+        )
+        
+        log.info(f"Hall of fame updated with tournament results: {tournament.title}")
+    except Exception as e:
+        log.error(f"Failed to update hall of fame for tournament {tournament.title}: {e}")
 
 
 async def update_standings(tournament:SpelltableTournament, interaction: discord.Interaction):
