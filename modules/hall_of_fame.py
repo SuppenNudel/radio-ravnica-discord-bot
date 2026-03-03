@@ -207,6 +207,10 @@ class HallOfFame:
                 - match_record: Match record string (e.g., "5-1-0")
                 - matches: List of match results (optional)
         """
+        if self.get_tournament_results(tournament_id):
+            log.info(f"Hall of fame already contains tournament {tournament_id}, skipping")
+            return
+
         # Create tournament record
         tournament = TournamentRecord(tournament_id, tournament_title, 
                                      guild_id, completed_date)

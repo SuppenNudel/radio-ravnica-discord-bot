@@ -174,3 +174,7 @@ tournaments/
 test_participants*
 *.env
 video_downloads/
+hall_of_fame.json
+parse_discord_reactions.py
+parsed_users.json
+tournament_import_ui.py

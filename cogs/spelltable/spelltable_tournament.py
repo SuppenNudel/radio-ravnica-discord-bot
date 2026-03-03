@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 import asyncio
 
 from modules.spelltable.tournament_model import TOURNAMENTS_FOLDER, SpelltableTournament, load_tournaments, active_tournaments, update_tournament_message
-from modules.spelltable.common_views import SubmitDeckView, KickPlayerModal, ParticipationState, StartNextRoundView, next_round
+from modules.spelltable.common_views import SubmitDeckView, KickPlayerModal, ParticipationState, StartNextRoundView, next_round, update_hall_of_fame
 from modules.spelltable import common_views
 
 link_log = logging.getLogger("link_logger")
@@ -326,6 +326,8 @@ class SpelltableTournamentManager(Cog):
                             await message.edit(view=submit_deck_view)
                         else:
                             link_log.error(f"Could not find standings message for concluded tournament: {tournament_message.jump_url}")
+
+                    await update_hall_of_fame(tournament)
                     continue
 
                 if current_round.message_id_standings:
