@@ -72,8 +72,8 @@ Show the top 10 players in a specific category.
 
 **Parameters:**
 - `category` (optional): Category to display
-  - **Wissenscaffold** (default): Tournament victories
-  - **Siegmatches**: Match wins
+  - **Turniersiege** (default): Tournament victories
+  - **Matchsiege**: Match wins
   - **Winrate**: Match win percentage
   - **Turnierteilnahmen**: Tournament participations
   - **Top 3 Finishes**: Top 3 finishes
@@ -162,7 +162,7 @@ Bot: [Displays your match record, tournament wins, placements, etc.]
 
 ### Finding the Best Match Player
 ```
-User: /top_players category:Siegmatches
+User: /top_players category:Matchsiege
 Bot: [Shows top 10 players by individual match wins]
 ```
 

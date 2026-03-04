@@ -99,7 +99,7 @@ class HallOfFameCog(Cog):
             
             embed.add_field(
                 name="🎪 Highlights",
-                value=f"**Meiste Siegmatches:** {most_wins.username} ({most_wins.total_match_wins})\n"
+                value=f"**Meiste Matchsiege:** {most_wins.username} ({most_wins.total_match_wins})\n"
                       f"**Beste Winrate:** {best_wr.username} ({best_wr.get_match_win_percentage()*100:.1f}%)\n"
                       f"**Aktivster Spieler:** {most_tournaments.username} ({most_tournaments.tournament_participations} Turniere)",
                 inline=False
@@ -172,9 +172,9 @@ class HallOfFameCog(Cog):
         category: Option(
             str,
             description="Kategorie für Ranking",
-            choices=["Wissenscaffold", "Siegmatches", "Winrate", "Turnierteilnahmen", "Top 3 Finishes"],
-            default="Wissenscaffold"
-        ) = "Wissenscaffold"
+            choices=["Turniersiege", "Matchsiege", "Winrate", "Turnierteilnahmen", "Top 3 Finishes"],
+            default="Turniersiege"
+        ) = "Turniersiege"
     ):
         """Display top players in a specific category."""
         await ctx.defer(ephemeral=True)
@@ -182,8 +182,8 @@ class HallOfFameCog(Cog):
         hof = get_hall_of_fame()
         
         category_map = {
-            "Wissenscaffold": "winners",
-            "Siegmatches": "match_wins",
+            "Turniersiege": "winners",
+            "Matchsiege": "match_wins",
             "Winrate": "match_winrate",
             "Turnierteilnahmen": "tournaments",
             "Top 3 Finishes": "top3s"
