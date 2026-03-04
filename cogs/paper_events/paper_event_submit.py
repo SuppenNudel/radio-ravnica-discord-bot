@@ -174,7 +174,11 @@ class PaperEventSubmit(Cog):
     @Cog.listener()
     async def on_application_command_error(self, ctx:ApplicationContext, error):
         log.exception("Command error occurred", exc_info=error)
-        await ctx.respond(f"Es ist ein Fehler aufgetreten: ```{error}```", ephemeral=True)
+        try:
+            await ctx.respond(f"Es ist ein Fehler aufgetreten: ```{error}```", ephemeral=True)
+        except discord.errors.NotFound:
+            # Interaction expired, cannot respond
+            log.error("Could not respond to error - interaction expired")
         raise error
 
 

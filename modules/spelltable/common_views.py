@@ -35,19 +35,29 @@ class SubmitDeckView(discord.ui.View):
             await interaction.response.send_message("Du bist kein Teilnehmer in diesem Turnier.", ephemeral=True)
             return
         
-        await interaction.response.send_modal(SubmitDeckModal(self.tournament, interaction.user))
+        try:
+            await interaction.response.send_modal(SubmitDeckModal(self.tournament, interaction.user, player))
+        except discord.errors.NotFound:
+            # Interaction expired, try to send error message if possible
+            try:
+                await interaction.followup.send("Die Anfrage hat zu lange gedauert. Bitte versuche es erneut.", ephemeral=True)
+            except:
+                pass
 
 class SubmitDeckModal(discord.ui.DesignerModal):
-    def __init__(self, tournament: SpelltableTournament, player: discord.User):
+    def __init__(self, tournament: SpelltableTournament, player: discord.User, tournament_player: swiss_mtg.Player = None):
         super().__init__(title="Deck einreichen")
         self.tournament = tournament
         self.player = player
 
-        tournament_player:swiss_mtg.Player = tournament.swiss_tournament.player_by_id(self.player.id)
+        # Use the passed tournament_player to avoid redundant lookup
+        if tournament_player is None:
+            tournament_player = tournament.swiss_tournament.player_by_id(self.player.id)
+        
         deck:swiss_mtg.Deck = tournament_player.deck if tournament_player and tournament_player.deck else None
 
         # self.archetype_input = discord.ui.Select(
-        #     placeholder="Wähle einen Archetyp...",
+        #     placeholder="Wähle einen Archetyp...',
         #     options=[
         #         discord.SelectOption(label="Mono Red Burn", value="Mono Red Burn"),
         #         discord.SelectOption(label="Mono Blue Terror", value="Mono Blue Terror"),
@@ -92,8 +102,6 @@ class SubmitDeckModal(discord.ui.DesignerModal):
                 required=False
             )
         self.add_item(self.decklist_label)
-        
-        # self.add_item(discord.ui.Label("Archetyp", self.archetype_input, description="Wähle den Archetyp deines Decks aus."))
 
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer()

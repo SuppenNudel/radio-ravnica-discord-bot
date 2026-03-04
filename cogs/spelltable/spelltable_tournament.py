@@ -462,7 +462,12 @@ class SpelltableTournamentManager(Cog):
         titel:Option(str, description="Der Titel, den das Turnier tragen soll")
     ):
         # Defer the interaction response to avoid timeout
-        await ctx.defer(ephemeral=True)
+        try:
+            await ctx.defer(ephemeral=True)
+        except discord.errors.NotFound:
+            # Interaction expired before we could defer - the bot can't respond
+            log.error("Interaction expired before defer could be called")
+            return
         if type(ctx.channel) != discord.TextChannel:
             await ctx.followup.send("Dieser Befehl kann nur in einem Textkanal ausgeführt werden.", ephemeral=True)
             return
