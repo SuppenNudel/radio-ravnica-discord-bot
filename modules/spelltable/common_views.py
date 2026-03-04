@@ -186,44 +186,136 @@ class FinishTournamentView(discord.ui.View):
         else:
             await interaction.respond("Kein Gewinner gefunden. Das sollte nicht passieren.", ephemeral=True)
 
-class ReportMatchAdminModal(discord.ui.DesignerModal):
-    def __init__(self):
-        raise RuntimeError("Use 'await ReportMatchAdminModal.create(...)' instead")
-
-    async def _init(self, tournament:SpelltableTournament, round:swiss_mtg.Round):
-        super().__init__(title="Report Match Result")
+class AdminMatchSelectView(discord.ui.View):
+    def __init__(self, tournament:SpelltableTournament, round:swiss_mtg.Round, player_names:dict[int, str]):
+        super().__init__(timeout=120)
         self.tournament = tournament
         self.round = round
+        self.player_names = player_names
+        self.message: discord.Message | None = None
 
-        # self.round.matches.sort(key=lambda m: (m.player1.player_id if m.player1 else 0, m.player2.player_id if m.player2 else 0))
         match_options = []
-        for i,match in enumerate(self.round.matches):
+        for i, match in enumerate(self.round.matches):
             if match.is_bye():
                 continue
-            label = f"{match.player1.name if match.player1 else 'BYE'} vs {match.player2.name if match.player2 else 'BYE'}"
-            match_options.append(discord.SelectOption(label=label, value=str(i)))
-        
+            p1_label = self.player_names.get(match.player1.player_id, f"Player({match.player1.player_id})") if match.player1 else "BYE"
+            p2_label = self.player_names.get(match.player2.player_id, f"Player({match.player2.player_id})") if match.player2 else "BYE"
+            match_options.append(discord.SelectOption(label=f"{p1_label} vs {p2_label}", value=str(i)))
+
         self.match_select = discord.ui.StringSelect(
             placeholder="Wähle ein Match aus...",
             options=match_options,
             max_values=1,
+            min_values=1
+        )
+        self.match_select.callback = self.on_match_selected
+        self.add_item(self.match_select)
+
+    async def on_match_selected(self, interaction: discord.Interaction):
+        try:
+            if not self.match_select.values:
+                await interaction.respond("Bitte wähle ein Match aus.", ephemeral=True)
+                return
+
+            match_index = int(self.match_select.values[0])
+            if match_index < 0 or match_index >= len(self.round.matches):
+                await interaction.respond("Ungültiges Match ausgewählt.", ephemeral=True)
+                return
+
+            match = self.round.matches[match_index]
+            if match.is_bye() or not match.player1 or not match.player2:
+                await interaction.respond("Dieses Match kann nicht gesetzt werden.", ephemeral=True)
+                return
+
+            p1_name = self.player_names.get(match.player1.player_id, f"Player({match.player1.player_id})")
+            p2_name = self.player_names.get(match.player2.player_id, f"Player({match.player2.player_id})")
+            await interaction.response.send_modal(ReportMatchAdminModal(self.tournament, self.round, match, p1_name, p2_name))
+        except Exception:
+            link_log.exception("[admin-report] Failed to open admin result modal after match selection")
+            try:
+                if interaction.response.is_done():
+                    await interaction.followup.send("Beim Öffnen des Ergebnis-Dialogs ist ein Fehler aufgetreten.", ephemeral=True)
+                else:
+                    await interaction.respond("Beim Öffnen des Ergebnis-Dialogs ist ein Fehler aufgetreten.", ephemeral=True)
+            except discord.NotFound:
+                link_log.warning("[admin-report] Could not deliver error to user after match selection: interaction expired")
+            except Exception:
+                link_log.exception("[admin-report] Failed to deliver fallback error to user after match selection")
+
+    async def on_timeout(self):
+        for child in self.children:
+            child.disabled = True
+
+        if self.message:
+            try:
+                await self.message.edit(
+                    content="Die Match-Auswahl ist abgelaufen. Bitte klicke erneut auf **Ergebnis setzen (Admin)**.",
+                    view=self
+                )
+            except discord.NotFound:
+                link_log.info("[admin-report] Match selection timeout message already gone; skipping update")
+            except Exception:
+                link_log.exception("[admin-report] Failed to update expired match selection view")
+
+
+class ReportMatchAdminModal(discord.ui.DesignerModal):
+    def __init__(self, tournament:SpelltableTournament, round:swiss_mtg.Round, match:swiss_mtg.Match, p1_name:str = None, p2_name:str = None):
+        super().__init__(title="Report Match Result")
+        self.tournament = tournament
+        self.round = round
+        self.match = match
+
+        p1_display = p1_name if p1_name else f"Player({match.player1.player_id})"
+        p2_display = p2_name if p2_name else f"Player({match.player2.player_id})"
+
+        default_p1 = int(match.wins.get(match.player1, 0) or 0) if match.is_finished() else 0
+        default_p2 = int(match.wins.get(match.player2, 0) or 0) if match.is_finished() else 0
+        default_draws = int(match.wins.get("draws", 0) or 0) if match.is_finished() else 0
+
+        score_options_p1 = [
+            discord.SelectOption(label="0", value="0", default=default_p1 == 0),
+            discord.SelectOption(label="1", value="1", default=default_p1 == 1),
+            discord.SelectOption(label="2", value="2", default=default_p1 == 2)
+        ]
+
+        score_options_p2 = [
+            discord.SelectOption(label="0", value="0", default=default_p2 == 0),
+            discord.SelectOption(label="1", value="1", default=default_p2 == 1),
+            discord.SelectOption(label="2", value="2", default=default_p2 == 2)
+        ]
+
+        score_options_draw = [
+            discord.SelectOption(label="0", value="0", default=default_draws == 0),
+            discord.SelectOption(label="1", value="1", default=default_draws == 1),
+            discord.SelectOption(label="2", value="2", default=default_draws == 2)
+        ]
+
+        self.p1_score_select = discord.ui.StringSelect(
+            placeholder="Siege",
+            options=score_options_p1,
             min_values=1,
+            max_values=1,
             required=True
         )
-        self.add_item(discord.ui.Label(f"Welches Match möchtest du setzen?", self.match_select))
+        self.add_item(discord.ui.Label(f"Spieler 1 Siege - {p1_display}", self.p1_score_select))
 
-        # Create Labels with set_input_text() for proper required/optional handling
-        self.p1_label = discord.ui.Label("Spieler 1 Siege")
-        self.p1_label.set_input_text(placeholder="0,1,2", required=True)
-        self.add_item(self.p1_label)
+        self.p2_score_select = discord.ui.StringSelect(
+            placeholder="Siege",
+            options=score_options_p2,
+            min_values=1,
+            max_values=1,
+            required=True
+        )
+        self.add_item(discord.ui.Label(f"Spieler 2 Siege - {p2_display}", self.p2_score_select))
 
-        self.p2_label = discord.ui.Label("Spieler 2 Siege")
-        self.p2_label.set_input_text(placeholder="0,1,2", required=True)
-        self.add_item(self.p2_label)
-
-        self.draw_label = discord.ui.Label("Unentschieden")
-        self.draw_label.set_input_text(placeholder="0,1,2", value="0", min_length=0, required=False)
-        self.add_item(self.draw_label)
+        self.draw_score_select = discord.ui.StringSelect(
+            placeholder="Unentschieden",
+            options=score_options_draw,
+            min_values=1,
+            max_values=1,
+            required=True
+        )
+        self.add_item(discord.ui.Label("Unentschieden", self.draw_score_select))
 
         self.message_label = discord.ui.Label("Nachricht an die Spieler")
         self.message_label.set_input_text(
@@ -232,75 +324,109 @@ class ReportMatchAdminModal(discord.ui.DesignerModal):
         )
         self.add_item(self.message_label)
 
-    @classmethod
-    async def create(cls, tournament:SpelltableTournament, round:swiss_mtg.Round):
-        instance = object.__new__(cls)
-        await instance._init(tournament, round)
-        return instance
-
     async def callback(self, interaction: discord.Interaction):
-        # Access values from Label items
-        score1 = int(self.p1_label.item.value) if self.p1_label.item.value else 0  # type: ignore
-        score2 = int(self.p2_label.item.value) if self.p2_label.item.value else 0  # type: ignore
-        draw_score = int(self.draw_label.item.value) if self.draw_label.item.value else 0  # type: ignore
-        match_index = int(self.match_select.values[0])
-        match = self.round.matches[match_index]
         try:
-            match.set_result(score1, score2, draw_score)
+            if not self.p1_score_select.values or not self.p2_score_select.values or not self.draw_score_select.values:
+                await interaction.respond("Bitte wähle Siege und Unentschieden aus.", ephemeral=True)
+                return
+
+            score1 = int(self.p1_score_select.values[0])
+            score2 = int(self.p2_score_select.values[0])
+            draw_score = int(self.draw_score_select.values[0])
+            self.match.set_result(score1, score2, draw_score)
+
+            await interaction.response.defer()
+
+            p1_member = await self.tournament.get_member(self.match.player1.player_id)
+            p2_member = await self.tournament.get_member(self.match.player2.player_id)
+            p1_mention = p1_member.mention if p1_member else f"<@{self.match.player1.player_id}>"
+            p2_mention = p2_member.mention if p2_member else f"<@{self.match.player2.player_id}>"
+            p1_name = p1_member.display_name if p1_member else f"Player({self.match.player1.player_id})"
+            p2_name = p2_member.display_name if p2_member else f"Player({self.match.player2.player_id})"
+
+            message_to_opponend = f"Nachricht von der Turnierorganisation:\n> {self.message_label.item.value}"  # type: ignore
+            message_result = await interaction.followup.send(f"{p1_mention} {score1} - {score2} {p2_mention}{f' ({draw_score} Unentschieden)' if draw_score else ''}\n{message_to_opponend}", wait=True)
+
+            if env.DEBUG:
+                swiss_mtg.simulate_remaining_matches(self.tournament.swiss_tournament)
+
+            log_text = f"[admin-report] {p1_name} vs {p2_name} → {score1}-{score2}-{draw_score}"
+            link_log.info(f"{log_text} in {message_result.jump_url}")
+            await update_pairings(self.tournament, self.round)
+            await update_standings(self.tournament, interaction)
+
         except ValueError as e:
-            await interaction.respond(f"Das Match Resultat {score1}-{score2}-{draw_score} ist invalide: {e}", ephemeral=True)
-            return
-        
-        await interaction.response.defer()
-        message_to_opponend = f"Nachricht von der Turnierorganisation:\n> {self.message_label.item.value}"  # type: ignore
-        message_result = await interaction.followup.send(f"<@{match.player1.player_id}> {score1} - {score2} <@{match.player2.player_id}>{f' ({draw_score} Unentschieden)' if draw_score else ''}\n{message_to_opponend}", wait=True)
-
-        if env.DEBUG:
-            swiss_mtg.simulate_remaining_matches(self.tournament.swiss_tournament)
-
-        log_text = f"Match result submitted: <@{match.player1.player_id}> vs <@{match.player2.player_id}> → {score1}-{score2}-{draw_score}"
-        link_log.info(f"{log_text} in {message_result.jump_url}")
-        await update_pairings(self.tournament, self.round)
-        await update_standings(self.tournament, interaction)
+            link_log.warning(f"[admin-report] Invalid score submission: {e}")
+            if interaction.response.is_done():
+                await interaction.followup.send(f"Ungültiges Match-Ergebnis: {e}", ephemeral=True)
+            else:
+                await interaction.respond(f"Ungültiges Match-Ergebnis: {e}", ephemeral=True)
+        except Exception:
+            link_log.exception("[admin-report] Unexpected error while submitting match result")
+            if interaction.response.is_done():
+                await interaction.followup.send("Beim Setzen des Ergebnisses ist ein Fehler aufgetreten.", ephemeral=True)
+            else:
+                await interaction.respond("Beim Setzen des Ergebnisses ist ein Fehler aufgetreten.", ephemeral=True)
 
 class ReportMatchModal(discord.ui.DesignerModal):
-    def __init__(self):
-        raise RuntimeError("Use 'await ReportMatchModal.create(...)' instead")
-
-    async def _init(self, tournament:SpelltableTournament, round:swiss_mtg.Round, match:swiss_mtg.Match):
+    def __init__(self, tournament:SpelltableTournament, round:swiss_mtg.Round, match:swiss_mtg.Match, p1_name:str = None, p2_name:str = None):
         super().__init__(title="Report Match Result")
         self.tournament = tournament
         self.match = match
         self.round = round
 
-        self.player1_user = await tournament.get_member(match.player1.player_id)
-        self.player2_user = await tournament.get_member(match.player2.player_id)
-        
-        # Create Labels with set_input_text() for proper required/optional handling
-        self.p1_label = discord.ui.Label(f"Player 1 - {self.player1_user.display_name}")
-        self.p1_label.set_input_text(
-            placeholder="",
-            required=True,
-            value=str(match.wins[match.player1] or "0") if match.is_finished() else ""
+        # Use provided names or fallback to player IDs
+        p1_display = p1_name if p1_name else f"Player({match.player1.player_id})"
+        p2_display = p2_name if p2_name else f"Player({match.player2.player_id})"
+
+        default_p1 = int(match.wins.get(match.player1, 0) or 0) if match.is_finished() else 0
+        default_p2 = int(match.wins.get(match.player2, 0) or 0) if match.is_finished() else 0
+        default_draws = int(match.wins.get("draws", 0) or 0) if match.is_finished() else 0
+
+        score_options_p1 = [
+            discord.SelectOption(label="0", value="0", default=default_p1 == 0),
+            discord.SelectOption(label="1", value="1", default=default_p1 == 1),
+            discord.SelectOption(label="2", value="2", default=default_p1 == 2)
+        ]
+
+        score_options_p2 = [
+            discord.SelectOption(label="0", value="0", default=default_p2 == 0),
+            discord.SelectOption(label="1", value="1", default=default_p2 == 1),
+            discord.SelectOption(label="2", value="2", default=default_p2 == 2)
+        ]
+
+        score_options_draw = [
+            discord.SelectOption(label="0", value="0", default=default_draws == 0),
+            discord.SelectOption(label="1", value="1", default=default_draws == 1),
+            discord.SelectOption(label="2", value="2", default=default_draws == 2)
+        ]
+
+        self.p1_score_select = discord.ui.StringSelect(
+            placeholder="Siege",
+            options=score_options_p1,
+            min_values=1,
+            max_values=1,
+            required=True
         )
-        self.add_item(self.p1_label)
-        
-        self.p2_label = discord.ui.Label(f"Player 2 - {self.player2_user.display_name}")
-        self.p2_label.set_input_text(
-            placeholder="",
-            required=True,
-            value=str(match.wins[match.player2] or "0") if match.is_finished() else ""
+        self.add_item(discord.ui.Label(f"Wins - {p1_display}", self.p1_score_select))
+
+        self.p2_score_select = discord.ui.StringSelect(
+            placeholder="Siege",
+            options=score_options_p2,
+            min_values=1,
+            max_values=1,
+            required=True
         )
-        self.add_item(self.p2_label)
-        
-        self.draw_label = discord.ui.Label("Draws")
-        self.draw_label.set_input_text(
-            placeholder="",
-            value=str(match.wins["draws"]),
-            min_length=0,
-            required=False
+        self.add_item(discord.ui.Label(f"Wins - {p2_display}", self.p2_score_select))
+
+        self.draw_score_select = discord.ui.StringSelect(
+            placeholder="Draws",
+            options=score_options_draw,
+            min_values=1,
+            max_values=1,
+            required=True
         )
-        self.add_item(self.draw_label)
+        self.add_item(discord.ui.Label("Draws", self.draw_score_select))
 
         self.message_label = discord.ui.Label("Nachricht an deinen Gegner")
         self.message_label.set_input_text(
@@ -310,34 +436,50 @@ class ReportMatchModal(discord.ui.DesignerModal):
         )
         self.add_item(self.message_label)
 
-    @classmethod
-    async def create(cls, tournament:SpelltableTournament, round:swiss_mtg.Round, match:swiss_mtg.Match):
-        instance = object.__new__(cls)
-        await instance._init(tournament, round, match)
-        return instance
-
     async def callback(self, interaction: discord.Interaction):
-        # Access values from Label items
-        score1 = int(self.p1_label.item.value) if self.p1_label.item.value else 0  # type: ignore
-        score2 = int(self.p2_label.item.value) if self.p2_label.item.value else 0  # type: ignore
-        draw_score = int(self.draw_label.item.value) if self.draw_label.item.value else 0  # type: ignore
         try:
+            if not self.p1_score_select.values or not self.p2_score_select.values or not self.draw_score_select.values:
+                await interaction.respond("Bitte wähle Siege und Unentschieden aus.", ephemeral=True)
+                return
+
+            score1 = int(self.p1_score_select.values[0])
+            score2 = int(self.p2_score_select.values[0])
+            draw_score = int(self.draw_score_select.values[0])
+
             self.match.set_result(score1, score2, draw_score)
+
+            await interaction.response.defer()
+
+            p1_member = await self.tournament.get_member(self.match.player1.player_id)
+            p2_member = await self.tournament.get_member(self.match.player2.player_id)
+            p1_mention = p1_member.mention if p1_member else f"<@{self.match.player1.player_id}>"
+            p2_mention = p2_member.mention if p2_member else f"<@{self.match.player2.player_id}>"
+            p1_name = p1_member.display_name if p1_member else f"Player({self.match.player1.player_id})"
+            p2_name = p2_member.display_name if p2_member else f"Player({self.match.player2.player_id})"
+
+            message_to_opponend = f"{interaction.user.mention} lässt ausrichten:\n> {self.message_label.item.value}" if self.message_label.item.value else "GGs!"  # type: ignore
+            gg_message = await interaction.followup.send(f"{p1_mention} {score1} - {score2} {p2_mention}{f' ({draw_score} Unentschieden)' if draw_score else ''}\n{message_to_opponend}", wait=True)
+
+            if env.DEBUG:
+                swiss_mtg.simulate_remaining_matches(self.tournament.swiss_tournament)
+
+            log_text = f"[player-report] {p1_name} vs {p2_name} → {score1}-{score2}-{draw_score}"
+            link_log.info(f"{log_text} in {gg_message.jump_url}")
+            await update_pairings(self.tournament, self.round)
+            await update_standings(self.tournament, interaction)
+
         except ValueError as e:
-            await interaction.respond(f"Dein Match Resultat {score1}-{score2}-{draw_score} ist invalide: {e}", ephemeral=True)
-            return
-        
-        await interaction.response.defer()
-        message_to_opponend = f"{interaction.user.mention} lässt ausrichten:\n> {self.message_label.item.value}" if self.message_label.item.value else "GGs!"  # type: ignore
-        gg_message = await interaction.followup.send(f"{self.player1_user.mention} {score1} - {score2} {self.player2_user.mention}{f' ({draw_score} Unentschieden)' if draw_score else ''}\n{message_to_opponend}", wait=True)
-
-        if env.DEBUG:
-            swiss_mtg.simulate_remaining_matches(self.tournament.swiss_tournament)
-
-        log_text = f"Match result submitted: {self.player1_user.mention} vs {self.player2_user.mention} → {score1}-{score2}-{draw_score}"
-        link_log.info(f"{log_text} in {gg_message.jump_url}")
-        await update_pairings(self.tournament, self.round)
-        await update_standings(self.tournament, interaction)
+            link_log.warning(f"[player-report] Invalid score submission: {e}")
+            if interaction.response.is_done():
+                await interaction.followup.send(f"Ungültiges Match-Ergebnis: {e}", ephemeral=True)
+            else:
+                await interaction.respond(f"Ungültiges Match-Ergebnis: {e}", ephemeral=True)
+        except Exception:
+            link_log.exception("[player-report] Unexpected error while submitting match result")
+            if interaction.response.is_done():
+                await interaction.followup.send("Beim Übermitteln deines Ergebnisses ist ein Fehler aufgetreten.", ephemeral=True)
+            else:
+                await interaction.respond("Beim Übermitteln deines Ergebnisses ist ein Fehler aufgetreten.", ephemeral=True)
 
 
 async def update_pairings(tournament:SpelltableTournament, round:swiss_mtg.Round):
@@ -418,7 +560,6 @@ async def update_hall_of_fame(tournament: SpelltableTournament):
                 match_record = player.get_match_results()
                 results.append({
                     "user_id": player.player_id,
-                    "username": player.name,
                     "placement": placement,
                     "match_record": match_record
                 })
@@ -596,6 +737,19 @@ class ReportMatchView(discord.ui.View):
         super().__init__(timeout=None)
         self.round = round
         self.tournament = tournament
+        self.player_match_map: dict[int, swiss_mtg.Match] = {}
+        
+        # Pre-fetch and cache all player display names for this round
+        self.player_names = {}
+        for match in self.round.matches:
+            if match.player1 and match.player1.player_id not in self.player_names:
+                member = await self.tournament.get_member(match.player1.player_id)
+                self.player_names[match.player1.player_id] = member.display_name if member else f"Player({match.player1.player_id})"
+                self.player_match_map[match.player1.player_id] = match
+            if match.player2 and match.player2.player_id not in self.player_names:
+                member = await self.tournament.get_member(match.player2.player_id)
+                self.player_names[match.player2.player_id] = member.display_name if member else f"Player({match.player2.player_id})"
+                self.player_match_map[match.player2.player_id] = match
 
     @classmethod
     async def create(cls, round:swiss_mtg.Round, tournament:SpelltableTournament):
@@ -612,40 +766,76 @@ class ReportMatchView(discord.ui.View):
 
     @discord.ui.button(label="Ergebnis übermitteln", style=discord.ButtonStyle.primary, emoji="⚔️")
     async def report_button(self, button: discord.ui.Button, interaction: discord.Interaction):
-        the_match = None
-        for match in self.round.matches:
-            players_in_match = []
-            if match.player1:
-                players_in_match.append(match.player1.player_id)
-            if match.player2:
-                players_in_match.append(match.player2.player_id)
-
-            if interaction.user.id in players_in_match:
-                the_match = match
-                break
-        if not the_match:
-            await interaction.respond("Du bist kein Teilnehmer in diesem Turnier.", ephemeral=True)
+        try:
+            the_match = self.player_match_map.get(interaction.user.id)
+            if not the_match:
+                await interaction.respond("Du bist kein Teilnehmer in diesem Turnier.", ephemeral=True)
+                
+                if env.DEBUG:
+                    await self.simulate_on_not_playing(self.tournament, self.round, interaction)
+                return
             
-            if env.DEBUG:
-                await self.simulate_on_not_playing(self.tournament, self.round, interaction)
-            return
-        
-        if the_match.is_bye():
-            await interaction.respond("Du hast diese Runde ein Bye", ephemeral=True)
+            if the_match.is_bye():
+                await interaction.respond("Du hast diese Runde ein Bye", ephemeral=True)
 
-            if env.DEBUG:
-                await self.simulate_on_not_playing(self.tournament, self.round, interaction)
-            return
-        
-        await interaction.response.send_modal(await ReportMatchModal.create(self.tournament, self.round, the_match))
+                if env.DEBUG:
+                    await self.simulate_on_not_playing(self.tournament, self.round, interaction)
+                return
+            
+            if not the_match.player1 or not the_match.player2:
+                await interaction.respond("Dieses Match kann nicht gemeldet werden.", ephemeral=True)
+                return
+
+            p1_name = self.player_names.get(the_match.player1.player_id, f"Player({the_match.player1.player_id})")
+            p2_name = self.player_names.get(the_match.player2.player_id, f"Player({the_match.player2.player_id})")
+            await interaction.response.send_modal(ReportMatchModal(self.tournament, self.round, the_match, p1_name, p2_name))
+        except Exception:
+            link_log.exception("[player-report] Failed to open report modal")
+            try:
+                if interaction.response.is_done():
+                    await interaction.followup.send("Beim Öffnen des Ergebnis-Dialogs ist ein Fehler aufgetreten.", ephemeral=True)
+                else:
+                    await interaction.respond("Beim Öffnen des Ergebnis-Dialogs ist ein Fehler aufgetreten.", ephemeral=True)
+            except discord.NotFound:
+                link_log.warning("[player-report] Could not deliver error to user: interaction expired")
+            except Exception:
+                link_log.exception("[player-report] Failed to deliver fallback error to user")
 
     @discord.ui.button(label="Ergebnis setzen (Admin)", style=discord.ButtonStyle.secondary, emoji="🔏")
     async def admin_report_button(self, button: discord.ui.Button, interaction: discord.Interaction):
-        official_tournament_roles = ["Moderator", "Admin"]
-        if interaction.user.id != self.tournament.organizer_id and not any(role.name in official_tournament_roles for role in interaction.user.roles):
-            await interaction.respond("Nur der Turnier-Organisator oder ein Moderator darf dies tun.", ephemeral=True)
-            return
-        await interaction.response.send_modal(await ReportMatchAdminModal.create(self.tournament, self.round))
+        try:
+            official_tournament_roles = ["Moderator", "Admin"]
+            if interaction.user.id != self.tournament.organizer_id and not any(role.name in official_tournament_roles for role in interaction.user.roles):
+                await interaction.respond("Nur der Turnier-Organisator oder ein Moderator darf dies tun.", ephemeral=True)
+                return
+
+            player_names = getattr(self, 'player_names', {})
+            has_non_bye_matches = any(not match.is_bye() for match in self.round.matches)
+            if not has_non_bye_matches:
+                await interaction.respond("In dieser Runde gibt es keine setzbaren Matches.", ephemeral=True)
+                return
+
+            selection_view = AdminMatchSelectView(self.tournament, self.round, player_names)
+            await interaction.response.defer(ephemeral=True)
+            selection_message = await interaction.followup.send(
+                "Wähle das Match aus, das du bearbeiten möchtest:",
+                view=selection_view,
+                ephemeral=True,
+                wait=True
+            )
+            if selection_message and isinstance(selection_message, discord.Message):
+                selection_view.message = selection_message
+        except Exception:
+            link_log.exception("[admin-report] Failed to open admin report modal")
+            try:
+                if interaction.response.is_done():
+                    await interaction.followup.send("Beim Öffnen des Admin-Ergebnis-Dialogs ist ein Fehler aufgetreten.", ephemeral=True)
+                else:
+                    await interaction.respond("Beim Öffnen des Admin-Ergebnis-Dialogs ist ein Fehler aufgetreten.", ephemeral=True)
+            except discord.NotFound:
+                link_log.warning("[admin-report] Could not deliver error to user: interaction expired")
+            except Exception:
+                link_log.exception("[admin-report] Failed to deliver fallback error to user")
 
     @discord.ui.button(label="Turnier verlassen", style=discord.ButtonStyle.danger, emoji="🚪")
     async def drop_button(self, button: discord.ui.Button, interaction: discord.Interaction):
@@ -805,6 +995,13 @@ class StartNextRoundView(discord.ui.View):
             if interaction.user.id != self.tournament.organizer_id:
                 await interaction.respond("Nur der Turnier-Organisator darf dies tun.", ephemeral=True)
                 return
+
+            # Acknowledge interaction immediately to avoid timeout during prep work
+            try:
+                await interaction.response.defer(ephemeral=True)
+            except discord.NotFound:
+                link_log.warning("[next-round] Interaction expired before defer; aborting next-round start")
+                return
             
             # Get or create a lock for this tournament
             tournament_id = await self.tournament.get_id()
@@ -815,7 +1012,7 @@ class StartNextRoundView(discord.ui.View):
             
             # Try to acquire the lock without blocking
             if lock.locked():
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     "Die nächste Runde wird bereits gestartet. Bitte warte einen Moment.",
                     ephemeral=True
                 )
@@ -825,13 +1022,11 @@ class StartNextRoundView(discord.ui.View):
                 # Double-check that the round hasn't already been started
                 current_round = self.tournament.swiss_tournament.current_round()
                 if current_round and current_round.round_number > self.previous_round.round_number:
-                    await interaction.response.send_message(
+                    await interaction.followup.send(
                         "Die nächste Runde wurde bereits gestartet.",
                         ephemeral=True
                     )
                     return
-                
-                await interaction.response.defer()
 
                 # update the previous round's messages
                 previous_standings_message = await self.tournament.get_message(self.previous_round.message_id_standings)

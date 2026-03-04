@@ -511,15 +511,19 @@ class SpelltableTournament(Serializable):
         players = self.swiss_tournament.players
         swiss_mtg.sort_players_by_standings(players)
 
-        rows = [[
-            rank+1,
-            (player.name, player.dropped),
-            player.calculate_match_points(),
-            player.get_match_results(),
-            f"{player.calculate_opponent_match_win_percentage():.4%}",
-            f"{player.calculate_game_win_percentage():.4%}",
-            f"{player.calculate_opponent_game_win_percentage():.4%}",
-        ] for rank, player in enumerate(players)]
+        rows = []
+        for rank, player in enumerate(players):
+            member = await self.get_member(player.player_id)
+            player_display_name = member.display_name if member else f"User({player.player_id})"
+            rows.append([
+                rank+1,
+                (player_display_name, player.dropped),
+                player.calculate_match_points(),
+                player.get_match_results(),
+                f"{player.calculate_opponent_match_win_percentage():.4%}",
+                f"{player.calculate_game_win_percentage():.4%}",
+                f"{player.calculate_opponent_game_win_percentage():.4%}",
+            ])
 
         data = {
             "headers": ["Rang", "Name", "Punkte", "Matches", "OMW", "GW", "OGW"],
@@ -544,10 +548,12 @@ class SpelltableTournament(Serializable):
         rows = []
 
         for rank, player in enumerate(players):
+            member = await self.get_member(player.player_id)
+            player_display_name = member.display_name if member else f"User({player.player_id})"
             archetype = player.deck.archetype if player.deck and player.deck.archetype else "?"
             rows.append([
                 rank+1,
-                (player.name, player.dropped),
+                (player_display_name, player.dropped),
                 archetype
             ])
 
@@ -601,7 +607,9 @@ class SpelltableTournament(Serializable):
                 player = match.player1 or match.player2
                 if player:
                     p_mp = player.calculate_match_points(round.round_number-1)
-                    rows.append([(f"{player.name} ({p_mp})", player.dropped), "BYE", "2 - 0"])
+                    member = await self.get_member(player.player_id)
+                    player_display_name = member.display_name if member else f"User({player.player_id})"
+                    rows.append([(f"{player_display_name} ({p_mp})", player.dropped), "BYE", "2 - 0"])
                 continue
 
             # Normal match
@@ -616,11 +624,17 @@ class SpelltableTournament(Serializable):
             else:
                 score_p1 = score_p2 = "Ausstehend"
 
+            # Fetch display names
+            member_p1 = await self.get_member(p1.player_id)
+            member_p2 = await self.get_member(p2.player_id)
+            p1_display_name = member_p1.display_name if member_p1 else f"User({p1.player_id})"
+            p2_display_name = member_p2.display_name if member_p2 else f"User({p2.player_id})"
+
             # Add both player perspectives
             p1_mp = p1.calculate_match_points(round.round_number-1)
             p2_mp = p2.calculate_match_points(round.round_number-1)
-            rows.append([(f"{p1.name} ({p1_mp})", p1.dropped), (f"{p2.name} ({p2_mp})", p2.dropped), score_p1])
-            rows.append([(f"{p2.name} ({p2_mp})", p2.dropped), (f"{p1.name} ({p1_mp})", p1.dropped), score_p2])
+            rows.append([(f"{p1_display_name} ({p1_mp})", p1.dropped), (f"{p2_display_name} ({p2_mp})", p2.dropped), score_p1])
+            rows.append([(f"{p2_display_name} ({p2_mp})", p2.dropped), (f"{p1_display_name} ({p1_mp})", p1.dropped), score_p2])
 
         # Sort rows by player name (first element of the tuple in column 0)
         rows.sort(key=lambda row: row[0][0].lower())

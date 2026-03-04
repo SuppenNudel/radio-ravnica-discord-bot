@@ -92,21 +92,20 @@ class ParticipationView(discord.ui.View):
         if interaction.user.id != self.tournament.organizer_id and not any(role.name == "Moderator" for role in interaction.user.roles):
             await interaction.respond("Du bist nicht der Turnier-Organisator!", ephemeral=True)
             return
-        await interaction.respond("Starte Turnier...", ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
+        await interaction.followup.send("Starte Turnier...", ephemeral=True)
         
         message = await self.tournament.message
         if message:
             await message.edit(view=None)
         else:
-            await interaction.respond("Turnier Nachricht nicht gefunden", ephemeral=True)
+            await interaction.followup.send("Turnier Nachricht nicht gefunden", ephemeral=True)
             return
         
         players = []
         participants = self.tournament.get_users_by_state(ParticipationState.PARTICIPATE)
         for participant_id in participants:
-            member = await self.tournament.get_member(participant_id)
-            player_name = EMOJI_PATTERN.sub("", member.display_name).strip()
-            players.append(swiss_mtg.Player(player_name, participant_id))
+            players.append(swiss_mtg.Player(participant_id))
 
         swiss_tournament = swiss_mtg.SwissTournament(players, max_rounds=self.tournament.max_rounds if self.tournament.max_rounds else None)
         self.tournament.swiss_tournament = swiss_tournament
