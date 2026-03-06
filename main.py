@@ -69,5 +69,5 @@ async def on_ready():
 if __name__ == "__main__":
     os.makedirs("tmp", exist_ok=True)
     profile = env.get_active_cog_profile()
-    bot.load_cogs(profile["cogs_path"], ignored_cogs=profile["ignored_cogs"])
+    bot.load_cogs(profile["cogs_path"], ignored_cogs=profile["ignored_cogs"], subdirectories=True)
     bot.run(os.getenv("TOKEN"))
