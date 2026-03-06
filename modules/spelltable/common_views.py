@@ -517,7 +517,6 @@ async def update_pairings(tournament:SpelltableTournament, round:swiss_mtg.Round
             description=pairings[:4000] if len(pairings) <= 4000 else pairings[:3950] + "\n\n_(Siehe Bild für vollständige Paarungen)_",
             color=discord.Color.from_rgb(37, 88, 79)
         )
-        embed.set_image(url=f"attachment://{pairings_image}")
         
         await pairings_message.edit(embed=embed, attachments=[], file=pairings_file, view=view)
     else:
@@ -941,7 +940,6 @@ async def post_pairings(round:swiss_mtg.Round, tournament:SpelltableTournament, 
         description=pairings[:4000] if len(pairings) <= 4000 else pairings[:3950] + "\n\n_(Siehe Bild für vollständige Paarungen)_",
         color=discord.Color.from_rgb(37, 88, 79)
     )
-    embed.set_image(url=f"attachment://{pairings_image}")
     
     if interaction:
         new_pairings_message:discord.Message = await interaction.followup.send(embed=embed, file=pairings_file, view=reportMatchView)
