@@ -76,11 +76,19 @@ class SubmitDeckModal(discord.ui.DesignerModal):
             "Archetyp", 
             description="Wie sich das Deck nennt, das du gespielt hast"
         )
-        self.deck_name_label.set_input_text(
-            placeholder="Mono-Red Aggro, Jund Wildfire, ...",
-            min_length=0,
-            required=False
-        )
+        if deck and deck.archetype:
+            self.deck_name_label.set_input_text(
+                placeholder="Mono-Red Aggro, Jund Wildfire, ...",
+                value=deck.archetype,
+                min_length=0,
+                required=False
+            )
+        else:
+            self.deck_name_label.set_input_text(
+                placeholder="Mono-Red Aggro, Jund Wildfire, ...",
+                min_length=0,
+                required=False
+            )
         self.add_item(self.deck_name_label)
         
         self.decklist_label = discord.ui.Label(
