@@ -683,8 +683,42 @@ class CancelTournamentModal(discord.ui.Modal):
             await interaction.message.edit(view=None)
         except (discord.errors.DiscordServerError, discord.errors.HTTPException) as e:
             log.warning(f"Failed to edit message after tournament cancellation: {e}")
+
+        await remove_tournament_views(self.tournament)
         
         await self.tournament.save_tournament()
+
+
+async def remove_tournament_views(tournament: SpelltableTournament):
+    """Remove all persistent component views from a tournament's messages."""
+    tournament_message = await tournament.message
+    if not tournament_message:
+        return
+
+    thread = tournament_message.channel
+    if isinstance(thread, discord.Thread) and thread.archived:
+        await thread.edit(archived=False)
+
+    messages_to_clear: dict[int, discord.Message] = {tournament_message.id: tournament_message}
+
+    if tournament.swiss_tournament and tournament.swiss_tournament.rounds:
+        for round_data in tournament.swiss_tournament.rounds:
+            for message_id in (round_data.message_id_pairings, round_data.message_id_standings):
+                if not message_id or message_id in messages_to_clear:
+                    continue
+                try:
+                    message = await thread.fetch_message(message_id)
+                except discord.NotFound:
+                    continue
+                messages_to_clear[message_id] = message
+
+    for message in messages_to_clear.values():
+        try:
+            await message.edit(view=None)
+        except discord.NotFound:
+            continue
+        except (discord.errors.DiscordServerError, discord.errors.HTTPException) as e:
+            log.warning(f"Failed to remove view from message {message.id} in tournament `{tournament.title}`: {e}")
 
 class KickPlayerModal(discord.ui.Modal):
     def __init__(self, tournament:SpelltableTournament):

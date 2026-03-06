@@ -301,6 +301,8 @@ class SpelltableTournament(Serializable):
             swiss_tournament_data = data['tournament']
             tournament.swiss_tournament = swiss_mtg.SwissTournament.deserialize(swiss_tournament_data)
 
+        tournament.cancelled = data.get("cancelled", False)
+
         return tournament
     
     async def serialize(self):

@@ -1,0 +1,26 @@
+{
+  "spelltable": {
+    "cogs_path": "cogs/spelltable",
+    "ignored_cogs": ["format_overlap_check"]
+  },
+  "feed": {
+    "cogs_path": "cogs/feed",
+    "ignored_cogs": []
+  },
+  "paper-events": {
+    "cogs_path": "cogs/paper_events",
+    "ignored_cogs": []
+  },
+  "moderation": {
+    "cogs_path": "cogs/moderation",
+    "ignored_cogs": []
+  },
+  "hall-of-fame": {
+    "cogs_path": "cogs/hall_of_fame.py",
+    "ignored_cogs": []
+  },
+  "full": {
+    "cogs_path": "cogs",
+    "ignored_cogs": [ "format_overlap_check" ]
+  }
+}

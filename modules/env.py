@@ -72,3 +72,58 @@ API_KEY_IMGBB = os.getenv("API_KEY_IMGBB")
 CHANNEL_NEWS_DE = get_int_from_env("CHANNEL_NEWS_DE")
 CHANNEL_NEWS_EN = get_int_from_env("CHANNEL_NEWS_EN")
 API_KEY_YOUTUBE = os.getenv("API_KEY_YOUTUBE")
+
+# Load feature profiles from JSON
+def load_cog_profiles() -> dict:
+    """Load cog profiles from cog_profiles.json."""
+    try:
+        profiles_path = Path("cog_profiles.json")
+        if profiles_path.exists():
+            with open(profiles_path, "r") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    # Fallback empty dict
+    return {}
+
+COG_PROFILES = load_cog_profiles()
+
+def get_git_branch_name() -> str:
+    """Get current git branch name."""
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return "main"
+
+def get_active_cog_profile() -> dict:
+    """Get cog loading profile for current branch."""
+    # Check for explicit override
+    profile_name = os.getenv("FEATURE_PROFILE")
+    
+    # If no override, try to match git branch to profile
+    if not profile_name:
+        branch = get_git_branch_name()
+        # Try exact match, then try to find matching profile from branch name
+        if branch in COG_PROFILES:
+            profile_name = branch
+        else:
+            # Try to find a profile name within the branch name (e.g., "feature/feed" -> "feed")
+            for prof_name in COG_PROFILES.keys():
+                if prof_name in branch.lower():
+                    profile_name = prof_name
+                    break
+    
+    # Fall back to main profile
+    if not profile_name or profile_name not in COG_PROFILES:
+        profile_name = "full"
+    
+    return COG_PROFILES.get(profile_name, {"cogs_path": "cogs", "ignored_cogs": []})

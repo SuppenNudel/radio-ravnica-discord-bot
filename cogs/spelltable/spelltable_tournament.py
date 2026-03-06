@@ -289,6 +289,13 @@ class SpelltableTournamentManager(Cog):
 
         global active_tournaments
         for message_path, tournament in loaded_tournaments.items():
+            # Skip loading cancelled tournaments
+            if tournament.cancelled:
+                try:
+                    await common_views.remove_tournament_views(tournament)
+                except Exception:
+                    log.exception(f"Failed to clear views for cancelled tournament `{tournament.title}` during startup")
+                continue
             try:
                 active_tournaments[message_path] = tournament
                 tournament_message = await tournament.message
