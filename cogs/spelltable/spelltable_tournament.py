@@ -323,8 +323,10 @@ class SpelltableTournamentManager(Cog):
                     if tournament_message and isinstance(tournament_message.channel, discord.Thread) and tournament_message.channel.archived:
                         await tournament_message.channel.edit(archived=False)
 
-                    # activate deck submission button
+                    # Update standings with latest deck submissions
+                    await tournament.update_metagame()
                     
+                    # activate deck submission button
                     if current_round.message_id_standings:
                         message = await tournament.get_message(current_round.message_id_standings)
                         if message:

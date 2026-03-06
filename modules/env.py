@@ -108,8 +108,12 @@ def get_active_cog_profile() -> dict:
     """Get cog loading profile for current branch."""
     # Check for explicit override
     profile_name = os.getenv("FEATURE_PROFILE")
+
+    # Production should default to full unless explicitly overridden.
+    if not profile_name and not DEBUG:
+        profile_name = "full"
     
-    # If no override, try to match git branch to profile
+    # In debug, allow branch-based matching for local workflows.
     if not profile_name:
         branch = get_git_branch_name()
         # Try exact match, then try to find matching profile from branch name
