@@ -331,7 +331,10 @@ class SpelltableTournamentManager(Cog):
                         message = await tournament.get_message(current_round.message_id_standings)
                         if message:
                             submit_deck_view = await SubmitDeckView.create(tournament)
-                            await message.edit(view=submit_deck_view)
+                            if message.embeds:
+                                await message.edit(embed=message.embeds[0], view=submit_deck_view)
+                            else:
+                                await message.edit(view=submit_deck_view)
                         else:
                             link_log.error(f"Could not find standings message for concluded tournament: {tournament_message.jump_url}")
 

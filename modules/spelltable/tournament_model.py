@@ -11,6 +11,7 @@ from modules.serializable import Serializable
 from modules import env
 import os
 import pytz
+from pathlib import Path
 
 timezone = pytz.timezone("Europe/Berlin")
 
@@ -582,18 +583,47 @@ class SpelltableTournament(Serializable):
 
         return metagame_message_text
     
+    async def create_metagame_embed(self) -> discord.Embed:
+        """Create an embed with final standings and deck lists."""
+        embed = discord.Embed(
+            title="🏆 Finales Ergebnis",
+            color=discord.Color.from_rgb(37, 88, 79)
+        )
+        
+        players:list[swiss_mtg.Player] = self.swiss_tournament.players
+        deck_list = ""
+        
+        for rank, player in enumerate(players, 1):
+            archetype = player.deck.archetype if player.deck and player.deck.archetype else "?"
+            link = player.deck.link if player.deck else None
+            player_user = await self.get_member(player.player_id)
+            url_text = f"[{archetype}]({link})" if link else archetype
+            line = f"{rank}. {player_user.mention} - {url_text}\n"
+            
+            # Discord embed description limit is 4096 chars
+            if len(deck_list) + len(line) > 4000:
+                deck_list += "\n_(Weitere Platzierungen siehe Bild)_"
+                break
+            deck_list += line
+        
+        embed.description = deck_list
+        return embed
+    
     async def update_metagame(self):
         metagame_standings_image = await self.standings_to_image(include_metagame=True)
-        # metagame_img = await self.metagame_to_image()
-        metagame_file = discord.File(metagame_standings_image, filename=metagame_standings_image)
+        attachment_name = Path(metagame_standings_image).name
+        metagame_file = discord.File(metagame_standings_image, filename=attachment_name)
         message = await self.message
-        message_text = await self.metagame_message_text()
+        embed = await self.create_metagame_embed()
+        embed.set_image(url=f"attachment://{attachment_name}")
+        
         standings_message = await self.get_message(self.swiss_tournament.current_round().message_id_standings)
         if standings_message:
-            # Clear old attachments and add new file in one edit
-            await standings_message.edit(content=message_text, attachments=[], file=metagame_file)
+            # Two-step update so stale image attachments are guaranteed to be removed.
+            await standings_message.edit(content="", embeds=[], attachments=[], suppress=False)
+            await standings_message.edit(content="", embeds=[embed], attachments=[], file=metagame_file, suppress=False)
             return
-        standings_message = await message.channel.send(content=message_text, file=metagame_file, suppress=True)
+        standings_message = await message.channel.send(embeds=[embed], file=metagame_file, suppress=False)
         self.swiss_tournament.current_round().message_id_standings = standings_message.id
         await self.save_tournament()
 

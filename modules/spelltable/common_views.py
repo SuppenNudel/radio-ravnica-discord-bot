@@ -165,9 +165,17 @@ class FinishTournamentView(discord.ui.View):
 
             if pairings_message:
                 await pairings_message.edit(view=None)
+            
+            # Update final standings with deck submissions and add submit deck button
+            await self.tournament.update_metagame()
+            
+            # Fetch the updated message to preserve the embed when adding the button
+            standings_message = await self.tournament.get_message(current_round.message_id_standings)
             submit_deck_view = await SubmitDeckView.create(self.tournament)
-            if standings_message:
-                await standings_message.edit(content="🏆Finales Ergebnis", view=submit_deck_view)
+            if standings_message and standings_message.embeds:
+                await standings_message.edit(embed=standings_message.embeds[0], view=submit_deck_view)
+            elif standings_message:
+                await standings_message.edit(view=submit_deck_view)
 
 
             await interaction.response.send_message(content, ephemeral=False)
@@ -501,7 +509,17 @@ async def update_pairings(tournament:SpelltableTournament, round:swiss_mtg.Round
         link_log.info(f"updating pairings {pairings_message.jump_url}")
         pairings_image = await tournament.pairings_to_image(round)
         pairings_file = discord.File(pairings_image, filename=pairings_image)
-        await pairings_message.edit(file=pairings_file, attachments=[], content=pairings_message.content or "Kein Inhalt verfügbar.", view=view)
+        pairings = await tournament.get_pairings(round)
+        
+        # Create/update embed
+        embed = discord.Embed(
+            title=f"⚔️ Paarungen für die {round.round_number}. Runde",
+            description=pairings[:4000] if len(pairings) <= 4000 else pairings[:3950] + "\n\n_(Siehe Bild für vollständige Paarungen)_",
+            color=discord.Color.from_rgb(37, 88, 79)
+        )
+        embed.set_image(url=f"attachment://{pairings_image}")
+        
+        await pairings_message.edit(embed=embed, attachments=[], file=pairings_file, view=view)
     else:
         pairings_message = await post_pairings(round, tournament)
         log.info(f"Issued new pairings message {pairings_message.jump_url} for tournament {tournament.title}.")
@@ -596,9 +614,15 @@ async def update_standings(tournament:SpelltableTournament, interaction: discord
 
     is_last_round = current_round.round_number >= tournament.swiss_tournament.rounds_count
 
-    content = f"Platzierungen nach der {current_round.round_number}.{' (und letzten)' if is_last_round else ''} Runde"
     standings_image = await tournament.standings_to_image()
     standings_file = discord.File(standings_image, filename=standings_image)
+    
+    # Create embed for standings
+    embed = discord.Embed(
+        title=f"🏆 Platzierungen nach der {current_round.round_number}.{' (und letzten)' if is_last_round else ''} Runde",
+        color=discord.Color.from_rgb(37, 88, 79)
+    )
+    embed.set_image(url=f"attachment://{standings_image}")
 
     if is_last_round:
         # letzte Runde
@@ -607,10 +631,10 @@ async def update_standings(tournament:SpelltableTournament, interaction: discord
         view = await StartNextRoundView.create(current_round, tournament)
 
     if message_standings:
-        await message_standings.edit(content=content, view=view, attachments=[], file=standings_file)
+        await message_standings.edit(content=None, embed=embed, view=view, attachments=[], file=standings_file)
     else:
         async def do_the_thing():
-            message_standings = await interaction.followup.send(content=content, view=view, file=standings_file)
+            message_standings = await interaction.followup.send(embed=embed, view=view, file=standings_file)
             # dm organizer
             to = await tournament.organizer
             can_do = None
@@ -910,8 +934,17 @@ async def post_pairings(round:swiss_mtg.Round, tournament:SpelltableTournament, 
     pairings_image = await tournament.pairings_to_image()
     pairings_file = discord.File(pairings_image, filename=pairings_image)
     pairings = await tournament.get_pairings()
+    
+    # Create embed for pairings
+    embed = discord.Embed(
+        title=f"⚔️ Paarungen für die {round.round_number}. Runde",
+        description=pairings[:4000] if len(pairings) <= 4000 else pairings[:3950] + "\n\n_(Siehe Bild für vollständige Paarungen)_",
+        color=discord.Color.from_rgb(37, 88, 79)
+    )
+    embed.set_image(url=f"attachment://{pairings_image}")
+    
     if interaction:
-        new_pairings_message:discord.Message = await interaction.followup.send(content=f"Paarungen für die {round.round_number}. Runde:\n\n{pairings}", file=pairings_file, view=reportMatchView)
+        new_pairings_message:discord.Message = await interaction.followup.send(embed=embed, file=pairings_file, view=reportMatchView)
     else:
         message_to_reply_to = None
         if round.round_number == 1:
@@ -921,7 +954,7 @@ async def post_pairings(round:swiss_mtg.Round, tournament:SpelltableTournament, 
             if not previous_round:
                 previous_round = tournament.swiss_tournament.rounds[round.round_number - 2]
             message_to_reply_to = await tournament.get_message(previous_round.message_id_pairings)
-        new_pairings_message:discord.Message = await message_to_reply_to.reply(content=f"Paarungen für die {round.round_number}. Runde:\n\n{pairings}", file=pairings_file, view=reportMatchView)
+        new_pairings_message:discord.Message = await message_to_reply_to.reply(embed=embed, file=pairings_file, view=reportMatchView)
     
     # Try to pin/unpin messages, but continue if permissions are missing
     try:
