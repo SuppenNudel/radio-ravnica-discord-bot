@@ -615,7 +615,6 @@ class SpelltableTournament(Serializable):
         metagame_file = discord.File(metagame_standings_image, filename=attachment_name)
         message = await self.message
         embed = await self.create_metagame_embed()
-        embed.set_image(url=f"attachment://{attachment_name}")
         
         standings_message = await self.get_message(self.swiss_tournament.current_round().message_id_standings)
         if standings_message:
