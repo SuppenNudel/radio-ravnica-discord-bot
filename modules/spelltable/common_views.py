@@ -518,7 +518,7 @@ async def update_pairings(tournament:SpelltableTournament, round:swiss_mtg.Round
             color=discord.Color.from_rgb(37, 88, 79)
         )
         
-        await pairings_message.edit(embed=embed, attachments=[], file=pairings_file, view=view)
+        await pairings_message.edit(content="", embed=embed, attachments=[], file=pairings_file, view=view)
     else:
         pairings_message = await post_pairings(round, tournament)
         log.info(f"Issued new pairings message {pairings_message.jump_url} for tournament {tournament.title}.")
@@ -942,7 +942,7 @@ async def post_pairings(round:swiss_mtg.Round, tournament:SpelltableTournament, 
     )
     
     if interaction:
-        new_pairings_message:discord.Message = await interaction.followup.send(embed=embed, file=pairings_file, view=reportMatchView)
+        new_pairings_message:discord.Message = await interaction.followup.send(content="", embed=embed, file=pairings_file, view=reportMatchView)
     else:
         message_to_reply_to = None
         if round.round_number == 1:
@@ -952,7 +952,7 @@ async def post_pairings(round:swiss_mtg.Round, tournament:SpelltableTournament, 
             if not previous_round:
                 previous_round = tournament.swiss_tournament.rounds[round.round_number - 2]
             message_to_reply_to = await tournament.get_message(previous_round.message_id_pairings)
-        new_pairings_message:discord.Message = await message_to_reply_to.reply(embed=embed, file=pairings_file, view=reportMatchView)
+        new_pairings_message:discord.Message = await message_to_reply_to.reply(content="", embed=embed, file=pairings_file, view=reportMatchView)
     
     # Try to pin/unpin messages, but continue if permissions are missing
     try:
