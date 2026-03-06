@@ -433,6 +433,11 @@ class PaperEvent():
         self.fields[FieldName.IMAGE].value = entry.get_file_property("Cover Bild")
 
     def save_in_notion(self):
+        def _long_name(component) -> str:
+            if isinstance(component, dict):
+                return component.get("long_name", "")
+            return ""
+
         payload = notion.NotionPayloadBuilder()
         image:str|None = self.fields[FieldName.IMAGE].value
         if image:
@@ -455,10 +460,19 @@ class PaperEvent():
         if self.fields[FieldName.FEE].value:
             payload.add_number("Gebühr", self.fields[FieldName.FEE].value)
         location:gmaps.Location = self.fields[FieldName.LOCATION].value
-        payload.add_text("Straße + Hausnummer", f"{location.street['long_name']} {location.street_number['long_name']}")
+        street_name = _long_name(location.street)
+        street_number = _long_name(location.street_number)
+        street_and_number = " ".join(part for part in [street_name, street_number] if part)
+        if not street_and_number:
+            street_and_number = location.formatted_address or ""
+
+        payload.add_text("Straße + Hausnummer", street_and_number)
         payload.add_text("Name des Ladens", location.name or "")
-        payload.add_text("Stadt", location.city['long_name'])
-        payload.add_relation("(Bundes)land", location.get_area_page_id())
+        payload.add_text("Stadt", _long_name(location.city))
+        try:
+            payload.add_relation("(Bundes)land", location.get_area_page_id())
+        except Exception as e:
+            log.warning(f"Could not resolve area relation for location '{location}': {e}")
         if self.fields[FieldName.URL].value:
             payload.add_url("URL", self.fields[FieldName.URL].value)
         payload.add_text("Server ID", str(self.guild.id))
@@ -499,7 +513,9 @@ class PaperEvent():
         title = self.build_title()
         location:gmaps.Location|None = self.fields[FieldName.LOCATION].value
         if location:
-            location_str = f"{location.name} in {location.city['long_name']}"
+            city_name = location.city.get("long_name", "") if isinstance(location.city, dict) else ""
+            location_name = location.name or location.formatted_address or "Unbekannter Ort"
+            location_str = f"{location_name} in {city_name}" if city_name else location_name
         else:
             location_str = f'<{FieldName.LOCATION.value}>'
 
