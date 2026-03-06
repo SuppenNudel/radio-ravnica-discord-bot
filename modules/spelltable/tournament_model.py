@@ -590,9 +590,8 @@ class SpelltableTournament(Serializable):
         message_text = await self.metagame_message_text()
         standings_message = await self.get_message(self.swiss_tournament.current_round().message_id_standings)
         if standings_message:
-            # Clear old attachments first, then add new file
-            await standings_message.edit(content=message_text, attachments=[])
-            await standings_message.edit(content=message_text, attachments=[metagame_file])
+            # Clear old attachments and add new file in one edit
+            await standings_message.edit(content=message_text, attachments=[], file=metagame_file)
             return
         standings_message = await message.channel.send(content=message_text, file=metagame_file, suppress=True)
         self.swiss_tournament.current_round().message_id_standings = standings_message.id
