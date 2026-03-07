@@ -12,6 +12,8 @@ from modules import env
 import os
 import pytz
 from pathlib import Path
+import asyncio
+import aiohttp
 
 timezone = pytz.timezone("Europe/Berlin")
 
@@ -610,21 +612,40 @@ class SpelltableTournament(Serializable):
         return embed
     
     async def update_metagame(self):
-        metagame_standings_image = await self.standings_to_image(include_metagame=True)
-        attachment_name = Path(metagame_standings_image).name
-        metagame_file = discord.File(metagame_standings_image, filename=attachment_name)
-        message = await self.message
-        embed = await self.create_metagame_embed()
-        
-        standings_message = await self.get_message(self.swiss_tournament.current_round().message_id_standings)
-        if standings_message:
-            # Two-step update so stale image attachments are guaranteed to be removed.
-            await standings_message.edit(content="", embeds=[], attachments=[], suppress=False)
-            await standings_message.edit(content="", embeds=[embed], attachments=[], file=metagame_file, suppress=False)
-            return
-        standings_message = await message.channel.send(embeds=[embed], file=metagame_file, suppress=False)
-        self.swiss_tournament.current_round().message_id_standings = standings_message.id
-        await self.save_tournament()
+        try:
+            metagame_standings_image = await self.standings_to_image(include_metagame=True)
+            attachment_name = Path(metagame_standings_image).name
+            metagame_file = discord.File(metagame_standings_image, filename=attachment_name)
+            message = await self.message
+            embed = await self.create_metagame_embed()
+            
+            standings_message = await self.get_message(self.swiss_tournament.current_round().message_id_standings)
+            if standings_message:
+                # Two-step update so stale image attachments are guaranteed to be removed.
+                # Retry logic for transient connection errors
+                max_retries = 3
+                for attempt in range(max_retries):
+                    try:
+                        await standings_message.edit(content="", embeds=[], attachments=[], suppress=False)
+                        await standings_message.edit(content="", embeds=[embed], attachments=[], file=metagame_file, suppress=False)
+                        return
+                    except (aiohttp.ClientOSError, aiohttp.ClientConnectionError, discord.errors.HTTPException) as e:
+                        if attempt < max_retries - 1:
+                            # Exponential backoff: 1s, 2s, 4s
+                            wait_time = 2 ** attempt
+                            logging.warning(f"Failed to update metagame (attempt {attempt + 1}/{max_retries}), retrying in {wait_time}s: {e}")
+                            await asyncio.sleep(wait_time)
+                        else:
+                            # Give up after max retries
+                            logging.error(f"Failed to update metagame after {max_retries} attempts: {e}")
+                            raise
+            else:
+                standings_message = await message.channel.send(embeds=[embed], file=metagame_file, suppress=False)
+                self.swiss_tournament.current_round().message_id_standings = standings_message.id
+                await self.save_tournament()
+        except Exception as e:
+            # Log the error but don't crash the bot during on_ready
+            logging.error(f"Error updating metagame: {e}", exc_info=True)
 
     async def pairings_to_image(self, round:swiss_mtg.Round|None=None) -> str:
         if round is None:
