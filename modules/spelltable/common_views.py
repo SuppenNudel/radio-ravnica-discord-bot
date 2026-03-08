@@ -46,7 +46,7 @@ class SubmitDeckView(discord.ui.View):
 
 class SubmitDeckModal(discord.ui.DesignerModal):
     def __init__(self, tournament: SpelltableTournament, player: discord.User, tournament_player: swiss_mtg.Player = None):
-        super().__init__(title="Deck einreichen (wird erst nach Abschluss des Turniers veröffentlicht)")
+        super().__init__(title="Dein Deck; erst nach Abschluss veröffentlicht")
         self.tournament = tournament
         self.player = player
 
