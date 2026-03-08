@@ -1,15 +1,15 @@
 ics
 pillow
-py-cord
+py-cord @ git+https://github.com/Pycord-Development/pycord
 ezcord
 scrapetube
-notion_client
+notion_client==2.2.1
 googlemaps
 beautifulsoup4
 python-dateutil
 dateparser
-google-generativeai
 atproto
 babel
 networkx
 selenium
+apify-client

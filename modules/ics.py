@@ -1,5 +1,6 @@
 import ics
 from datetime import datetime
+from ezcord import log
 
 def create_ics_file(file_name, event_name, start_datetime, end_datetime:datetime, description=None, location=None):
     """
@@ -11,6 +12,7 @@ def create_ics_file(file_name, event_name, start_datetime, end_datetime:datetime
 
     # Set required event properties
     event.name = event_name
+    log.debug(f"Creating event: {event_name} from {start_datetime} to {end_datetime}")
     event.begin = start_datetime
     event.end = end_datetime
     if end_datetime and end_datetime == start_datetime:

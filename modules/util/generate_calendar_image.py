@@ -149,13 +149,14 @@ def rotated_text(text, draw:ImageDraw.ImageDraw, img:ImageDraw.Image.Image, x, y
     # Paste it onto the base image at desired position
     img.paste(rotated_text, (x, y), rotated_text)  # Third argument is mask for transparency
 
-def generate_calendar(tournaments: list["SpelltableTournament"] = []):
+def generate_calendar(tournaments: list = []):
     if not tournaments:
         return None
     tournaments = tournaments or []
     tournaments.sort(key=lambda t: t.time)  # Sort tournaments by start time
 
-    earliest_date:date = tournaments[0].time.date()
+    today = datetime.now(tz=env.TIMEZONE).date()
+    earliest_date:date = min(tournaments[0].time.date(), today)
     last_date:date = tournaments[-1].calc_end().date()
 
     months:list[date] = []

@@ -21,23 +21,43 @@ def pad_ansi_text(text, width):
     visible_len = visible_length(text)
     return text + " " * (width - visible_len)
 
+class Deck(Serializable):
+    def __init__(self, link:str|None=None, archetype:str|None=None):
+        self.link = link
+        self.archetype = archetype
+
+    @classmethod
+    def deserialize(cls, data) -> "Deck":
+        if data is None:
+            return None
+        deck = Deck(data['link'] if 'link' in data else None, data['archetype'] if 'archetype' in data else None)
+        return deck
+
+    def serialize(self):
+        return {
+            "link": self.link,
+            "archetype": self.archetype
+        }
+
+
 class Player(Serializable):
-    def __init__(self, name, player_id):
-        self.name = name
+    def __init__(self, player_id):
         self.player_id:int = player_id
         self.match_history:list[Match] = []
         self.dropped = False
+        self.deck:Deck|None = None
 
     @classmethod
     def deserialize(cls, data) -> "Player":
-        player = Player(data['name'], data['player_id'])
+        player = Player(data['player_id'])
         player.dropped = data['dropped'] if 'dropped' in data else False
+        player.deck = Deck.deserialize(data['deck']) if 'deck' in data else None
         return player
 
     def serialize(self):
         my_dict = {
-            "name": self.name,
             "player_id": self.player_id,
+            "deck": self.deck
         }
         if self.dropped:
             my_dict["dropped"] = self.dropped
@@ -47,10 +67,10 @@ class Player(Serializable):
         return any(match.is_bye() for match in self.match_history)
 
     def __str__(self):
-        return self.name
+        return f"Player({self.player_id})"
     
     def __repr__(self):
-        return f"{self.name} - {self.calculate_match_points()}"
+        return f"Player({self.player_id}) - {self.calculate_match_points()} MP"
 
     def get_match_results(self):
         # Using a generator expression to sum up wins, draws, and losses
@@ -189,7 +209,7 @@ class Match(Serializable):
         else:
             raise ValueError(f"{player} didn't participate in this match")
 
-    def get_winner(self):
+    def get_winner(self) -> Player|bool|None:
         if not self.is_finished():
             return False
         if self.wins[self.player1] > self.wins[self.player2]:
@@ -219,12 +239,12 @@ class Match(Serializable):
 
     def __repr__(self):
         if self.player2 is None:
-            return f"Bye for {self.player1.name} ({self.player1.calculate_match_points()})"
-        text = f"Match between {self.player1.name} ({self.player1.calculate_match_points()}) and {self.player2.name} ({self.player2.calculate_match_points()})"
+            return f"Bye for Player({self.player1.player_id}) ({self.player1.calculate_match_points()})"
+        text = f"Match between Player({self.player1.player_id}) ({self.player1.calculate_match_points()}) and Player({self.player2.player_id}) ({self.player2.calculate_match_points()})"
         if self.is_finished():
             win_string = "-".join(map(str, self.wins.values()))
             winner = self.get_winner()
-            winner_text = f"{winner.name} won" if winner else "Draw"
+            winner_text = f"Player({winner.player_id}) won" if winner else "Draw"
             return f"{text}: {win_string} ({winner_text})"
         else:
             return f"{text} is not finished yet."
@@ -251,11 +271,15 @@ class Round(Serializable):
         round = Round(round_data['round_number'])
         round.matches = [Match.deserialize(match, players, round.round_number) for match in round_data['matches']]
         if 'message_pairings' in round_data:
-            message = int(round_data['message_pairings'])
-            round.message_id_pairings = message
+            message_id_str = round_data['message_pairings']
+            if message_id_str is not None:
+                message_id = int(message_id_str)
+                round.message_id_pairings = message_id
         if 'message_standings' in round_data:
-            message = int(round_data['message_standings'])
-            round.message_id_standings = message
+            message_id_str = round_data['message_standings']
+            if message_id_str is not None:
+                message_id = int(message_id_str)
+                round.message_id_standings = message_id
         return round
     
     def is_concluded(self):
@@ -321,6 +345,8 @@ class SwissTournament(Serializable):
         if 'rounds' in data:
             player_map = {player.player_id: player for player in players}
             tournament.rounds = [Round.deserialize(round, player_map) for round in data['rounds']]
+        if 'winner' in data and isinstance(data['winner'], dict):
+            tournament.winner = Player.deserialize(data['winner'])
         return tournament
 
     def player_by_id(self, id):
@@ -452,12 +478,12 @@ class SwissTournament(Serializable):
 
         # Print the headers
         print("Standings for Round: ", self.current_round().round_number)
-        print(f"{'Rank':<5}{'Name':<15}{'Points':<8}{'Results':<10}{'OMW':<12}{'GW':<12}{'OGW':<12}")
+        print(f"{'Rank':<5}{'Player ID':<15}{'Points':<8}{'Results':<10}{'OMW':<12}{'GW':<12}{'OGW':<12}")
 
         # Print each player's data
         for rank, player in enumerate(self.players):
-            player_name = strike_through(player.name) if player.dropped else player.name
-            formatted_name = pad_ansi_text(player_name, 15)
+            player_id_str = str(player.player_id)
+            formatted_name = pad_ansi_text(player_id_str, 15)
             print(f"{rank+1:<5}{formatted_name}{player.calculate_match_points():<8}{player.get_match_results():<10}{player.calculate_opponent_match_win_percentage():<12.4%}{player.calculate_game_win_percentage():<12.4%}{player.calculate_opponent_game_win_percentage():<12.4%}")
 
     def print_round_pairings(self, round:Round):
@@ -504,7 +530,7 @@ def main():
     RANDOM_DROP_RATE = 0
 
     # Step 1: Initialize players
-    players = [Player(f"Player {player_id+1}", player_id) for player_id in range(PLAYER_COUNT)]
+    players = [Player(player_id) for player_id in range(PLAYER_COUNT)]
 
     # Step 2: Create tournament
     tournament = SwissTournament(players)

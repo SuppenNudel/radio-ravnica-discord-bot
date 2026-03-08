@@ -12,6 +12,9 @@ import os
 from discord.ui import Modal
 from discord.utils import format_dt
 from modules.date_time_interpretation import parse_date
+import logging
+
+link_log = logging.getLogger("link_logger")
 
 DB_ID_REMIND_ME = os.getenv("DATABASE_ID_REMIND_ME")
 DB_FIELD_DATE = "Timestamp"
@@ -163,13 +166,13 @@ class RemindMe(commands.Cog):
         modal = ReminderModal(user=ctx.author, message=message)
         await ctx.send_modal(modal)
 
-    async def send_reminder_message(self, guild, message_id, channel_id, user_id, reason=None):
+    async def send_reminder_message(self, guild:discord.Guild, message_id, channel_id, user_id, reason=None):
         bot = self.bot
         try:
             # Fetch the channel
             channel = bot.get_channel(channel_id)
             if channel is None:
-                log.debug("couln't 'get' channel. Fetching channel")
+                link_log.debug(f"couldn't 'get' channel with id {channel_id}({guild.jump_url}/{channel_id}). Fetching channel")
                 channel = await bot.fetch_channel(channel_id)
             
             if channel is None:
@@ -232,16 +235,17 @@ class RemindMe(commands.Cog):
             log.debug(f"Message forwarded to {user.name} via DM.")
             return True
         except discord.NotFound:
-            log.error("Message or channel not found!")
+            link_log.error(f"Message or channel not found! {guild.jump_url}/{channel_id} {guild.jump_url}/{channel_id}/{message_id} or user <@{user_id}>")
         except discord.Forbidden as e:
-            log.error("I don't have permission to access this channel or DM the user!")
+            link_log.error(f"I don't have permission to access this channel {guild.jump_url}/{channel_id} or DM the user <@{user_id}>!")
         except discord.HTTPException as e:
             log.error(f"An error occurred: {e}")
         return False
 
     @commands.Cog.listener()
     async def on_ready(self):
-        self.check_reminders.start()
+        if not self.check_reminders.is_running():
+            self.check_reminders.start()
         log.debug(self.__class__.__name__ + " is ready")
 
     @tasks.loop(minutes=5)
@@ -254,19 +258,18 @@ class RemindMe(commands.Cog):
                     .build())
             entries = notion.get_all_entries(DB_ID_REMIND_ME, filter=filter)
             for entry in entries:
-                my_entry = notion.Entry(entry)
-                timestamp = my_entry.get_date_property(DB_FIELD_DATE)
+                timestamp = entry.get_date_property(DB_FIELD_DATE)
                 if timestamp['start'] > filter_date:
                     # noch zu früh
                     continue
-                user = my_entry.get_text_property(DB_FIELD_USER)
-                message = my_entry.get_text_property(DB_FIELD_MESSAGE)
-                channel = my_entry.get_text_property(DB_FIELD_CHANNEL)
-                reason = my_entry.get_text_property(DB_FIELD_REASON)
+                user = entry.get_text_property(DB_FIELD_USER)
+                message = entry.get_text_property(DB_FIELD_MESSAGE)
+                channel = entry.get_text_property(DB_FIELD_CHANNEL)
+                reason = entry.get_text_property(DB_FIELD_REASON)
                 success = await self.send_reminder_message(guild, message, channel, user, reason=reason)
                 if success:
                     # remove from database
-                    notion.remove_entry(my_entry)
+                    notion.remove_entry(entry)
 
 def setup(bot:Bot):
     bot.add_cog(RemindMe(bot))

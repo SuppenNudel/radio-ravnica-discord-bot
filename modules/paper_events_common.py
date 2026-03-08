@@ -3,7 +3,13 @@ from datetime import datetime
 from typing import Literal, Optional
 import discord
 from modules import gmaps, env, ics, notion
+from modules.paper_events_calendar import update_paper_events_calendar
 from enum import Enum
+
+# Import will be done at runtime to avoid circular dependency
+def _get_schedule_function():
+    from cogs.paper_events.paper_events_status_monitor import schedule_event_timers
+    return schedule_event_timers
 from modules import date_time_interpretation as dti
 import re
 import textwrap
@@ -190,13 +196,13 @@ async def edit_event_post(event:"PaperEvent", interaction_or_message:discord.Int
         embeds.append(gmaps_embed)
     files = event.get_files()
     if type(interaction_or_message) == discord.Interaction:
-        await interaction_or_message.response.edit_message(
+        await interaction_or_message.edit_original_response(
             content=event.construct_content(preview=True),
             embeds=embeds,
             files=files,
             attachments=[],
             view=view
-            )
+        )
     elif type(interaction_or_message) == discord.Message:
         thread = interaction_or_message.channel
         if isinstance(thread, discord.Thread):
@@ -207,7 +213,7 @@ async def edit_event_post(event:"PaperEvent", interaction_or_message:discord.Int
             files=files,
             attachments=[],
             view=view
-            )
+        )
     else:
         log.error("interaction is neither Interaction nor Message")
 
@@ -236,12 +242,13 @@ class EditFieldModal(discord.ui.Modal):
 
     async def callback(self, interaction: discord.Interaction):
         try:
+            await interaction.response.defer()
             new_value = self.input.value
             self.field.value = new_value
 
             await edit_event_post(self.event, interaction, EditTourneyView(self.event))
         except Exception as e:
-            await interaction.respond(e, ephemeral=True)
+            await interaction.followup.send(str(e), ephemeral=True)
 
 def make_callback(event, field:InputField):
     async def edit_field_callback(interaction:discord.Interaction):
@@ -293,6 +300,14 @@ class SubmitButton(discord.ui.Button):
                 message:discord.Message = await self.event.thread.fetch_message(self.event.thread.id)
                 notion_result = self.event.save_in_notion()
                 await edit_event_post(self.event, message, EditPostView(self.event))
+                await update_paper_events_calendar(interaction.client, self.event.guild)
+                
+                # Reschedule timers for the edited event
+                schedule_fn = _get_schedule_function()
+                start = self.event.fields[FieldName.START].value
+                end = self.event.fields[FieldName.END].value
+                await schedule_fn(interaction.client, self.event.guild, self.event.thread.id, start, end)
+                
                 await response_message.edit(content=f"Post und Notioneintrag wurden bearbeitet: \n{message.jump_url}\n{notion_result['public_url']}")
             else:
                 await orig_view.send_forum_post(interaction)
@@ -341,6 +356,13 @@ class EditTourneyView(discord.ui.View):
         
         thread = await self.event.create_and_send_thread(forum_channel)
         notion_result = self.event.save_in_notion()
+        await update_paper_events_calendar(interaction.client, self.event.guild)
+        
+        # Schedule timers for the new event
+        schedule_fn = _get_schedule_function()
+        start = self.event.fields[FieldName.START].value
+        end = self.event.fields[FieldName.END].value
+        await schedule_fn(interaction.client, self.event.guild, thread.id, start, end)
 
         await interaction.followup.send(f"Forum Post erstellt: {thread.jump_url}\n[Notion Eintrag]({notion_result['public_url']}) erstellt")
     
@@ -376,8 +398,8 @@ class PaperEvent():
         field_list = [
             InputField(FieldName.TITLE, FIELD_TYPE_TEXT, icon="📢", description=f"Wenn nicht angegeben: {FieldName.FORMATS.value} + {FieldName.TYPE.value}"),
             InputField(FieldName.DESCRIPTION, FIELD_TYPE_TEXT_LONG, icon="📜", description="Freitext"),
-            InputField(FieldName.START, FIELD_TYPE_TIME, mandatory=True, icon="⏰", description="Wann das Event/Turnier los geht"),
-            InputField(FieldName.END, FIELD_TYPE_TIME, icon="⏳", description="Wann das Event/Turnier zu Ende ist"),
+            InputField(FieldName.START, FIELD_TYPE_TIME, mandatory=True, icon="⏰", description="z.B. morgen um 17 Uhr, am 24.12.2025 um 12:00 Uhr, in 2 Stunden"),
+            InputField(FieldName.END, FIELD_TYPE_TIME, icon="⏳", description="z.B. morgen um 22 Uhr, am 24.12.2025 um 18:00 Uhr, in 5 Stunden"),
             InputField(FieldName.LOCATION, FIELD_TYPE_LOCATION, mandatory=True, icon="📍", description="Wo das Event/Turnier stattfindet"),
             InputField(FieldName.FEE, FIELD_TYPE_NUMBER, icon="💸"),
             InputField(FieldName.FORMATS, FieldType(parser=parse_list, max_items="max"), icon="🎮", description=f"Kommasepariert, welche(s) Format(e) gespielt wird/werden", mandatory=True, notion_column="Format(e)"),
@@ -394,11 +416,15 @@ class PaperEvent():
         self.fields[FieldName.END].value = entry.get_date_property("Start (und Ende)")['end']
         # location = gmaps.Location()
         location_name = entry.get_text_property("Name des Ladens")
-        # street_and_number = entry.get_text_property("Straße + Hausnummer")
+        street_and_number = entry.get_text_property("Straße + Hausnummer")
         # location.street = entry.get_text_property("Straße + Hausnummer")
         location_city = entry.get_text_property("Stadt")
         # location.state = entry.get_text_property("(Bundes)land")
-        self.fields[FieldName.LOCATION].value = f"{location_name} {location_city}"
+        try:
+            self.fields[FieldName.LOCATION].value = f"{location_name} {street_and_number} {location_city}"
+        except Exception as e:
+            log.error(f"Error while getting location info for {self.fields[FieldName.TITLE].value}")
+            log.error(str(e))
         self.fields[FieldName.FEE].value = entry.get_number_property("Gebühr")
         formats = entry.get_multi_select_property("Format(e)")
         self.fields[FieldName.FORMATS].value = formats
@@ -407,6 +433,11 @@ class PaperEvent():
         self.fields[FieldName.IMAGE].value = entry.get_file_property("Cover Bild")
 
     def save_in_notion(self):
+        def _long_name(component) -> str:
+            if isinstance(component, dict):
+                return component.get("long_name", "")
+            return ""
+
         payload = notion.NotionPayloadBuilder()
         image:str|None = self.fields[FieldName.IMAGE].value
         if image:
@@ -429,9 +460,19 @@ class PaperEvent():
         if self.fields[FieldName.FEE].value:
             payload.add_number("Gebühr", self.fields[FieldName.FEE].value)
         location:gmaps.Location = self.fields[FieldName.LOCATION].value
+        street_name = _long_name(location.street)
+        street_number = _long_name(location.street_number)
+        street_and_number = " ".join(part for part in [street_name, street_number] if part)
+        if not street_and_number:
+            street_and_number = location.formatted_address or ""
+
+        payload.add_text("Straße + Hausnummer", street_and_number)
         payload.add_text("Name des Ladens", location.name or "")
-        payload.add_text("Stadt", location.city['long_name'])
-        payload.add_relation("(Bundes)land", location.get_area_page_id())
+        payload.add_text("Stadt", _long_name(location.city))
+        try:
+            payload.add_relation("(Bundes)land", location.get_area_page_id())
+        except Exception as e:
+            log.warning(f"Could not resolve area relation for location '{location}': {e}")
         if self.fields[FieldName.URL].value:
             payload.add_url("URL", self.fields[FieldName.URL].value)
         payload.add_text("Server ID", str(self.guild.id))
@@ -472,7 +513,9 @@ class PaperEvent():
         title = self.build_title()
         location:gmaps.Location|None = self.fields[FieldName.LOCATION].value
         if location:
-            location_str = f"{location.name} in {location.city['long_name']}"
+            city_name = location.city.get("long_name", "") if isinstance(location.city, dict) else ""
+            location_name = location.name or location.formatted_address or "Unbekannter Ort"
+            location_str = f"{location_name} in {city_name}" if city_name else location_name
         else:
             location_str = f'<{FieldName.LOCATION.value}>'
 

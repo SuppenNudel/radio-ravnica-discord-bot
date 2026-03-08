@@ -6,6 +6,9 @@ from modules import notion, env, gmaps
 import modules.paper_events_common as pe_common
 import traceback
 from datetime import datetime
+import logging
+
+link_log = logging.getLogger("link_logger")
 
 EVENT_DATABASE_ID = env.EVENT_DATABASE_ID
 DEBUG = env.DEBUG
@@ -113,10 +116,9 @@ class PaperEventSubmit(Cog):
         upcoming_events = notion.get_all_entries(EVENT_DATABASE_ID, filter=filter)
         
         for event in upcoming_events:
-            event_entry = notion.Entry(event)
-            server_id = int(event_entry.get_text_property("Server ID"))
-            author_id = int(event_entry.get_text_property("Author ID"))
-            thread_id = int(event_entry.get_text_property("Thread ID"))
+            server_id = int(event.get_text_property("Server ID"))
+            author_id = int(event.get_text_property("Author ID"))
+            thread_id = int(event.get_text_property("Thread ID"))
             try:
                 guild = await discord.utils.get_or_fetch(self.bot, "guild", server_id)
                 author = await discord.utils.get_or_fetch(guild, "member", author_id)
@@ -124,24 +126,36 @@ class PaperEventSubmit(Cog):
                 thread:discord.Thread = await discord.utils.get_or_fetch(guild, "channel", thread_id)
                 paper_event.thread = thread
 
-                paper_event.fill_fields_from_notion_entry(event_entry)
+                paper_event.fill_fields_from_notion_entry(event)
 
                 # thread does not have get_message method, so we need to fetch the message
                 message:discord.Message = await thread.fetch_message(thread_id)
                 view = pe_common.EditPostView(paper_event)
+                
+                # Unarchive thread temporarily if needed to edit the message
+                was_archived = thread.archived
+                if was_archived:
+                    await thread.edit(archived=False)
+                    link_log.debug(f"Temporarily unarchived thread {thread_id} to edit message")
+                
                 await message.edit(view=view)
 
             except discord.NotFound as e:
-                log.error(f"Didn't find guild or author {e}")
-            except Exception as e:
-                log.error(f"Error when trying to parse {event}: {e}")
+                link_log.error(f"Gilde/Server oder Author/Servermitglied für https://discord.com/channels/{server_id}/{thread_id} wurde konnte nicht gefunden werden: {server_id}, Author <@{author_id}>")
+            except discord.errors.HTTPException as e:
+                if e.code == 50083:  # Thread is archived
+                    link_log.warning(f"Thread {thread_id} is archived and could not be unarchived: {e}")
+                else:
+                    link_log.error(f"HTTP error when editing message in thread {thread_id}: {e}")
+            # except Exception as e:
+            #     log.error(f"Error when trying to parse {event}: {e}")
         log.debug(self.__class__.__name__ + " is ready")
 
     # Weitere Checks https://gist.github.com/Painezor/eb2519022cd2c907b56624105f94b190
     @slash_command(
+        guild_ids=[env.GUILD_ID],
         description="Reiche ein Paper Turnier/Event ein",
         integration_type={IntegrationType.user_install},
-        contexts={InteractionContextType.bot_dm} #, InteractionContextType.private_channel
     )
     async def poste_turnier(self, ctx:ApplicationContext):
         try:
@@ -159,8 +173,12 @@ class PaperEventSubmit(Cog):
 
     @Cog.listener()
     async def on_application_command_error(self, ctx:ApplicationContext, error):
-        log.error(error)
-        await ctx.respond(f"Es ist ein Fehler aufgetreten: ```{error}```", ephemeral=True)
+        log.exception("Command error occurred", exc_info=error)
+        try:
+            await ctx.respond(f"Es ist ein Fehler aufgetreten: ```{error}```", ephemeral=True)
+        except discord.errors.NotFound:
+            # Interaction expired, cannot respond
+            log.error("Could not respond to error - interaction expired")
         raise error
 
 

@@ -1,4 +1,4 @@
-from discord.ext import commands
+from discord.ext import commands, tasks
 from discord.commands import option, slash_command
 from ezcord import log, Cog
 from discord import Bot
@@ -8,6 +8,12 @@ from datetime import datetime
 import os
 import traceback
 from enum import Enum
+from modules import env
+import random
+import logging
+import re
+
+link_log = logging.getLogger("link_logger")
 
 EMOJI_THUMBS_UP = "👍"
 EMOJI_NOTEPAD = "🗒️"
@@ -25,7 +31,7 @@ def create_aua_payload(message_text, author:discord.User, date:datetime, url, st
         notion.NotionPayloadBuilder()
         .add_title("Text", message_text)
         .add_text("Author", author.display_name)
-        .add_number("Author ID", author.id)
+        .add_text("Author ID", str(author.id))
         .add_date("Date", date)
         .add_url("Discord Link", url)
     )
@@ -53,7 +59,7 @@ async def analyse_reactions(reactions:list[discord.Reaction], aua_managers):
 class AskUsAnything(Cog):
     def __init__(self, bot:Bot):
         self.bot = bot
-        self.db_id_aua = os.getenv("DATABASE_ID_AUA")
+        self.db_id_aua = env.AUA_DATABASE_ID
         channel_aua = os.getenv("CHANNEL_AUA")
         if channel_aua:
             self.channel_id_aua = int(channel_aua)
@@ -68,51 +74,49 @@ class AskUsAnything(Cog):
 
     @Cog.listener()
     async def on_ready(self):
+        if not self.check_to_post_threads.is_running():
+            self.check_to_post_threads.start()
         log.debug(self.__class__.__name__ + " is ready")
 
     async def write_or_update_notion(self, message_text, author, date:datetime, url, status:AuaStatus|None=None, initial_response:discord.Interaction|None=None, current_message=None):
         if status == None:
             status = AuaStatus.NOT_STARTED
 
+        payload = create_aua_payload(
+            message_text=message_text,
+            author=author,
+            date=date,
+            url=url,
+            status=status
+        )
         filter = notion.NotionFilterBuilder().add_url_filter("Discord Link", notion.URLCondition.EQUALS, url).build()
-        # check entry
-        aua_entries = notion.get_all_entries(self.db_id_aua, filter=filter)
+        log.debug(f"Adding or Updating Notion entry for {url}")
+        notion.add_or_update_entry(self.db_id_aua, payload, filter)
 
-        if aua_entries:
-            log.debug("Entry exits already")
-            if initial_response:
-                await initial_response.edit_original_response(content=f"{current_message}: Eintrag existiert")
+    @slash_command(guild_ids=[env.GUILD_ID], description="Hole eine zufällige 'Gesehen' Frage aus der Datenbank")
+    @discord.default_permissions(manage_guild=True)
+    @commands.has_role("Moderator")
+    async def random_aua_question(self, ctx:discord.commands.ApplicationContext):
+        await ctx.defer(ephemeral=True)
+        filter = (
+            notion.NotionFilterBuilder()
+            .add_status_filter("Status", notion.StatusCondition.EQUALS, AuaStatus.SEEN.value)
+            .add_url_filter("Discord Link", notion.URLCondition.CONTAINS, "https://discord.com/channels/783441128119730236")
+            .build()
+        )
+        entries = notion.get_all_entries(self.db_id_aua, filter=filter)
+        if not entries:
+            await ctx.respond("Keine passende Frage gefunden.", ephemeral=True)
+            return
+        entry = random.choice(entries)
 
-            entry = aua_entries[0]
-            my_entry = notion.Entry(entry)
+        question = entry.get_text_property("Text")
+        author = entry.get_text_property("Author")
+        author_id = entry.get_text_property("Author ID")
+        url = entry.get_url_property("Discord Link")
+        await ctx.respond(f"**Frage:** {question}\n**Von:** <@{author_id}>({author})\n{url}", ephemeral=True)
 
-            existing_status = my_entry.get_status_property('Status', AuaStatus)
-            if existing_status == status:
-                log.debug("No need to update, status already same")
-                if initial_response:
-                    await initial_response.edit_original_response(content=f"{current_message}: No need to update, status already same")
-                return
-            # write if not exists
-            entry_id = entry['id']
-            update_properties = notion.NotionPayloadBuilder().add_status("Status", status).build()
-            # update status
-            update_response = notion.update_entry(entry_id, update_properties=update_properties)
-            log.debug(f"Update response: {update_response['url']}")
-            if initial_response:
-                await initial_response.edit_original_response(content=f"{current_message}: Updated Entry to {status}")
-        else:
-            log.debug("Creating database entry...")
-            if initial_response:
-                await initial_response.edit_original_response(content=f"{current_message}: Creating database entry...")
-            payload = create_aua_payload(message_text=message_text, author=author, date=date, url=url, status=status)
-
-            response = notion.add_to_database(self.db_id_aua, payload)
-            log.debug(f"Created database entry on message for '{message_text}': {response['url']}")
-            if initial_response:
-                await initial_response.edit_original_response(content=f"{current_message}: Created database entry with status {status}")
-
-    # TODO make this also available as message command
-    @slash_command()
+    @slash_command(guild_ids=[env.GUILD_ID])
     @discord.default_permissions(manage_guild=True)
     @commands.has_role("Moderator")
     @option(name="limit", input_type=int)
@@ -130,13 +134,13 @@ class AskUsAnything(Cog):
         initial_response = await ctx.respond(f"Werde die letzten {limit} Nachrichten analysieren...", ephemeral=True)
         if not initial_response:
             raise Exception("Unable to send response")
-                    
-        if not type(initial_response) == discord.Interaction:
+
+        if not isinstance(initial_response, discord.Interaction):
             raise Exception("initial_response is not discord.Interaction")
 
         channel = ctx.channel
 
-        if not type(channel) == discord.TextChannel:
+        if not isinstance(channel, discord.TextChannel):
             raise Exception(f"Not a text channel but {type(channel)}")
 
         start_message = None
@@ -167,18 +171,67 @@ class AskUsAnything(Cog):
                         current_message=current_message
                     )
             except Exception as e:
-                log.error(traceback.format_exc())
-                try:
-                    log.error(f"An error occured while trying to Analyse message: {str(e)}")
-                except:
-                    log.error(f"An error occured while trying to Analyse message: {type(e)}")
+                log.error(f"An error occured while trying to Analyse message: {str(e)}\n{traceback.format_exc()}")
 
         log.debug(f"Found {counter} messages")
         if initial_response:
-            if type(initial_response) == discord.Interaction:
+            if isinstance(initial_response, discord.Interaction):
                 await initial_response.edit_original_response(content=f"{counter} Nachrichten wurden analysiert")
             else:
                 log.debug(f"Can't edit_original_response of {initial_response}")
+
+    @Cog.listener()
+    async def on_raw_message_edit(self, payload: discord.RawMessageUpdateEvent):
+        channel = self.bot.get_channel(payload.channel_id)
+        if not channel or channel.id != self.channel_id_aua or not isinstance(channel, discord.TextChannel):
+            return
+
+        try:
+            message = await channel.fetch_message(payload.message_id)
+        except Exception as e:
+            log.error(f"Could not fetch edited message: {e}")
+            return
+
+        if message.author.bot:
+            return
+        if message.thread:
+            # If the message is already in a thread, do not update Notion
+            log.debug(f"Message {message.jump_url} is in a thread, skipping Notion update.")
+            return
+
+        log.debug(f"Message edited in {channel.mention} ({channel.name})")
+        message_text = message.clean_content
+        author = message.author
+        date = message.created_at
+        url = message.jump_url
+
+        await self.write_or_update_notion(
+            message_text=message_text,
+            author=author,
+            date=date,
+            url=url
+        )
+
+    @Cog.listener()
+    async def on_raw_message_delete(self, payload: discord.RawMessageDeleteEvent):
+        channel = self.bot.get_channel(payload.channel_id)
+        if not channel or channel.id != self.channel_id_aua or not isinstance(channel, discord.TextChannel):
+            return
+
+        # We can't get author or content from deleted message, but we can use the message id and channel
+        url = f"https://discord.com/channels/{payload.guild_id}/{payload.channel_id}/{payload.message_id}"
+
+        log.debug(f"Message deleted in {channel.mention} ({channel.name})")
+
+        # Remove entry from Notion if exists
+        filter = notion.NotionFilterBuilder().add_url_filter("Discord Link", notion.URLCondition.EQUALS, url).build()
+        aua_entries = notion.get_all_entries(self.db_id_aua, filter=filter)
+        if aua_entries and len(aua_entries) == 1:
+            entry = aua_entries[0]
+            notion.remove_entry(entry)
+            log.info(f"Deleted Notion entry for message: {url}")
+        else:
+            log.debug(f"Could not find Notion entry for deleted message: {url}")
 
     # when user posts message in #ask-us-anything
     # write to notion
@@ -189,8 +242,8 @@ class AskUsAnything(Cog):
         
         if message.channel.id != self.channel_id_aua:
             return
-        
-        if not type(message.channel) == discord.TextChannel:
+
+        if not isinstance(message.channel, discord.TextChannel):
             return
         
         if message.channel:
@@ -237,7 +290,7 @@ class AskUsAnything(Cog):
             raise Exception("Guild not found")
         
         channel = guild.get_channel(payload.channel_id)
-        if not type(channel) == discord.TextChannel:
+        if not isinstance(channel, discord.TextChannel):
             raise Exception("Channel is not a Text Channel")
         
         # Get the user who added the reaction
@@ -271,6 +324,87 @@ class AskUsAnything(Cog):
             date=date,
             url=url,
             status=status)
+        
+    @tasks.loop(minutes=60)
+    async def check_to_post_threads(self):
+        filter = (
+            notion.NotionFilterBuilder()
+            .add_text_filter("Discord Link", notion.TextCondition.CONTAINS, f"/{self.channel_id_aua}/")
+            .add_status_filter("Status", notion.StatusCondition.EQUALS, AuaStatus.RECORDED.value)
+            .add_text_filter("Thread ID", notion.TextCondition.IS_EMPTY, True)
+            .add_checkbox_filter("Timestamp überprüft", notion.CheckboxCondition.EQUALS, True)
+            .build()
+        )
+        entries = notion.get_all_entries(self.db_id_aua, filter=filter)
+        for entry in entries:
+            discord_link = entry.get_url_property("Discord Link")
+            log.debug(f"{entry} ist bereit als Thread gepostet zu werden. Werde Thread erstellen...")
+            
+            # Extract message ID from the Discord link
+            try:
+                parts = discord_link.strip().split("/")
+                message_id = int(parts[-1])
+                channel_id = int(parts[-2])
+            except Exception as e:
+                log.error(f"Could not parse Discord link: {discord_link} ({e})")
+                continue
+
+            channel = self.bot.get_channel(channel_id)
+            if not isinstance(channel, discord.TextChannel):
+                log.error(f"Channel {channel_id} not found or not a TextChannel")
+                continue
+
+            try:
+                message = await channel.fetch_message(message_id)
+            except Exception as e:
+                log.error(f"Could not fetch message {message_id} in channel {channel_id}: {e}")
+                continue
+
+            # Create a thread from the message if not already in a thread
+            if not message.thread:
+                video_page_id = entry.get_property("Video")[0]['id']
+                video_page:notion.Entry = notion.get_page_by_id(video_page_id)
+                if not video_page:
+                    log.error(f"Could not find Notion page with id: {video_page_id}")
+                    continue
+                question_text = entry.get_text_property("Text").replace("\n", " ")
+                upload_date = video_page.get_date_property("Upload Date")['start']
+                comment_text_raw = video_page.get_formula_property("Comment Text")
+                # Split at timestamps like 00:00, 12:34, etc.
+                comment_text = re.split(r"\d{1,2}:\d{2}", comment_text_raw)
+                # Remove empty strings and strip whitespace
+                comment_text = [c.strip() for c in comment_text if c.strip()]
+
+                # Find the index where question_text is contained in comment_text
+                index = next((i for i, comment in enumerate(comment_text) if question_text in comment), -1)
+                if index < 0:
+                    video_page_public_url = video_page.public_url
+                    link_log.error(f"Could not find question text {discord_link} in comments for {video_page_public_url}\n>>> {comment_text_raw}")
+                    continue
+                question_no = index + 1 if index != -1 else "unbekannt"
+
+                thread_name = f"{upload_date.strftime('%d.%m.%Y')} - Frage {question_no}"
+                try:
+                    thread = await message.create_thread(name=thread_name, auto_archive_duration=1440)
+                    # Update Notion entry with the Thread ID
+                    thread_id = str(thread.id)
+                    update_payload = (
+                        notion.NotionPayloadBuilder()
+                        .add_text("Thread ID", thread_id)
+                        .build()
+                    )
+                    # Post the content of property "Youtube" as a message in the thread
+                    filter = notion.NotionFilterBuilder().add_url_filter("Discord Link", notion.URLCondition.EQUALS, discord_link).build()
+                    notion.add_or_update_entry(self.db_id_aua, update_payload, filter)
+
+                    youtube_timestamped_url = entry.get_formula_property("Youtube")
+                    if youtube_timestamped_url:
+                        await thread.send(youtube_timestamped_url)
+                    log.debug(f"Thread '{thread_name}' created for message {message.jump_url}")
+                except Exception as e:
+                    log.error(f"An error occurred during thread creation for message {message.jump_url}")
+            else:
+                log.debug(f"Thread already exists for message {message.jump_url}")
 
 def setup(bot:Bot):
     bot.add_cog(AskUsAnything(bot))

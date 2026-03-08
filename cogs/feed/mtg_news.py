@@ -1,0 +1,94 @@
+from ezcord import log, Cog
+from modules.util import check_website
+from discord import Bot
+import discord.ext.tasks
+import logging
+from modules import env
+import re
+
+link_log = logging.getLogger("link_logger")
+
+URL_WIZARDS = "https://magic.wizards.com"
+
+NEWS_URLS = {
+    "de": {
+        "url": f"{URL_WIZARDS}/de/news",
+        "channel_id": env.CHANNEL_NEWS_DE,
+        "role_ping": "<@&1302367507017105439>"
+    },
+    "en": {
+        "url": f"{URL_WIZARDS}/en/news",
+        "channel_id": env.CHANNEL_NEWS_EN,
+        "role_ping": "<@&1302367633324376238>"
+    }
+}
+
+SELECTORS = {
+    "title": "h3.css-mbeyN",
+    "authors": ".css-IERJH",  # Special handling in code above
+    "type": ".css-e7rj5",
+    "type_url": (".css-e7rj5", "href"),
+    "url": (".css-0c84N > a", "href"),
+    "description": ".css-RvQUy > p",
+    # "img": ("picture img", "src") # not needed, because the url will already generate a previrew in discord
+}
+
+def html_to_discord(text):
+    # Replace <i>, <em> with *italic*
+    text = re.sub(r'</?(i|em)>', '*', text)
+    # Replace <b>, <strong> with **bold**
+    text = re.sub(r'</?(b|strong)>', '**', text)
+    # Replace <u> with __underline__
+    text = re.sub(r'</?u>', '__', text)
+    # Remove all other HTML tags
+    text = re.sub(r'<[^>]+>', '', text)
+    return text
+
+class MtgNews(Cog):
+    def __init__(self, bot:Bot):
+        self.bot = bot
+        self.posted_articles = []
+
+    @Cog.listener()
+    async def on_ready(self):
+        if not self.check_mtg_news.is_running():
+            self.check_mtg_news.start()
+            
+        log.debug(self.__class__.__name__ + " is ready")
+
+    @discord.ext.tasks.loop(minutes=10)
+    async def check_mtg_news(self):
+        for lang, obj in NEWS_URLS.items():
+            latest_articles = check_website.request_website(obj["url"], "article", SELECTORS)
+            channel:discord.TextChannel = await discord.utils.get_or_fetch(self.bot, "channel", obj["channel_id"])
+            if latest_articles is None:
+                log.error("Failed to fetch latest articles from Magic News DE")
+                return
+
+            # On first run, just save all articles and skip posting
+            if self.check_mtg_news.current_loop == 0:
+                self.posted_articles.extend(
+                    f'{URL_WIZARDS}{article["url"]}' for article in latest_articles
+                )
+                continue
+
+            for article in latest_articles:
+                article_url = f'{URL_WIZARDS}{article["url"]}'
+                if article_url in self.posted_articles:
+                    continue  # Already posted
+
+                authors = ', '.join(
+                    f'[{author["name"]}](<{URL_WIZARDS}{author["link"]}>)'
+                    for author in article['authors']
+                )
+
+                await channel.send(f"""
+# {article["title"]}
+{"von" if lang == "de" else "by"} {authors}
+{obj["role_ping"]}
+{article_url}
+{"Weitere" if lang == "de" else "More"} [{article["type"]} {"Artikel" if lang == "de" else "articles"}](<{article_url}>)""")
+                self.posted_articles.append(article_url)
+
+def setup(bot:Bot):
+    bot.add_cog(MtgNews(bot))

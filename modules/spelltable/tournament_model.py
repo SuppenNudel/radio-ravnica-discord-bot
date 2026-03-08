@@ -1,5 +1,3 @@
-
-
 from datetime import datetime, timedelta
 from ezcord import log
 import json
@@ -13,6 +11,9 @@ from modules.serializable import Serializable
 from modules import env
 import os
 import pytz
+from pathlib import Path
+import asyncio
+import aiohttp
 
 timezone = pytz.timezone("Europe/Berlin")
 
@@ -37,7 +38,7 @@ async def save_tournaments():
         await tournament.save_tournament()
 
 
-async def load_tournaments(guild:discord.Guild, bot) -> dict[str, "SpelltableTournament"]:
+async def load_tournaments(bot) -> dict[str, "SpelltableTournament"]:
     tournaments = {}
 
     if not os.path.exists(TOURNAMENTS_FOLDER):
@@ -50,11 +51,12 @@ async def load_tournaments(guild:discord.Guild, bot) -> dict[str, "SpelltableTou
                 json_data = file.read()
                 try:
                     raw_dict = json.loads(json_data)
-                    tournament = await SpelltableTournament.deserialize(raw_dict, guild, bot)
+                    tournament = await SpelltableTournament.deserialize(raw_dict, bot)
                     tournament_id = filename[:-5].replace("_", "/")  # Convert back to original ID format
                     tournaments[tournament_id] = tournament
                 except Exception as e:
-                    print(f"Failed to load {filename}: {e}")
+                    log.error(f"Failed to load {filename}")
+                    raise e
 
     return tournaments
         
@@ -122,10 +124,19 @@ async def generate_tournament_message(tournaments: list["SpelltableTournament"])
 
     return msg
 
-async def update_tournament_message(guild:discord.Guild):
+async def update_tournament_message(bot:discord.Bot, trigger_guild:discord.Guild|None = None):
+    if trigger_guild and trigger_guild.id != env.GUILD_ID:
+        return  # Only update for the main guild
+    guild:discord.Guild = bot.get_guild(env.GUILD_ID)
     log.info(f"Updating tournament message")
-    tourney_list_message = await generate_tournament_message(list(active_tournaments.values()))
-    calendar_img = generate_calendar(list(active_tournaments.values()))
+    rr_tournaments:list["SpelltableTournament"] = [t for t in active_tournaments.values() if t.guild.id == guild.id]
+    # Remove concluded or cancelled tournaments from rr_tournaments
+    rr_tournaments = [
+        tourney for tourney in rr_tournaments
+        if not (tourney.swiss_tournament and (tourney.swiss_tournament.winner or tourney.cancelled))
+    ]
+    tourney_list_message = await generate_tournament_message(rr_tournaments)
+    calendar_img = generate_calendar(rr_tournaments)
     calendar_file = None
     if calendar_img:
         calendar_file = discord.File(calendar_img, filename=calendar_img)
@@ -149,7 +160,12 @@ async def update_tournament_message(guild:discord.Guild):
             calendar_message = await guild.get_channel(env.SPELLTABLE_CALENDAR_CHANNEL_ID).send(tourney_list_message)
         env.SPELLTABLE_CALENDAR_MESSAGE_ID = calendar_message.id
         env.save_to_env("SPELLTABLE_CALENDAR_MESSAGE_ID", calendar_message.id)
-    link_log.info(f"Tournament message updated: {calendar_message.jump_url}")
+    link_log.info(f"Tournament Overview Message updated: {calendar_message.jump_url}")
+
+    tournament_count = len(rr_tournaments)
+    activity_name = f"Veranstaltet {tournament_count} Turnier{'e' if tournament_count != 1 else ''}"
+    activity = discord.CustomActivity(name=activity_name)
+    await bot.change_presence(activity=activity)
 
 async def use_custom_try(purpose:str, func, tournament:"SpelltableTournament"):
     try:
@@ -206,7 +222,10 @@ class SpelltableTournament(Serializable):
                     return user
                 except discord.errors.NotFound: 
                     return None
-            raise Exception(f"User with ID {user_id} not found in guild {self.guild.id}.")
+            link_log.error(f"User with ID {user_id} (<@{user_id}>) not found in guild {self.guild.id} for tournament {self.title}.")
+            user = await discord.utils.get_or_fetch(self.bot, "user", user_id)
+            self.members[user_id] = user
+            return user
 
     @property
     async def organizer(self) -> discord.Member|None:
@@ -227,11 +246,21 @@ class SpelltableTournament(Serializable):
         if not self._message:
             if not self.channel_id:
                 return None
-            thread:discord.Thread = await discord.utils.get_or_fetch(self.guild, "channel", self.channel_id)
             try:
-                # thread does not have get_message method, so we need to fetch the message
-                self._message = await thread.fetch_message(self.message_id)
-            except Exception as e:
+                channel = await self.bot.fetch_channel(self.channel_id)
+                # thread:discord.Thread = await discord.utils.get_or_fetch(self.guild, "channel", self.channel_id)
+                if isinstance(channel, discord.Thread):
+                    thread = channel
+                else:
+                    raise TypeError(f"Expected Thread, got {type(channel)}")
+                try:
+                    # thread does not have get_message method, so we need to fetch the message
+                    self._message = await thread.fetch_message(self.message_id)
+                except Exception as e:
+                    log.error(e)
+                    return None
+            except discord.errors.Forbidden:
+                log.error(f"Bot does not have permission to access channel {self.channel_id} in guild {self.guild.id} ({self.guild.name}).")
                 return None
         return self._message
     
@@ -252,8 +281,9 @@ class SpelltableTournament(Serializable):
         return [user for user in self.users if self.users[user] == state]
 
     @classmethod
-    async def deserialize(cls, data, guild:discord.Guild, bot): #, organizer, message):
+    async def deserialize(cls, data, bot): #, organizer, message):
         organizer_id = int(data["organizer_id"])
+        guild = await bot.fetch_guild(data["guild_id"])
 
         tournament = cls(guild, data["name"], organizer_id, bot)
         tournament.description = data["description"]
@@ -275,7 +305,9 @@ class SpelltableTournament(Serializable):
         if "tournament" in data and data["tournament"]:
             swiss_tournament_data = data['tournament']
             tournament.swiss_tournament = swiss_mtg.SwissTournament.deserialize(swiss_tournament_data)
-        
+
+        tournament.cancelled = data.get("cancelled", False)
+
         return tournament
     
     async def serialize(self):
@@ -296,7 +328,7 @@ class SpelltableTournament(Serializable):
             "max_rounds": self.max_rounds,
             "tournament": self.swiss_tournament,
             "days_per_match": self.days_per_match,
-            "cancelled": self.cancelled if self.cancelled else False
+            "cancelled": self.cancelled if self.cancelled else False,
         }
     
     async def check_waitlist(self, participants):
@@ -325,7 +357,8 @@ class SpelltableTournament(Serializable):
                 self.users[userid] = state
 
         await self.check_waitlist(participants)
-
+        tournament_message = await self.message
+        link_log.info(f"Benutzer <@{userid}> hat den Status auf {state.name} für das Turnier {tournament_message.jump_url} gesetzt")
         await self.save_tournament()
         message = await self.message
         if message:
@@ -378,7 +411,7 @@ class SpelltableTournament(Serializable):
 
         embed.add_field(name="\u200b", value="\u200b", inline=False)
 
-        await self.guild.chunk()
+        # await self.guild.chunk()
 
         participants = self.get_users_by_state(ParticipationState.PARTICIPATE)
         participant_members:list[discord.User] = []
@@ -406,20 +439,12 @@ class SpelltableTournament(Serializable):
             tourney_message = await self.message
             return await tourney_message.channel.fetch_message(message_id)
         return None
-
-    async def update_pairings(self, round:swiss_mtg.Round):
-        pairings_message:discord.Message = await self.get_message(round.message_id_pairings)
-        link_log.info(f"updating pairings {pairings_message.jump_url}")
-        pairings_image = await self.pairings_to_image(round)
-        pairings_file = discord.File(pairings_image, filename=pairings_image)
-        if pairings_message:
-            await pairings_message.edit(file=pairings_file, attachments=[], content=pairings_message.content or "Kein Inhalt verfügbar.")
-        else:
-            raise Exception("Pairings message not found.")
-
-        await self.save_tournament()
     
     async def get_pairings(self, round=None) -> str:
+        """
+        Returns the pairings for the given round as a formatted string.
+        If no round is provided, it uses the current round of the Swiss tournament.
+        """
         if round is None:
             round = self.swiss_tournament.current_round()
 
@@ -464,8 +489,8 @@ class SpelltableTournament(Serializable):
     async def save_tournament(self: "SpelltableTournament"):
         # Ensure the directory exists
         os.makedirs(TOURNAMENTS_FOLDER, exist_ok=True)
-        concluded_folder = os.path.join(TOURNAMENTS_FOLDER, "concluded")
-        os.makedirs(concluded_folder, exist_ok=True)
+        # concluded_folder = os.path.join(TOURNAMENTS_FOLDER, "concluded")
+        # os.makedirs(concluded_folder, exist_ok=True)
 
         # Convert tournament ID (slashes to underscores) for filename
         tournament_id = await self.get_id()
@@ -478,42 +503,152 @@ class SpelltableTournament(Serializable):
                 json.dump(serialized, file, cls=CustomJSONEncoder, indent=4)
             
             # If the tournament is concluded, move the file to the concluded folder
-            if (self.swiss_tournament and self.swiss_tournament.winner) or self.cancelled:
-                concluded_path = os.path.join(concluded_folder, filename)
-                os.rename(file_path, concluded_path)
-                del active_tournaments[tournament_id]
-                print(f"Tournament {tournament_id} has been concluded and moved to {concluded_path}")
+            # if (self.swiss_tournament and self.swiss_tournament.winner) or self.cancelled:
+                # concluded_path = os.path.join(concluded_folder, filename)
+                # os.rename(file_path, concluded_path)
+                # del active_tournaments[tournament_id]
+                # print(f"Tournament {tournament_id} has been concluded and moved to {concluded_path}")
         except Exception as e:
             print(f"Error saving tournament {tournament_id}: {e}")
-        await update_tournament_message(self.guild)
+        await update_tournament_message(self.bot, trigger_guild=self.guild)
 
 
-    async def standings_to_image(self, round=None) -> str:
+    async def standings_to_image(self, round=None, include_metagame=False) -> str:
         if round is None:
             round = self.swiss_tournament.current_round()
         players = self.swiss_tournament.players
         swiss_mtg.sort_players_by_standings(players)
 
-        rows = [[
-            rank+1,
-            (player.name, player.dropped),
-            player.calculate_match_points(),
-            player.get_match_results(),
-            f"{player.calculate_opponent_match_win_percentage():.4%}",
-            f"{player.calculate_game_win_percentage():.4%}",
-            f"{player.calculate_opponent_game_win_percentage():.4%}",
-        ] for rank, player in enumerate(players)]
+        rows = []
+        for rank, player in enumerate(players):
+            member = await self.get_member(player.player_id)
+            player_display_name = member.display_name if member else f"User({player.player_id})"
+            rows.append([
+                rank+1,
+                (player_display_name, player.dropped),
+                player.calculate_match_points(),
+                player.get_match_results(),
+                f"{player.calculate_opponent_match_win_percentage():.4%}",
+                f"{player.calculate_game_win_percentage():.4%}",
+                f"{player.calculate_opponent_game_win_percentage():.4%}",
+            ])
 
         data = {
             "headers": ["Rang", "Name", "Punkte", "Matches", "OMW", "GW", "OGW"],
             "rows": rows
         }
+        if include_metagame:
+            for row, player in zip(data["rows"], players):
+                archetype = player.deck.archetype if player.deck and player.deck.archetype else "?"
+                row.append(archetype)
+            data["headers"].append("Deck")
+
         id = await self.get_id()
         filename = f'tmp/{id.replace("/", "_")}_standings_round_{round.round_number}.png'
         table_to_image.generate_image(data, filename, "assets/beleren.ttf")
 
         return filename
+
     
+    async def metagame_to_image(self) -> str:
+        swiss_mtg.sort_players_by_standings(self.swiss_tournament.players)
+        players:list[swiss_mtg.Player] = self.swiss_tournament.players
+        rows = []
+
+        for rank, player in enumerate(players):
+            member = await self.get_member(player.player_id)
+            player_display_name = member.display_name if member else f"User({player.player_id})"
+            archetype = player.deck.archetype if player.deck and player.deck.archetype else "?"
+            rows.append([
+                rank+1,
+                (player_display_name, player.dropped),
+                archetype
+            ])
+
+        data = {
+            "headers": ["Platz", "Spieler", "Archetyp"],
+            "rows": rows
+        }
+
+        id = await self.get_id()
+        filename = f'tmp/{id.replace("/", "_")}_metagame.png'
+        table_to_image.generate_image(data, filename, "assets/beleren.ttf")
+        return filename
+    
+
+    async def metagame_message_text(self) -> str:
+        metagame_message_text = "🏆Finales Ergebnis\nDecks:\n"
+        players:list[swiss_mtg.Player] = self.swiss_tournament.players
+        for rank, player in enumerate(players):
+            archetype = player.deck.archetype if player.deck and player.deck.archetype else "?"
+            link = player.deck.link if player.deck else None
+            player_user = await self.get_member(player.player_id)
+            url_text = f"[{archetype}]({link})" if link else archetype
+            metagame_message_text += f"{rank+1}. {player_user.mention} - {url_text}\n"
+
+        return metagame_message_text
+    
+    async def create_metagame_embed(self) -> discord.Embed:
+        """Create an embed with final standings and deck lists."""
+        embed = discord.Embed(
+            title="🏆 Finales Ergebnis",
+            color=discord.Color.from_rgb(37, 88, 79)
+        )
+        
+        players:list[swiss_mtg.Player] = self.swiss_tournament.players
+        deck_list = ""
+        
+        for rank, player in enumerate(players, 1):
+            archetype = player.deck.archetype if player.deck and player.deck.archetype else "?"
+            link = player.deck.link if player.deck else None
+            player_user = await self.get_member(player.player_id)
+            url_text = f"[{archetype}]({link})" if link else archetype
+            line = f"{rank}. {player_user.mention} - {url_text}\n"
+            
+            # Discord embed description limit is 4096 chars
+            if len(deck_list) + len(line) > 4000:
+                deck_list += "\n_(Weitere Platzierungen siehe Bild)_"
+                break
+            deck_list += line
+        
+        embed.description = deck_list
+        return embed
+    
+    async def update_metagame(self):
+        try:
+            metagame_standings_image = await self.standings_to_image(include_metagame=True)
+            attachment_name = Path(metagame_standings_image).name
+            metagame_file = discord.File(metagame_standings_image, filename=attachment_name)
+            message = await self.message
+            embed = await self.create_metagame_embed()
+            
+            standings_message = await self.get_message(self.swiss_tournament.current_round().message_id_standings)
+            if standings_message:
+                # Two-step update so stale image attachments are guaranteed to be removed.
+                # Retry logic for transient connection errors
+                max_retries = 3
+                for attempt in range(max_retries):
+                    try:
+                        await standings_message.edit(content="", embeds=[], attachments=[], suppress=False)
+                        await standings_message.edit(content="", embeds=[embed], attachments=[], file=metagame_file, suppress=False)
+                        return
+                    except (aiohttp.ClientOSError, aiohttp.ClientConnectionError, discord.errors.HTTPException) as e:
+                        if attempt < max_retries - 1:
+                            # Exponential backoff: 1s, 2s, 4s
+                            wait_time = 2 ** attempt
+                            logging.warning(f"Failed to update metagame (attempt {attempt + 1}/{max_retries}), retrying in {wait_time}s: {e}")
+                            await asyncio.sleep(wait_time)
+                        else:
+                            # Give up after max retries
+                            logging.error(f"Failed to update metagame after {max_retries} attempts: {e}")
+                            raise
+            else:
+                standings_message = await message.channel.send(embeds=[embed], file=metagame_file, suppress=False)
+                self.swiss_tournament.current_round().message_id_standings = standings_message.id
+                await self.save_tournament()
+        except Exception as e:
+            # Log the error but don't crash the bot during on_ready
+            logging.error(f"Error updating metagame: {e}", exc_info=True)
 
     async def pairings_to_image(self, round:swiss_mtg.Round|None=None) -> str:
         if round is None:
@@ -528,7 +663,9 @@ class SpelltableTournament(Serializable):
                 player = match.player1 or match.player2
                 if player:
                     p_mp = player.calculate_match_points(round.round_number-1)
-                    rows.append([(f"{player.name} ({p_mp})", player.dropped), "BYE", "2 - 0"])
+                    member = await self.get_member(player.player_id)
+                    player_display_name = member.display_name if member else f"User({player.player_id})"
+                    rows.append([(f"{player_display_name} ({p_mp})", player.dropped), "BYE", "2 - 0"])
                 continue
 
             # Normal match
@@ -543,11 +680,17 @@ class SpelltableTournament(Serializable):
             else:
                 score_p1 = score_p2 = "Ausstehend"
 
+            # Fetch display names
+            member_p1 = await self.get_member(p1.player_id)
+            member_p2 = await self.get_member(p2.player_id)
+            p1_display_name = member_p1.display_name if member_p1 else f"User({p1.player_id})"
+            p2_display_name = member_p2.display_name if member_p2 else f"User({p2.player_id})"
+
             # Add both player perspectives
             p1_mp = p1.calculate_match_points(round.round_number-1)
             p2_mp = p2.calculate_match_points(round.round_number-1)
-            rows.append([(f"{p1.name} ({p1_mp})", p1.dropped), (f"{p2.name} ({p2_mp})", p2.dropped), score_p1])
-            rows.append([(f"{p2.name} ({p2_mp})", p2.dropped), (f"{p1.name} ({p1_mp})", p1.dropped), score_p2])
+            rows.append([(f"{p1_display_name} ({p1_mp})", p1.dropped), (f"{p2_display_name} ({p2_mp})", p2.dropped), score_p1])
+            rows.append([(f"{p2_display_name} ({p2_mp})", p2.dropped), (f"{p1_display_name} ({p1_mp})", p1.dropped), score_p2])
 
         # Sort rows by player name (first element of the tuple in column 0)
         rows.sort(key=lambda row: row[0][0].lower())

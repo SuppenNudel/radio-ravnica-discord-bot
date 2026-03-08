@@ -18,12 +18,13 @@ class ArenaDailyDeals(Cog):
 
     @Cog.listener()
     async def on_ready(self):
-        guilds_str = "This Bot is installed on the following Servers:"
-        for guild in self.bot.guilds:
-            guilds_str += f"\n{repr(guild)}"
-            if guild.id != 783441128119730236: # RR Server
-                link_log.info(f"Owner: {guild.owner.mention}\nIcon: {guild.icon.url if guild.icon else 'No icon'}")
-        log.info(guilds_str)
+        # guilds_str = "This Bot is installed on the following Servers:"
+        # for guild in self.bot.guilds:
+        #     guilds_str += f"\n{repr(guild)}"
+        #     if guild.id != 783441128119730236: # RR Server
+        #         link_log.info(f"Owner: {guild.owner.mention}\nIcon: {guild.icon.url if guild.icon else 'No icon'}")
+        # log.info(guilds_str)
+        
         self.author_did = bluesky.get_target_did(BSKY_ARENA_DAILY_DEALS_HANDLE)
 
         if not self.check_bsky_posts.is_running():
@@ -36,7 +37,7 @@ class ArenaDailyDeals(Cog):
             latest_post = bluesky.check_for_new_post(self.author_did)
             return latest_post
         except Exception as e:
-            log.error(e)
+            log.error(f"An error occured checking for lastest posts: {e}")
 
     @discord.ext.tasks.loop(minutes=15)
     async def check_bsky_posts(self):
