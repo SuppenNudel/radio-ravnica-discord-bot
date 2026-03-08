@@ -1,4 +1,5 @@
 from ezcord import Cog, log
+from typing import Annotated
 from discord.ext.commands import slash_command
 from discord import ApplicationContext, Bot, Option
 import discord
@@ -9,8 +10,7 @@ from modules import env
 import logging
 
 from discord.ext import tasks
-from datetime import datetime, timedelta
-import asyncio
+from datetime import datetime, time
 
 from modules.spelltable.tournament_model import TOURNAMENTS_FOLDER, SpelltableTournament, load_tournaments, active_tournaments, update_tournament_message
 from modules.spelltable.common_views import SubmitDeckView, KickPlayerModal, ParticipationState, StartNextRoundView, next_round, update_hall_of_fame
@@ -54,24 +54,37 @@ class ParticipationView(discord.ui.View):
 
     @discord.ui.button(label="Vielleicht", style=discord.ButtonStyle.primary, emoji="❓")
     async def tentative_button(self, button: discord.ui.Button, interaction: discord.Interaction):
+        if not interaction.user:
+            await interaction.respond("Der Interaction User ist None. Das sollte nicht passieren.", ephemeral=True)
+            return
         await interaction.response.defer(ephemeral=True)
         await self.tournament.user_state(interaction.user.id, ParticipationState.TENTATIVE)
 
     @discord.ui.button(label="Absagen", style=discord.ButtonStyle.danger, emoji="❌")
     async def leave_button(self, button: discord.ui.Button, interaction: discord.Interaction):
+        if not interaction.user:
+            await interaction.respond("Der Interaction User ist None. Das sollte nicht passieren.", ephemeral=True)
+            return
         await interaction.response.defer(ephemeral=True)
         await self.tournament.user_state(interaction.user.id, ParticipationState.DECLINE)
 
     @discord.ui.button(label="Bearbeiten", style=discord.ButtonStyle.primary, emoji="✏️")
     async def edit_button(self, button: discord.ui.Button, interaction: discord.Interaction):
+        if not interaction.user:
+            await interaction.respond("Der Interaction User ist None. Das sollte nicht passieren.", ephemeral=True)
+            return
+        if not isinstance(interaction.user, discord.Member):
+            await interaction.respond("Du bist kein Mitglied auf diesem Server!", ephemeral=True)
+            return
         if interaction.user.id != self.tournament.organizer_id and not any(role.name == "Moderator" for role in interaction.user.roles):
             await interaction.respond("Du bist nicht der Turnier-Organisator!", ephemeral=True)
             return
         
         message = await self.tournament.message
         if message:
-            if type(message.channel) == discord.TextChannel:
-                raise Exception("EditTournamentView only works in threads")
+            if not isinstance(message.channel, discord.Thread):
+                await interaction.respond("Bearbeiten ist nur in Threads moeglich.", ephemeral=True)
+                return
             view = await EditTournamentView.create(self.tournament, message.channel)
             await interaction.respond(view=view, ephemeral=True)
         else:
@@ -79,6 +92,12 @@ class ParticipationView(discord.ui.View):
 
     @discord.ui.button(label="Spieler rauswerfen", style=discord.ButtonStyle.danger, emoji="🚷")
     async def kick_button(self, button:discord.ui.Button, interaction:discord.Interaction):
+        if not interaction.user:
+            await interaction.respond("Der Interaction User ist None. Das sollte nicht passieren.", ephemeral=True)
+            return
+        if not isinstance(interaction.user, discord.Member):
+            await interaction.respond("Du bist kein Mitglied auf diesem Server!", ephemeral=True)
+            return
         if interaction.user.id != self.tournament.organizer_id and not any(role.name == "Moderator" for role in interaction.user.roles):
             await interaction.respond("Du bist nicht der Turnier-Organisator!", ephemeral=True)
             return
@@ -86,6 +105,9 @@ class ParticipationView(discord.ui.View):
 
     @discord.ui.button(label="Starte Turnier", style=discord.ButtonStyle.primary, emoji="▶️")
     async def start_button(self, button: discord.ui.Button, interaction: discord.Interaction):
+        if not interaction.user:
+            await interaction.respond("Der Interaction User ist None. Das sollte nicht passieren.", ephemeral=True)
+            return
         if type(interaction.user) != discord.Member:
             await interaction.respond("Du bist kein Mitglied auf diesem Server!", ephemeral=True)
             return
@@ -114,6 +136,12 @@ class ParticipationView(discord.ui.View):
     
     @discord.ui.button(label="Turnier abbrechen", style=discord.ButtonStyle.danger, emoji="🛑")
     async def cancel_button(self, button: discord.ui.Button, interaction: discord.Interaction):
+        if not interaction.user:
+            await interaction.respond("Der Interaction User ist None. Das sollte nicht passieren.", ephemeral=True)
+            return
+        if not isinstance(interaction.user, discord.Member):
+            await interaction.respond("Du bist kein Mitglied auf diesem Server!", ephemeral=True)
+            return
         if interaction.user.id != self.tournament.organizer_id and not any(role.name == "Moderator" for role in interaction.user.roles):
             await interaction.respond("Nur der Turnier-Organisator oder ein Moderator darf dies tun!", ephemeral=True)
             return
@@ -150,7 +178,7 @@ class EditTournamentView(discord.ui.View):
     def __init__(self):
         raise RuntimeError("Use 'await EditTournamentView.create(...)' instead")
 
-    async def _init(self, tournament: SpelltableTournament, channel: discord.TextChannel):
+    async def _init(self, tournament: SpelltableTournament, channel: discord.abc.MessageableChannel):
         super().__init__()
         self.tournament = tournament
         self.channel = channel
@@ -163,7 +191,7 @@ class EditTournamentView(discord.ui.View):
         )
 
     @classmethod
-    async def create(cls, tournament: SpelltableTournament, channel: discord.TextChannel):
+    async def create(cls, tournament: SpelltableTournament, channel: discord.abc.MessageableChannel):
         instance = object.__new__(cls)
         await instance._init(tournament, channel)
         return instance
@@ -265,6 +293,9 @@ class EditTournamentView(discord.ui.View):
                 name=self.tournament.title, type=discord.ChannelType.public_thread, auto_archive_duration=10080 # eine Woche
             )
             organizer = await self.tournament.organizer
+            if not organizer:
+                await interaction.followup.send("Organisator konnte nicht geladen werden.", ephemeral=True)
+                return
             await interaction.channel.send(
                 f"{organizer.mention} hat ein Turnier erstellt. Macht doch mit! :) {thread.mention}"
             )
@@ -299,6 +330,9 @@ class SpelltableTournamentManager(Cog):
             try:
                 active_tournaments[message_path] = tournament
                 tournament_message = await tournament.message
+                if not tournament_message:
+                    log.warning(f"Turnier Nachricht nicht gefunden: {message_path}")
+                    continue
 
                 # Unarchive thread if needed before any edits
                 if tournament_message and isinstance(tournament_message.channel, discord.Thread) and tournament_message.channel.archived:
@@ -380,16 +414,21 @@ class SpelltableTournamentManager(Cog):
     async def ping_missing_matches(
         self,
         ctx:ApplicationContext,
-        message:Option(str, description="Die Nachricht, die an die Spieler gesendet werden soll")
+        message: Annotated[str, Option(str, description="Die Nachricht, die an die Spieler gesendet werden soll")]
     ):
         # Check privilege and context
         if not isinstance(ctx.channel, discord.Thread):
             await ctx.respond("Dieser Befehl kann nur in einem Turnier-Thread ausgeführt werden.", ephemeral=True)
             return
+        if not isinstance(ctx.author, discord.Member):
+            await ctx.respond("Dieser Befehl kann nur in einem Server ausgefuehrt werden.", ephemeral=True)
+            return
         
         this_tournament = None
         for id, tournament in list(active_tournaments.items()):
             tournament_message = await tournament.message
+            if not tournament_message:
+                continue
             if tournament_message.channel.id == ctx.channel.id:
                 this_tournament = tournament
                 break
@@ -418,7 +457,8 @@ class SpelltableTournamentManager(Cog):
         message_str = "Die folgenden Matches sind noch offen:"
         for open_match in open_matches:
             open_match:swiss_mtg.Match
-
+            if not open_match.player1 or not open_match.player2:
+                continue
             message_str += f"\n<@{open_match.player1.player_id}> vs <@{open_match.player2.player_id}>"
 
         message_str += f"\n\nNachricht von der Organisation:\n>>> {message}"
@@ -428,16 +468,21 @@ class SpelltableTournamentManager(Cog):
     async def ping_all_participants(
         self,
         ctx:ApplicationContext,
-        message:Option(str, description="Die Nachricht, die an alle Teilnehmer gesendet werden soll")
+        message: Annotated[str, Option(str, description="Die Nachricht, die an alle Teilnehmer gesendet werden soll")]
     ):
         # Check privilege and context
         if not isinstance(ctx.channel, discord.Thread):
             await ctx.respond("Dieser Befehl kann nur in einem Turnier-Thread ausgeführt werden.", ephemeral=True)
             return
+        if not isinstance(ctx.author, discord.Member):
+            await ctx.respond("Dieser Befehl kann nur in einem Server ausgefuehrt werden.", ephemeral=True)
+            return
         
         this_tournament = None
         for id, tournament in list(active_tournaments.items()):
             tournament_message = await tournament.message
+            if not tournament_message:
+                continue
             if tournament_message.channel.id == ctx.channel.id:
                 this_tournament = tournament
                 break
@@ -476,7 +521,7 @@ class SpelltableTournamentManager(Cog):
     async def erstelle_turnier(
         self,
         ctx:ApplicationContext,
-        titel:Option(str, description="Der Titel, den das Turnier tragen soll")
+        titel: Annotated[str, Option(str, description="Der Titel, den das Turnier tragen soll")]
     ):
         # Defer the interaction response to avoid timeout
         try:
@@ -523,22 +568,12 @@ class SpelltableTournamentManager(Cog):
             ephemeral=True
         )
 
-    @tasks.loop(hours=24)
+    @tasks.loop(time=time(hour=0, minute=0, second=1, tzinfo=env.TIMEZONE))
     async def schedule_midnight_update(self):
         """
         Task to update the tournament message shortly after midnight.
         """
-        now = datetime.now(tz=env.TIMEZONE)
-        # Calculate the time until midnight
-        next_midnight = (now + timedelta(days=1)).replace(hour=0, minute=0, second=1, microsecond=0)
-        delay = (next_midnight - now).total_seconds()
-
-        log.debug(f"It is now {now}. Waiting {delay} seconds ({str(timedelta(seconds=delay))}) until {next_midnight} to update tournament message")
-
-        # Wait until shortly after midnight
-        await asyncio.sleep(delay)
-
-        # Execute the update
+        # Execute shortly after midnight in configured timezone.
         await update_tournament_message(self.bot)
 
     @schedule_midnight_update.before_loop
