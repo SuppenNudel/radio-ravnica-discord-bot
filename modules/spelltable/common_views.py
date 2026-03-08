@@ -46,7 +46,7 @@ class SubmitDeckView(discord.ui.View):
 
 class SubmitDeckModal(discord.ui.DesignerModal):
     def __init__(self, tournament: SpelltableTournament, player: discord.User, tournament_player: swiss_mtg.Player = None):
-        super().__init__(title="Deck einreichen")
+        super().__init__(title="Deck einreichen (wird erst nach Abschluss des Turniers veröffentlicht)")
         self.tournament = tournament
         self.player = player
 
@@ -166,6 +166,9 @@ class FinishTournamentView(discord.ui.View):
             if pairings_message:
                 await pairings_message.edit(view=None)
             
+            # Set winner first so metagame update can proceed
+            self.tournament.swiss_tournament.winner = winner
+            
             # Update final standings with deck submissions and add submit deck button
             await self.tournament.update_metagame()
             
@@ -180,8 +183,6 @@ class FinishTournamentView(discord.ui.View):
 
             await interaction.response.send_message(content, ephemeral=False)
             link_log.info(f"Turnier abgeschlossen: `{self.tournament.title}`, Gewinner: <@{winner.player_id}>")
-            self.tournament.swiss_tournament.winner = winner
-            self.tournament.victory_message_id = victory_message.id
             await self.tournament.save_tournament()
             
             # Update hall of fame with tournament results
@@ -502,23 +503,12 @@ class ReportMatchModal(discord.ui.DesignerModal):
 async def update_pairings(tournament:SpelltableTournament, round:swiss_mtg.Round):
     # make sure the pairings message is up to date
     
-    view = await ReportMatchView.create(round, tournament)
     pairings_message = None
     if round.message_id_pairings:
         pairings_message:discord.Message = await tournament.get_message(round.message_id_pairings)
     if pairings_message:
         link_log.info(f"updating pairings {pairings_message.jump_url}")
-        pairings_image = await tournament.pairings_to_image(round)
-        pairings_file = discord.File(pairings_image, filename=pairings_image)
-        pairings = await tournament.get_pairings(round)
-        
-        # Create/update embed
-        embed = discord.Embed(
-            title=f"⚔️ Paarungen für die {round.round_number}. Runde",
-            description=pairings[:4000] if len(pairings) <= 4000 else pairings[:3950] + "\n\n_(Siehe Bild für vollständige Paarungen)_",
-            color=discord.Color.from_rgb(37, 88, 79)
-        )
-        
+        view, embed, pairings_file = await _prepare_pairings_content(round, tournament)
         await pairings_message.edit(content="", embed=embed, attachments=[], file=pairings_file, view=view)
     else:
         pairings_message = await post_pairings(round, tournament)
@@ -830,7 +820,7 @@ class ReportMatchView(discord.ui.View):
             await update_pairings(tournament, round)
             await update_standings(tournament, interaction)
 
-    @discord.ui.button(label="Ergebnis übermitteln", style=discord.ButtonStyle.primary, emoji="⚔️")
+    @discord.ui.button(label="Ergebnis übermitteln", style=discord.ButtonStyle.primary, emoji="⚔️", row=0)
     async def report_button(self, button: discord.ui.Button, interaction: discord.Interaction):
         try:
             the_match = self.player_match_map.get(interaction.user.id)
@@ -867,7 +857,22 @@ class ReportMatchView(discord.ui.View):
             except Exception:
                 link_log.exception("[player-report] Failed to deliver fallback error to user")
 
-    @discord.ui.button(label="Ergebnis setzen (Admin)", style=discord.ButtonStyle.secondary, emoji="🔏")
+    @discord.ui.button(label="Deck einreichen", style=discord.ButtonStyle.primary, emoji="📝", row=0)
+    async def submit_deck_button(self, button: discord.ui.Button, interaction: discord.Interaction):
+        player = self.tournament.swiss_tournament.player_by_id(interaction.user.id)
+        if not player:
+            await interaction.response.send_message("Du bist kein Teilnehmer in diesem Turnier.", ephemeral=True)
+            return
+
+        try:
+            await interaction.response.send_modal(SubmitDeckModal(self.tournament, interaction.user, player))
+        except discord.errors.NotFound:
+            try:
+                await interaction.followup.send("Die Anfrage hat zu lange gedauert. Bitte versuche es erneut.", ephemeral=True)
+            except Exception:
+                pass
+
+    @discord.ui.button(label="Ergebnis setzen (Admin)", style=discord.ButtonStyle.secondary, emoji="🔏", row=1)
     async def admin_report_button(self, button: discord.ui.Button, interaction: discord.Interaction):
         try:
             official_tournament_roles = ["Moderator", "Admin"]
@@ -929,21 +934,35 @@ class ReportMatchView(discord.ui.View):
             return
         await interaction.response.send_modal(CancelTournamentModal(self.tournament))
 
-async def post_pairings(round:swiss_mtg.Round, tournament:SpelltableTournament, previous_round:swiss_mtg.Round=None, interaction:discord.Interaction=None):
-    reportMatchView = await ReportMatchView.create(round, tournament)
-    pairings_image = await tournament.pairings_to_image()
+
+async def _prepare_pairings_content(round: swiss_mtg.Round, tournament: SpelltableTournament):
+    """Helper function to prepare all pairings content (view, embed, image, file)."""
+    view = await ReportMatchView.create(round, tournament)
+    pairings_image = await tournament.pairings_to_image(round)
     pairings_file = discord.File(pairings_image, filename=pairings_image)
-    pairings = await tournament.get_pairings()
-    
-    # Create embed for pairings
+    pairings = await tournament.get_pairings(round)
+
+    total_rounds = tournament.swiss_tournament.rounds_count
+    is_last_round = round.round_number >= total_rounds
+    title = (
+        f"⚔️ Paarungen für die {round.round_number}. und letzte Runde"
+        if is_last_round
+        else f"⚔️ Paarungen für die {round.round_number}. Runde (von {total_rounds})"
+    )
     embed = discord.Embed(
-        title=f"⚔️ Paarungen für die {round.round_number}. Runde",
+        title=title,
         description=pairings[:4000] if len(pairings) <= 4000 else pairings[:3950] + "\n\n_(Siehe Bild für vollständige Paarungen)_",
         color=discord.Color.from_rgb(37, 88, 79)
     )
     
+    return view, embed, pairings_file
+
+
+async def post_pairings(round:swiss_mtg.Round, tournament:SpelltableTournament, previous_round:swiss_mtg.Round=None, interaction:discord.Interaction=None):
+    view, embed, pairings_file = await _prepare_pairings_content(round, tournament)
+    
     if interaction:
-        new_pairings_message:discord.Message = await interaction.followup.send(content="", embed=embed, file=pairings_file, view=reportMatchView)
+        new_pairings_message:discord.Message = await interaction.followup.send(content="", embed=embed, file=pairings_file, view=view)
     else:
         message_to_reply_to = None
         if round.round_number == 1:
@@ -953,7 +972,7 @@ async def post_pairings(round:swiss_mtg.Round, tournament:SpelltableTournament, 
             if not previous_round:
                 previous_round = tournament.swiss_tournament.rounds[round.round_number - 2]
             message_to_reply_to = await tournament.get_message(previous_round.message_id_pairings)
-        new_pairings_message:discord.Message = await message_to_reply_to.reply(content="", embed=embed, file=pairings_file, view=reportMatchView)
+        new_pairings_message:discord.Message = await message_to_reply_to.reply(content="", embed=embed, file=pairings_file, view=view)
     
     # Try to pin/unpin messages, but continue if permissions are missing
     try:
@@ -1102,9 +1121,17 @@ class StartNextRoundView(discord.ui.View):
                     )
                     return
 
+                # Immediately remove the pairings view to prevent further button presses.
+                previous_pairings_message = await self.tournament.get_message(self.previous_round.message_id_pairings)
+                if previous_pairings_message:
+                    await previous_pairings_message.edit(view=None)
+
                 # update the previous round's messages
                 previous_standings_message = await self.tournament.get_message(self.previous_round.message_id_standings)
-                previous_pairings_message = await self.tournament.get_message(self.previous_round.message_id_pairings)
+
+                # Immediately remove the standings view to prevent repeated clicks.
+                if previous_standings_message:
+                    await previous_standings_message.edit(view=None)
 
                 standings_image = await self.tournament.standings_to_image(self.previous_round)
                 standings_file = discord.File(standings_image, filename=standings_image)
@@ -1112,7 +1139,8 @@ class StartNextRoundView(discord.ui.View):
 
                 pairings_image = await self.tournament.pairings_to_image(self.previous_round)
                 pairings_file = discord.File(pairings_image, filename=pairings_image)
-                await previous_pairings_message.edit(attachments=[], file=pairings_file, view=None)
+                if previous_pairings_message:
+                    await previous_pairings_message.edit(attachments=[], file=pairings_file, view=None)
 
                 try:
                     await next_round(self.tournament, interaction)
