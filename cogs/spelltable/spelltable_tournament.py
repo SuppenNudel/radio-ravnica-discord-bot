@@ -178,7 +178,7 @@ class EditTournamentView(discord.ui.View):
     def __init__(self):
         raise RuntimeError("Use 'await EditTournamentView.create(...)' instead")
 
-    async def _init(self, tournament: SpelltableTournament, channel: discord.abc.MessageableChannel):
+    async def _init(self, tournament: SpelltableTournament, channel: discord.abc.Messageable):
         super().__init__()
         self.tournament = tournament
         self.channel = channel
@@ -191,7 +191,7 @@ class EditTournamentView(discord.ui.View):
         )
 
     @classmethod
-    async def create(cls, tournament: SpelltableTournament, channel: discord.abc.MessageableChannel):
+    async def create(cls, tournament: SpelltableTournament, channel: discord.abc.Messageable):
         instance = object.__new__(cls)
         await instance._init(tournament, channel)
         return instance
