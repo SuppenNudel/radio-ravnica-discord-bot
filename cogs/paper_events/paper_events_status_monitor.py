@@ -1,4 +1,4 @@
-from discord.ext import commands
+from discord.ext import commands, tasks
 import discord
 from ezcord import Cog
 from discord import Bot
@@ -6,7 +6,7 @@ from ezcord import log
 import modules.notion as notion
 from modules import env
 from modules.paper_events_calendar import update_paper_events_calendar
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 import os
 import logging
 import asyncio
@@ -36,6 +36,10 @@ class PaperEventsStatusMonitor(Cog):
         self.bot = bot
         self.guild: discord.Guild | None = None
 
+    def cog_unload(self):
+        if self.midnight_calendar_update.is_running():
+            self.midnight_calendar_update.cancel()
+
     @Cog.listener()
     async def on_ready(self):
         self.guild = self.bot.get_guild(GUILD_ID)
@@ -43,9 +47,25 @@ class PaperEventsStatusMonitor(Cog):
             await self._restore_timers()
             # Update the calendar on startup
             await update_paper_events_calendar(self.bot, self.guild)
+            if not self.midnight_calendar_update.is_running():
+                self.midnight_calendar_update.start()
         else:
             log.error("Guild not found")
         log.debug(self.__class__.__name__ + " is ready")
+
+    @tasks.loop(time=time(hour=0, minute=0, second=0, tzinfo=env.TIMEZONE))
+    async def midnight_calendar_update(self):
+        """Refresh paper events calendar every midnight in configured timezone."""
+        guild = self.guild or self.bot.get_guild(GUILD_ID)
+        if not guild:
+            log.warning("Skipping midnight paper events calendar update: guild not found")
+            return
+        self.guild = guild
+        await update_paper_events_calendar(self.bot, guild)
+
+    @midnight_calendar_update.before_loop
+    async def before_midnight_calendar_update(self):
+        await self.bot.wait_until_ready()
 
     async def _restore_timers(self):
         """Restore timers for all existing events on bot startup."""
@@ -132,8 +152,8 @@ async def schedule_event_timers(bot: Bot, guild: discord.Guild, thread_id: int, 
     Schedule timers to archive and delete event threads at appropriate times.
     Called when an event is created or on bot startup.
     """
-    now = datetime.now(tz=event_start.tzinfo)
     date_to_compare = event_end if event_end else event_start
+    now = datetime.now(tz=date_to_compare.tzinfo)
     
     # Cancel any existing timers for this thread
     if thread_id in _active_timers:
@@ -155,7 +175,7 @@ async def schedule_event_timers(bot: Bot, guild: discord.Guild, thread_id: int, 
     delete_time = date_to_compare + timedelta(days=30)
     
     # If event already ended more than 30 days ago, delete immediately
-    if delete_time < now:
+    if delete_time <= now:
         await cog._delete_thread(thread_id)
         return
     
@@ -169,6 +189,8 @@ async def schedule_event_timers(bot: Bot, guild: discord.Guild, thread_id: int, 
                 await cog._delete_thread(thread_id)
             
             _active_timers[thread_id]['delete'] = asyncio.create_task(delayed_delete())
+        else:
+            await cog._delete_thread(thread_id)
     else:
         # Schedule both archive and delete
         seconds_until_archive = (archive_time - now).total_seconds()
