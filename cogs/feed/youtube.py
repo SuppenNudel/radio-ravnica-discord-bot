@@ -6,6 +6,7 @@ import scrapetube
 from ezcord import log
 from enum import Enum
 import asyncio
+import time
 
 class ContentType(Enum):
     VIDEOS = "videos"
@@ -74,14 +75,25 @@ class Youtube(commands.Cog):
                 return content
             return None
         
-        try:
-            content = await loop.run_in_executor(None, fetch_content)
-            if content is None:
-                log.debug(f"No 'non-badge' {content_type} in the last {limit} videos")
-            return content
-        except Exception as e:
-            log.error(f"Error fetching YouTube content for {channel.name}: {e}")
-            return None
+        MAX_RETRIES = 4
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                content = await loop.run_in_executor(None, fetch_content)
+                if content is None:
+                    log.debug(f"No 'non-badge' {content_type} in the last {limit} videos")
+                return content
+            except Exception as e:
+                is_transient = any(keyword in str(e) for keyword in (
+                    "NameResolutionError", "Failed to resolve", "Max retries exceeded",
+                    "ConnectionError", "Timeout", "RemoteDisconnected"
+                ))
+                if is_transient and attempt < MAX_RETRIES:
+                    wait = 2 ** attempt
+                    log.warning(f"Transient error fetching YouTube content for {channel.name} (attempt {attempt + 1}/{MAX_RETRIES}), retrying in {wait}s: {e}")
+                    await asyncio.sleep(wait)
+                else:
+                    log.error(f"Error fetching YouTube content for {channel.name}: {e}")
+                    return None
 
     @tasks.loop(minutes=5)
     async def check_channels(self):
