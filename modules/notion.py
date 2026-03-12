@@ -341,28 +341,38 @@ class NotionPayloadBuilder():
 
 def retry_with_rate_limit(func, *args, **kwargs):
     """
-    Retries a Notion API call if a rate limit is encountered.
+    Retries a Notion API call if a rate limit or transient server error is encountered.
 
     :param func: The Notion API function to call.
     :param args: Positional arguments for the function.
     :param kwargs: Keyword arguments for the function.
     :return: The result of the API call.
     """
+    TRANSIENT_STATUSES = {502, 503, 504}
+    MAX_RETRIES = 5
+    retries = 0
     while True:
         try:
             return func(*args, **kwargs)
         except APIResponseError as e:
-            # Check if 'Retry-After' is in the response headers
-            retry_after = e.headers.get("Retry-After", None)
-            
-            if e.status == 429 and retry_after:
-                retry_after = int(retry_after)  # Convert to integer
-                print(f"Rate limit hit. Retrying after {retry_after} seconds.")
-                time.sleep(retry_after)
+            if e.status == 429:
+                # Check if 'Retry-After' is in the response headers
+                retry_after = e.headers.get("Retry-After", None)
+                if retry_after:
+                    retry_after = int(retry_after)
+                    print(f"Rate limit hit. Retrying after {retry_after} seconds.")
+                    time.sleep(retry_after)
+                else:
+                    print(f"Rate limit hit (no Retry-After). Retrying after 5 seconds.")
+                    time.sleep(5)
+            elif e.status in TRANSIENT_STATUSES and retries < MAX_RETRIES:
+                wait = 2 ** retries
+                print(f"Transient error {e.status}. Retrying in {wait}s (attempt {retries + 1}/{MAX_RETRIES}).")
+                time.sleep(wait)
+                retries += 1
             else:
-                # Log or handle the error differently if no retry-after is present
                 print(f"Error: {e}")
-                raise  # Re-raise other exceptions
+                raise
         except Exception as e:
             raise e
     
@@ -386,7 +396,8 @@ def add_to_database(database_id, payload) -> dict:
     return response
 
 def update_entry(page_id, update_properties) -> dict:
-    update_response = notion.pages.update(
+    update_response = retry_with_rate_limit(
+        notion.pages.update,
         page_id=page_id,
         properties=update_properties
     )
