@@ -5,6 +5,7 @@ from discord import Bot
 import scrapetube
 from ezcord import log
 from enum import Enum
+import asyncio
 
 class ContentType(Enum):
     VIDEOS = "videos"
@@ -56,19 +57,31 @@ class Youtube(commands.Cog):
 
     async def get_latest_content(self, channel:YoutubeChannel, content_type:ContentType):
         limit = 10
-        generator = scrapetube.get_channel(
-            channel_username=channel.name,
-            limit=10,
-            content_type=content_type.value,
-            sort_by='newest')
-        skipped = []
-        for content in generator:
-            if 'badges' in content:
-                skipped.append(content)
-                continue
+        loop = asyncio.get_event_loop()
+        
+        # Run the blocking scrapetube call in a thread pool to avoid blocking the event loop
+        def fetch_content():
+            generator = scrapetube.get_channel(
+                channel_username=channel.name,
+                limit=10,
+                content_type=content_type.value,
+                sort_by='newest')
+            skipped = []
+            for content in generator:
+                if 'badges' in content:
+                    skipped.append(content)
+                    continue
+                return content
+            return None
+        
+        try:
+            content = await loop.run_in_executor(None, fetch_content)
+            if content is None:
+                log.debug(f"No 'non-badge' {content_type} in the last {limit} videos")
             return content
-        log.debug(f"No 'non-badge' {content_type} in the last {limit} videos")
-        return None
+        except Exception as e:
+            log.error(f"Error fetching YouTube content for {channel.name}: {e}")
+            return None
 
     @tasks.loop(minutes=5)
     async def check_channels(self):
