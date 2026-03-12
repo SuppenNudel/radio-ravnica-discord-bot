@@ -31,6 +31,28 @@ class InstagramMonitor(commands.Cog):
             except ValueError:
                 log.error("The environment variable 'CHANNEL_INSTAGRAM' is not a valid integer.")
 
+    def _post_log_title(self, post: dict) -> str:
+        caption = (post.get("caption") or "").strip()
+        if caption:
+            first_line = caption.splitlines()[0].strip()
+            if len(first_line) > 100:
+                return f"{first_line[:97]}..."
+            return first_line
+
+        short_code = post.get("shortCode")
+        post_type = post.get("type") or "Post"
+        return f"{post_type} {short_code}" if short_code else post_type
+
+    def _summarize_posts_for_log(self, posts: list[dict]) -> list[dict]:
+        return [
+            {
+                "title": self._post_log_title(post),
+                "timestamp": post.get("timestamp"),
+                "url": post.get("url"),
+            }
+            for post in posts
+        ]
+
     @commands.slash_command(
         name="share_instagram_post",
         description="Share an Instagram post by ID or URL",
@@ -122,7 +144,9 @@ class InstagramMonitor(commands.Cog):
         for ig_channel in self.channels:
             try:
                 latest_posts = await self.get_latest_posts(ig_channel)
-                log.debug(f"Latest posts for channel {ig_channel.name}: {latest_posts}")
+                log.debug(
+                    f"Latest posts for channel {ig_channel.name}: {self._summarize_posts_for_log(latest_posts)}"
+                )
                 if self.check_channels.current_loop == 0:
                     log.info(f"Initializing content cache for Instagram channel {ig_channel.name}")
                     content_cache.extend(post['id'] for post in latest_posts)
