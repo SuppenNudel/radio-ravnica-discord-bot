@@ -1,4 +1,5 @@
 from notion_client import Client, APIResponseError
+from notion_client.errors import HTTPResponseError
 from notion_client.api_endpoints import DatabasesEndpoint
 import os
 from datetime import datetime
@@ -354,7 +355,7 @@ def retry_with_rate_limit(func, *args, **kwargs):
     while True:
         try:
             return func(*args, **kwargs)
-        except APIResponseError as e:
+        except (APIResponseError, HTTPResponseError) as e:
             if e.status == 429:
                 # Check if 'Retry-After' is in the response headers
                 retry_after = e.headers.get("Retry-After", None)
