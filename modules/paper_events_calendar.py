@@ -1,15 +1,15 @@
-from datetime import datetime, timedelta
+import asyncio
+import subprocess
+from datetime import datetime
+from pathlib import Path
 import hashlib
 import discord
 from discord.utils import format_dt
 from ezcord import log
-from modules import env, notion
+from modules import env, paper_events_db
 from modules.util.generate_paper_events_calendar import generate_paper_events_calendar
 
-DB_PAPER_EVENTS_ID = "f05d532cf91f4f9cbce38e27dc85b522"
-
-# Grace period for showing past events (24 hours)
-PAST_EVENT_GRACE_PERIOD = timedelta(hours=24)
+MAX_CALENDAR_ITEMS = 8
 
 
 class PaperEventCalendarItem:
@@ -37,26 +37,55 @@ def _normalize_dt(value: datetime | None) -> datetime | None:
     return value
 
 
-def _build_calendar_items(entries: list[notion.Entry]) -> list[PaperEventCalendarItem]:
+def _build_calendar_items(guild: discord.Guild) -> list[PaperEventCalendarItem]:
     now = datetime.now(tz=env.TIMEZONE)
     items: list[PaperEventCalendarItem] = []
-    for entry in entries:
-        date = entry.get_date_property("Start (und Ende)")
-        start = _normalize_dt(date["start"])
-        if not start:
+
+    conn = paper_events_db.connect()
+    paper_events_db.init_db(conn)
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM paper_events
+        WHERE server_id = ?
+          AND thread_id IS NOT NULL
+        ORDER BY start_at ASC
+        """,
+        (str(guild.id),),
+    ).fetchall()
+
+    for row in rows:
+        start_raw = row["start_at"]
+        if not start_raw:
             continue
-        end = _normalize_dt(date["end"]) or start
-        # Show events that haven't ended yet, or ended within the grace period
-        if end < now - PAST_EVENT_GRACE_PERIOD:
+        try:
+            start = _normalize_dt(datetime.fromisoformat(start_raw))
+        except Exception:
             continue
-        title = entry.get_text_property("Event Titel") or "Paper Event"
-        thread_id = entry.get_text_property("Thread ID")
-        server_id = entry.get_text_property("Server ID")
-        discord_url = None
-        if thread_id and server_id:
-            discord_url = _build_discord_jump_url(server_id, thread_id)
-        url = discord_url or entry.get_url_property("URL")
+        if start is None:
+            continue
+
+        end_raw = row["end_at"]
+        end = start
+        if end_raw:
+            try:
+                parsed_end = _normalize_dt(datetime.fromisoformat(end_raw))
+                if parsed_end:
+                    end = parsed_end
+            except Exception:
+                pass
+
+        # Only show events that start in the future
+        if start <= now:
+            continue
+
+        title = row["title"] or "Paper Event"
+        thread_id = row["thread_id"]
+        server_id = row["server_id"]
+        discord_url = _build_discord_jump_url(str(server_id), str(thread_id)) if thread_id and server_id else None
+        url = discord_url or row["url"]
         items.append(PaperEventCalendarItem(title=title, start=start, end=end, url=url))
+
     items.sort(key=lambda item: item.time)
     return items
 
@@ -77,8 +106,9 @@ def _build_calendar_message(items: list[PaperEventCalendarItem]) -> str:
         msg += "> _Keine kommenden Events._"
         return msg
 
+    visible_items = items[:MAX_CALENDAR_ITEMS]
     msg += "### \ud83d\udcc5 Kommende Events\n"
-    for item in items:
+    for item in visible_items:
         if item.url:
             line = f"> 🏠 **[{item.title}]({item.url})**"
         else:
@@ -97,27 +127,90 @@ def _build_calendar_message(items: list[PaperEventCalendarItem]) -> str:
             msg += f"> \u23f3 Ende: {end_text}\n"
         msg += "\n"
 
+    remaining_count = len(items) - len(visible_items)
+    if remaining_count > 0:
+        msg += f"> _… und {remaining_count} weitere kommende Events._\n"
+
     return msg
 
 
+async def _export_events_json_and_push(guild: discord.Guild) -> None:
+    """Export events.json to the paper-events repo and git commit+push."""
+    repo_path_str = env.PAPER_EVENTS_EXPORT_REPO_PATH
+    if not repo_path_str:
+        return
+
+    repo_path = Path(repo_path_str)
+    if not repo_path.is_dir():
+        log.warning(f"PAPER_EVENTS_EXPORT_REPO_PATH '{repo_path}' does not exist; skipping events.json export")
+        return
+
+    output_path = repo_path / "data" / "events.json"
+
+    conn = paper_events_db.connect()
+    paper_events_db.init_db(conn)
+    try:
+        paper_events_db.export_public_events_json(
+            conn,
+            output_path=output_path,
+            server_id=str(guild.id),
+        )
+    except Exception as e:
+        log.error(f"Failed to export events.json: {e}")
+        return
+
+    def _git_commit_push() -> str | None:
+        r = subprocess.run(
+            ["git", "add", str(output_path.relative_to(repo_path))],
+            cwd=str(repo_path),
+            capture_output=True,
+            text=True,
+        )
+        if r.returncode != 0:
+            return f"git add failed: {r.stderr.strip()}"
+
+        r = subprocess.run(
+            ["git", "commit", "-m", "Update events.json"],
+            cwd=str(repo_path),
+            capture_output=True,
+            text=True,
+        )
+        if r.returncode != 0:
+            # "nothing to commit" is not an error
+            combined = (r.stdout + r.stderr).lower()
+            if "nothing to commit" in combined:
+                return None
+            return f"git commit failed: {r.stderr.strip()}"
+
+        r = subprocess.run(
+            ["git", "push"],
+            cwd=str(repo_path),
+            capture_output=True,
+            text=True,
+        )
+        if r.returncode != 0:
+            return f"git push failed: {r.stderr.strip()}"
+
+        return None
+
+    try:
+        err = await asyncio.to_thread(_git_commit_push)
+        if err:
+            log.error(f"Failed to push events.json: {err}")
+        else:
+            log.info(f"Pushed updated events.json to {repo_path_str}")
+    except Exception as e:
+        log.error(f"Unexpected error during events.json git push: {e}")
+
+
 async def update_paper_events_calendar(bot: discord.Bot, guild: discord.Guild):
+    await _export_events_json_and_push(guild)
+
     if not env.PAPER_EVENTS_CALENDAR_CHANNEL_ID:
         log.warning("PAPER_EVENTS_CALENDAR_CHANNEL_ID not set; skipping paper events calendar update")
         return
 
-    filter_builder = (
-        notion.NotionFilterBuilder()
-        .add_checkbox_filter("For Test", notion.CheckboxCondition.EQUALS, env.DEBUG)
-        .add_text_filter("Server ID", notion.TextCondition.EQUALS, str(guild.id))
-    )
-    filter_payload = filter_builder.build()
-
-    entries = notion.get_all_entries(
-        database_id=DB_PAPER_EVENTS_ID,
-        filter=filter_payload,
-    )
-
-    items = _build_calendar_items(entries)
+    items = _build_calendar_items(guild)
     signature = _calculate_signature(items)
 
     # Get the channel

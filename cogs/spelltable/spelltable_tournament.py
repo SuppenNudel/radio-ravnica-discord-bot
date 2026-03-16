@@ -359,6 +359,12 @@ class SpelltableTournamentManager(Cog):
 
                     # Update standings with latest deck submissions
                     await tournament.update_metagame()
+
+                    # Clear legacy plain-text content on existing pairings posts.
+                    if current_round.message_id_pairings:
+                        pairings_message = await tournament.get_message(current_round.message_id_pairings)
+                        if pairings_message and pairings_message.content:
+                            await pairings_message.edit(content="")
                     
                     # activate deck submission button
                     if current_round.message_id_standings:

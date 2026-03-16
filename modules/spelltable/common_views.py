@@ -510,8 +510,8 @@ async def update_pairings(tournament:SpelltableTournament, round:swiss_mtg.Round
         pairings_message:discord.Message = await tournament.get_message(round.message_id_pairings)
     if pairings_message:
         link_log.info(f"updating pairings {pairings_message.jump_url}")
-        view, pairings_file, plain_text_pairings = await _prepare_pairings_content(round, tournament)
-        await pairings_message.edit(content=plain_text_pairings, attachments=[], file=pairings_file, view=view, embed=None)
+        view, embed, pairings_file = await _prepare_pairings_content(round, tournament)
+        await pairings_message.edit(content="", embed=embed, attachments=[], file=pairings_file, view=view)
     else:
         pairings_message = await post_pairings(round, tournament)
         log.info(f"Issued new pairings message {pairings_message.jump_url} for tournament {tournament.title}.")
@@ -944,25 +944,33 @@ class ReportMatchView(discord.ui.View):
 
 
 async def _prepare_pairings_content(round: swiss_mtg.Round, tournament: SpelltableTournament):
-    """Helper function to prepare all pairings content (view, image, plain text)."""
+    """Helper function to prepare all pairings content (view, embed, image, file)."""
     view = await ReportMatchView.create(round, tournament)
     pairings_image = await tournament.pairings_to_image(round)
     pairings_file = discord.File(pairings_image, filename=pairings_image)
     pairings = await tournament.get_pairings(round)
-    max_plain_text_length = 2000
-    if len(pairings) > max_plain_text_length:
-        plain_text_pairings = pairings[:1950] + "\n\n_(gekürzt – vollständige Paarungen im Bild)_"
-    else:
-        plain_text_pairings = pairings
 
-    return view, pairings_file, plain_text_pairings
+    total_rounds = tournament.swiss_tournament.rounds_count
+    is_last_round = round.round_number >= total_rounds
+    title = (
+        f"⚔️ Paarungen für die {round.round_number}. und letzte Runde"
+        if is_last_round
+        else f"⚔️ Paarungen für die {round.round_number}. Runde (von {total_rounds})"
+    )
+    embed = discord.Embed(
+        title=title,
+        description=pairings[:4000] if len(pairings) <= 4000 else pairings[:3950] + "\n\n_(Siehe Bild für vollständige Paarungen)_",
+        color=discord.Color.from_rgb(37, 88, 79)
+    )
+    
+    return view, embed, pairings_file
 
 
 async def post_pairings(round:swiss_mtg.Round, tournament:SpelltableTournament, previous_round:swiss_mtg.Round=None, interaction:discord.Interaction=None):
-    view, pairings_file, plain_text_pairings = await _prepare_pairings_content(round, tournament)
+    view, embed, pairings_file = await _prepare_pairings_content(round, tournament)
     
     if interaction:
-        new_pairings_message:discord.Message = await interaction.followup.send(content=plain_text_pairings, file=pairings_file, view=view)
+        new_pairings_message:discord.Message = await interaction.followup.send(content="", embed=embed, file=pairings_file, view=view)
     else:
         message_to_reply_to = None
         if round.round_number == 1:
@@ -972,7 +980,7 @@ async def post_pairings(round:swiss_mtg.Round, tournament:SpelltableTournament, 
             if not previous_round:
                 previous_round = tournament.swiss_tournament.rounds[round.round_number - 2]
             message_to_reply_to = await tournament.get_message(previous_round.message_id_pairings)
-        new_pairings_message:discord.Message = await message_to_reply_to.reply(content=plain_text_pairings, file=pairings_file, view=view)
+        new_pairings_message:discord.Message = await message_to_reply_to.reply(content="", embed=embed, file=pairings_file, view=view)
     
     # Try to pin/unpin messages, but continue if permissions are missing
     try:

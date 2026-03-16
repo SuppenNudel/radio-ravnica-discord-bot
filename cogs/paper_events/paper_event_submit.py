@@ -2,7 +2,7 @@ from ezcord import log, Cog
 from discord.ext.commands import slash_command
 from discord import ApplicationContext, Bot, InteractionContextType, IntegrationType
 import discord
-from modules import notion, env, gmaps
+from modules import env, paper_events_db
 import modules.paper_events_common as pe_common
 import traceback
 from datetime import datetime
@@ -10,7 +10,6 @@ import logging
 
 link_log = logging.getLogger("link_logger")
 
-EVENT_DATABASE_ID = env.EVENT_DATABASE_ID
 DEBUG = env.DEBUG
 
 SPIKE_ART_CROP = "https://cards.scryfall.io/art_crop/front/b/0/b0e90b22-6f43-4e9a-a236-f33191768813.jpg"
@@ -106,49 +105,73 @@ class PaperEventSubmit(Cog):
 
     @Cog.listener()
     async def on_ready(self):
-        # reconnect edit views
-        filter = (
-            notion.NotionFilterBuilder()
-            .add_date_filter("Start (und Ende)", notion.DateCondition.ON_OR_AFTER, datetime.now())
-            .add_text_filter("Server ID", notion.TextCondition.EQUALS if DEBUG else notion.TextCondition.NOT_EQUAL, "1314528348319514684")
-            .build()
-            )
-        upcoming_events = notion.get_all_entries(EVENT_DATABASE_ID, filter=filter)
-        
-        for event in upcoming_events:
-            server_id = int(event.get_text_property("Server ID"))
-            author_id = int(event.get_text_property("Author ID"))
-            thread_id = int(event.get_text_property("Thread ID"))
+        # reconnect edit views from SQLite
+        conn = paper_events_db.connect()
+        paper_events_db.init_db(conn)
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM paper_events
+            WHERE thread_id IS NOT NULL
+                            AND server_id = ?
+              AND start_at >= datetime('now', '-1 day')
+            ORDER BY start_at ASC
+            """,
+                        [str(env.GUILD_ID)],
+        ).fetchall()
+
+        for row in rows:
+            server_id = int(row["server_id"])
+            author_id_raw = row["author_id"]
+            author_id = int(author_id_raw) if author_id_raw else None
+            thread_id = int(row["thread_id"])
             try:
                 guild = await discord.utils.get_or_fetch(self.bot, "guild", server_id)
-                author = await discord.utils.get_or_fetch(guild, "member", author_id)
+                if not guild:
+                    link_log.error(f"Guild not found for https://discord.com/channels/{server_id}/{thread_id}")
+                    continue
+
+                author = None
+                if author_id:
+                    try:
+                        author = await discord.utils.get_or_fetch(guild, "member", author_id)
+                    except discord.NotFound:
+                        link_log.warning(
+                            f"Author not found in guild for https://discord.com/channels/{server_id}/{thread_id} author <@{author_id}>; using fallback"
+                        )
+
                 paper_event = pe_common.PaperEvent(guild, author)
-                thread:discord.Thread = await discord.utils.get_or_fetch(guild, "channel", thread_id)
+
+                try:
+                    thread:discord.Thread = await discord.utils.get_or_fetch(guild, "channel", thread_id)
+                except discord.NotFound:
+                    link_log.warning(f"Thread not found while reconnecting view: https://discord.com/channels/{server_id}/{thread_id}")
+                    continue
+
                 paper_event.thread = thread
+                paper_event.fill_fields_from_db_row(row)
 
-                paper_event.fill_fields_from_notion_entry(event)
+                try:
+                    message: discord.Message = await thread.fetch_message(thread_id)
+                except discord.NotFound:
+                    link_log.warning(f"Starter message not found while reconnecting view: https://discord.com/channels/{server_id}/{thread_id}")
+                    continue
 
-                # thread does not have get_message method, so we need to fetch the message
-                message:discord.Message = await thread.fetch_message(thread_id)
                 view = pe_common.EditPostView(paper_event)
-                
+
                 # Unarchive thread temporarily if needed to edit the message
-                was_archived = thread.archived
-                if was_archived:
+                if thread.archived:
                     await thread.edit(archived=False)
                     link_log.debug(f"Temporarily unarchived thread {thread_id} to edit message")
-                
-                await message.edit(view=view)
 
-            except discord.NotFound as e:
-                link_log.error(f"Gilde/Server oder Author/Servermitglied für https://discord.com/channels/{server_id}/{thread_id} wurde konnte nicht gefunden werden: {server_id}, Author <@{author_id}>")
+                await message.edit(view=view)
             except discord.errors.HTTPException as e:
                 if e.code == 50083:  # Thread is archived
                     link_log.warning(f"Thread {thread_id} is archived and could not be unarchived: {e}")
                 else:
                     link_log.error(f"HTTP error when editing message in thread {thread_id}: {e}")
-            # except Exception as e:
-            #     log.error(f"Error when trying to parse {event}: {e}")
+            except Exception as e:
+                link_log.error(f"Error reconnecting view for thread {thread_id}: {e}")
         log.debug(self.__class__.__name__ + " is ready")
 
     # Weitere Checks https://gist.github.com/Painezor/eb2519022cd2c907b56624105f94b190
@@ -159,27 +182,25 @@ class PaperEventSubmit(Cog):
     )
     async def poste_turnier(self, ctx:ApplicationContext):
         try:
-            user = ctx.author
-            embed = discord.Embed(image=SPIKE_ART_CROP, color=env.SPIKE_RED)
-            direct_message = await user.send(
-                content="# Lass uns zusammen eine Veranstaltung erstellen 💪",
-                embed=embed
-            )
-            
-            await ctx.send_response(f"Lass uns zusammen in den Direktnachrichten das Turnier erstellen: {direct_message.jump_url}", ephemeral=True)
-            await user.send(view=pe_common.EditTourneyView(pe_common.PaperEvent(ctx.guild, user)))
-        except discord.Forbidden:
-            await ctx.send_response("Ich konnte dich nicht direkt anschreiben! Bitte erlaube Direktnachrichten von Mitgliedern des Servers.", ephemeral=True)
+            if not ctx.guild:
+                await ctx.send_response("Dieser Befehl kann nur auf einem Server verwendet werden.", ephemeral=True)
+                return
 
-    @Cog.listener()
-    async def on_application_command_error(self, ctx:ApplicationContext, error):
-        log.exception("Command error occurred", exc_info=error)
-        try:
-            await ctx.respond(f"Es ist ein Fehler aufgetreten: ```{error}```", ephemeral=True)
-        except discord.errors.NotFound:
-            # Interaction expired, cannot respond
-            log.error("Could not respond to error - interaction expired")
-        raise error
+            user = ctx.author
+            paper_event = pe_common.PaperEvent(ctx.guild, user)
+            embed = discord.Embed(image=SPIKE_ART_CROP, color=env.SPIKE_RED)
+            await ctx.send_response(
+                content="# Lass uns zusammen eine Veranstaltung erstellen 💪",
+                embed=embed,
+                view=pe_common.EditTourneyView(paper_event),
+                ephemeral=True,
+            )
+        except Exception as e:
+            log.error(traceback.format_exc())
+            try:
+                await ctx.respond(f"Es ist ein Fehler aufgetreten: ```{repr(e)}```", ephemeral=True)
+            except discord.errors.NotFound:
+                log.error("Could not respond to error - interaction expired")
 
 
 def setup(bot:Bot):
