@@ -27,9 +27,22 @@ PAPER_EVENT_TYPES = [
     "FNM", "RCQ", "Regional Championship", "Game Day", "Prerelease",
     "Launch Party", "Store Championship", "Sunday Challenge", "Other",
 ]
+RECURRENCE_OPTIONS = [
+    "Keine",
+    "Wöchentlich",
+    "Alle 2 Wochen",
+    "Monatlich",
+]
+RECURRENCE_RULE_MAP = {
+    "Wöchentlich": "FREQ=WEEKLY;INTERVAL=1",
+    "Alle 2 Wochen": "FREQ=WEEKLY;INTERVAL=2",
+    "Monatlich": "FREQ=MONTHLY;INTERVAL=1",
+}
+RECURRENCE_LABEL_MAP = {value: key for key, value in RECURRENCE_RULE_MAP.items()}
 EVENT_SELECT_OPTIONS = {
     "Format(e)": PAPER_EVENT_FORMATS,
     "Event Typ": PAPER_EVENT_TYPES,
+    "Wiederholung": RECURRENCE_OPTIONS,
 }
 
 class FieldType:
@@ -109,6 +122,7 @@ class FieldName(Enum):
     START = "Start"
     LOCATION = "Veranstaltungsort"
     FORMATS = "Format(e)"
+    RECURRING = "Wiederholung"
     END = "Ende"
     FEE = "Teilnahmegebühr [in €]"
     DESCRIPTION = "Beschreibung / Freitext"
@@ -391,6 +405,8 @@ class EditPostView(discord.ui.View):
     async def confirm_callback(self, button:discord.ui.Button, interaction:discord.Interaction):
         if not interaction.user:
             return
+        if self.event.author is None and any(role.name == "Moderator" for role in interaction.user.roles):
+            self.event.author = interaction.user
         if self.event.author != interaction.user and not any(role.name == "Moderator" for role in interaction.user.roles):
             await interaction.response.send_message("Du bist nicht Author dieses Posts!", ephemeral=True)
             return
@@ -423,6 +439,7 @@ class PaperEvent():
             InputField(FieldName.DESCRIPTION, FIELD_TYPE_TEXT_LONG, icon="📜", description="Freitext"),
             InputField(FieldName.START, FIELD_TYPE_TIME, mandatory=True, icon="⏰", description="z.B. morgen um 17 Uhr, am 24.12.2025 um 12:00 Uhr, in 2 Stunden"),
             InputField(FieldName.END, FIELD_TYPE_TIME, icon="⏳", description="z.B. morgen um 22 Uhr, am 24.12.2025 um 18:00 Uhr, in 5 Stunden"),
+            InputField(FieldName.RECURRING, FIELD_TYPE_LIST, icon="🔁", description="Optional: Keine, Wöchentlich, Alle 2 Wochen, Monatlich", notion_column="Wiederholung"),
             InputField(FieldName.LOCATION, FIELD_TYPE_LOCATION, mandatory=True, icon="📍", description="Wo das Event/Turnier stattfindet"),
             InputField(FieldName.FEE, FIELD_TYPE_NUMBER, icon="💸"),
             InputField(FieldName.FORMATS, FieldType(parser=parse_list, max_items="max"), icon="🎮", description=f"Kommasepariert, welche(s) Format(e) gespielt wird/werden", mandatory=True, notion_column="Format(e)"),
@@ -458,6 +475,11 @@ class PaperEvent():
         self.fields[FieldName.FEE]._value = row["fee_eur"]
         formats_json = row["formats_json"]
         self.fields[FieldName.FORMATS]._value = json.loads(formats_json) if formats_json else None
+        recurrence_rule = row["recurrence_rule"]
+        if recurrence_rule:
+            recurrence_label = RECURRENCE_LABEL_MAP.get(recurrence_rule)
+            if recurrence_label:
+                self.fields[FieldName.RECURRING]._value = [recurrence_label]
         event_type = row["event_type"]
         self.fields[FieldName.TYPE]._value = [event_type] if event_type else None
         self.fields[FieldName.URL]._value = row["url"]
@@ -477,11 +499,15 @@ class PaperEvent():
         start = self.fields[FieldName.START].value
         end = self.fields[FieldName.END].value
         event_type_list = self.fields[FieldName.TYPE].value
+        recurrence_list = self.fields[FieldName.RECURRING].value
+        recurrence_label = recurrence_list[0] if recurrence_list else None
+        recurrence_rule = RECURRENCE_RULE_MAP.get(recurrence_label)
+        is_recurring = 1 if recurrence_rule else 0
         event_data = {
             "server_id": str(self.guild.id),
             "thread_id": str(self.thread.id) if self.thread else None,
-            "author_id": str(self.author.id),
-            "author_name": self.author.display_name or self.author.name,
+            "author_id": str(self.author.id) if self.author else None,
+            "author_name": (self.author.display_name or self.author.name) if self.author else None,
             "title": self.build_title(),
             "description": self.fields[FieldName.DESCRIPTION].value or None,
             "start_at": start.isoformat() if start else None,
@@ -492,6 +518,8 @@ class PaperEvent():
             "fee_eur": self.fields[FieldName.FEE].value,
             "formats": self.fields[FieldName.FORMATS].value or [],
             "event_type": event_type_list[0] if event_type_list else None,
+            "is_recurring": is_recurring,
+            "recurrence_rule": recurrence_rule,
             "url": self.fields[FieldName.URL].value,
             "image_url": self.fields[FieldName.IMAGE].value,
         }
@@ -541,7 +569,7 @@ class PaperEvent():
             content += f"# {self.construct_thread_title()}\n"
         if description:
             content += description
-        if not preview:
+        if not preview and self.author:
             content += f"\n\nDanke an {self.author.mention} für's Posten!"
         return content
 
@@ -598,6 +626,10 @@ class PaperEvent():
         type = event_type_list[0] if event_type_list else None # f"<{FieldName.TYPE.value}>"
         if type:
             embed.add_field(name=FieldName.TYPE.value, value=type, inline=True)
+        recurrence_list = self.fields[FieldName.RECURRING].value
+        recurrence = recurrence_list[0] if recurrence_list else None
+        if recurrence and recurrence != "Keine":
+            embed.add_field(name=FieldName.RECURRING.value, value=recurrence, inline=True)
         return embed
 
     async def create_and_send_thread(self, channel:discord.ForumChannel):

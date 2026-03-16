@@ -74,6 +74,7 @@ def init_db(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_paper_events_server_start ON paper_events(server_id, start_at);
         CREATE INDEX IF NOT EXISTS idx_paper_events_thread_id ON paper_events(thread_id);
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_paper_events_server_thread ON paper_events(server_id, thread_id);
         CREATE INDEX IF NOT EXISTS idx_paper_events_parent_template ON paper_events(parent_template_id);
         """
     )
@@ -138,7 +139,7 @@ def list_upcoming_events(
         WHERE server_id = ?
           AND start_at >= ?
           AND start_at <= ?
-          AND (is_generated = 1 OR is_recurring = 0)
+                    AND (is_generated = 1 OR is_recurring = 0 OR thread_id IS NOT NULL)
         ORDER BY start_at ASC
         """,
         (

@@ -85,6 +85,34 @@ def _get_formula(entry: notion.Entry, name: str) -> str | None:
     return str(value) if value else None
 
 
+def _normalize_discord_user_id(value: str | int | float | None) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        if value.is_integer():
+            return str(int(value))
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    # Handle mention-like formats: <@123>, <@!123>
+    if text.startswith("<@") and text.endswith(">"):
+        text = text[2:-1].lstrip("!")
+    return text if text.isdigit() else None
+
+
+def _get_author_id(entry: notion.Entry) -> str | None:
+    text_value = _get_text(entry, "Author ID")
+    author_id = _normalize_discord_user_id(text_value)
+    if author_id:
+        return author_id
+
+    number_value = _get_number(entry, "Author ID")
+    return _normalize_discord_user_id(number_value)
+
+
 def _build_title(entry: notion.Entry) -> str | None:
     title = _get_text(entry, "Event Titel")
     if title:
@@ -149,6 +177,7 @@ def _map_entry_to_row(entry: notion.Entry, *, default_server_id: str | None) -> 
     return {
         "server_id": str(server_id),
         "thread_id": thread_id,
+        "author_id": _get_author_id(entry),
         "author_name": _get_text(entry, "Author"),
         "title": title,
         "description": _get_text(entry, "Freitext"),
@@ -177,6 +206,8 @@ def _upsert_by_occurrence_key(conn, row: dict[str, Any]) -> str:
     ).fetchone()
 
     payload = dict(row)
+    payload.pop("for_test", None)
+    payload.pop("deleted_at", None)
     payload["formats_json"] = json.dumps(payload.pop("formats", []), ensure_ascii=True)
 
     if existing:
@@ -229,6 +260,9 @@ def main() -> int:
                 stats.skipped += 1
                 print(f"skip {entry.id}: missing required fields")
                 continue
+
+            if not row.get("author_id"):
+                print(f"warn {entry.id}: missing Author ID for '{row['title']}'")
 
             if args.dry_run:
                 stats.inserted += 1
