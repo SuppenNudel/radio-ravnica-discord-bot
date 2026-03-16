@@ -158,6 +158,8 @@ class FinishTournamentView(discord.ui.View):
         if winner:
             content = f"🎉 Das Turnier ist abgeschlossen! 🎉\nHerzlichen Glückwunsch an <@{winner.player_id}> für den großartigen Sieg! 🏆\nVielen Dank an alle Teilnehmer für ein spannendes und unterhaltsames Turnier! 🎊"
 
+            await interaction.response.defer()
+
             # Remove views from the last round pairings and standings messages
             current_round = self.tournament.swiss_tournament.current_round()
             pairings_message = await self.tournament.get_message(current_round.message_id_pairings)
@@ -181,7 +183,7 @@ class FinishTournamentView(discord.ui.View):
                 await standings_message.edit(view=submit_deck_view)
 
 
-            await interaction.response.send_message(content, ephemeral=False)
+            await interaction.followup.send(content, ephemeral=False)
             link_log.info(f"Turnier abgeschlossen: `{self.tournament.title}`, Gewinner: <@{winner.player_id}>")
             await self.tournament.save_tournament()
             
