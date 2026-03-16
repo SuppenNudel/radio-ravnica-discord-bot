@@ -2,13 +2,12 @@ from ezcord import Cog, log
 import discord
 from discord.ext.commands import slash_command
 from discord import ApplicationContext, Bot, Embed, Color
-from modules import gmaps, notion, env
+from modules import gmaps, env, paper_events_db
+from datetime import datetime
 import os
 from discord.utils import format_dt
 
 gmaps_token = os.getenv("GMAPS_TOKEN")
-
-DB_PAPER_EVENTS_ID = "f05d532cf91f4f9cbce38e27dc85b522"
 
 class PaperEventsRequest(Cog):
     def __init__(self, bot:Bot):
@@ -19,27 +18,27 @@ class PaperEventsRequest(Cog):
         log.debug(self.__class__.__name__ + " is ready")
         
     def get_paper_events(self, plz, land):
-        filter = (
-            notion.NotionFilterBuilder()
-            .add_checkbox_filter("For Test", notion.CheckboxCondition.EQUALS, False)
-            .add_number_filter("in ~ Tagen", notion.NumberCondition.GREATER_THAN, 0)
-            .build())
+        conn = paper_events_db.connect()
+        paper_events_db.init_db(conn)
+        events_list = paper_events_db.list_upcoming_events(
+            conn, server_id=str(env.GUILD_ID)
+        )
 
         events = {}
-
-        all_entries = notion.get_all_entries(DB_PAPER_EVENTS_ID, filter=filter)
         destinations = []
-        for entry in all_entries:
-            address = entry.get_formula_property("Google Maps")
-            events[entry.id] = {
+        for row in events_list:
+            address = row.location_address or f"{row.location_name or ''} {row.location_city or ''}".strip()
+            events[row.id] = {
                 "address": address,
-                "entry": entry
+                "row": row,
             }
             destinations.append(address)
 
+        if not destinations:
+            return events
+
         results = gmaps.get_distances(f"{plz} {land if land else ''}", destinations)
 
-        # Attach distance and duration values to the events
         for address, data in results.items():
             for event_id, event in events.items():
                 if event["address"] == address:
@@ -55,14 +54,14 @@ class PaperEventsRequest(Cog):
 
         # Add each event to the table
         for event in events.values():
-            entry = event["entry"]
-            row = [
-                entry.get_text_property("Event Titel"),
+            row: paper_events_db.EventRow = event["row"]
+            table_row = [
+                row.title,
                 event["address"],
                 event["distance"]["text"],
-                event["duration"]["text"]
+                event["duration"]["text"],
             ]
-            table.append(row)
+            table.append(table_row)
 
         # Calculate column widths
         col_widths = [max(len(str(item)) for item in col) for col in zip(*table)]
@@ -80,20 +79,16 @@ class PaperEventsRequest(Cog):
         embeds = []
 
         for event in events.values():
-            entry = event["entry"]
-            title = entry.get_text_property("Event Titel")
+            row: paper_events_db.EventRow = event["row"]
+            title = row.title
             address = event["address"]
-            date = entry.get_date_property("Start (und Ende)")
+            start_datetime = datetime.fromisoformat(row.start_at)
             distance = event["distance"]["text"]
             duration = event["duration"]["text"]
 
-            start_datetime = date['start']
-
             start = f"{format_dt(start_datetime, style='F')}\n{format_dt(start_datetime, style='R')}"
 
-            entry:notion.Entry = event["entry"]
-            url = entry.get_formula_property("Link")
-            embed = Embed(title=title, color=env.RR_GREEN, url=url)
+            embed = Embed(title=title, color=env.RR_GREEN, url=row.url)
             embed.add_field(name="Start", value=start, inline=False)
             embed.add_field(name="Adresse", value=address, inline=False)
             embed.add_field(name="Entfernung", value=distance, inline=True)

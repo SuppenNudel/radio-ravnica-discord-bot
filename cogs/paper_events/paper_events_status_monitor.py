@@ -3,8 +3,7 @@ import discord
 from ezcord import Cog
 from discord import Bot
 from ezcord import log
-import modules.notion as notion
-from modules import env
+from modules import env, paper_events_db
 from modules.paper_events_calendar import update_paper_events_calendar
 from datetime import datetime, timedelta, time
 import os
@@ -25,7 +24,6 @@ else:
 
 CHANNEL_PAPER_EVENTS_ID = os.getenv("CHANNEL_PAPER_EVENTS")
 DEBUG = get_bool_from_env("DEBUG")
-DB_PAPER_EVENTS_ID = "f05d532cf91f4f9cbce38e27dc85b522"
 
 # Global registry to track active timers
 _active_timers: dict[int, dict[str, asyncio.Task]] = {}
@@ -71,37 +69,41 @@ class PaperEventsStatusMonitor(Cog):
         """Restore timers for all existing events on bot startup."""
         if not self.guild:
             return
-            
-        filter_builder = (
-            notion.NotionFilterBuilder()
-            .add_checkbox_filter("For Test", notion.CheckboxCondition.EQUALS, DEBUG)
-            .add_text_filter("Thread ID", notion.TextCondition.IS_NOT_EMPTY, True)
-        )
-        entries = notion.get_all_entries(
-            database_id=DB_PAPER_EVENTS_ID,
-            filter=filter_builder.build()
-        )
-        
-        for entry in entries:
-            date = entry.get_date_property('Start (und Ende)')
-            event_start: datetime = date['start']
-            event_end: datetime = date['end']
-            thread_id_str = entry.get_text_property("Thread ID")
-            
+
+        conn = paper_events_db.connect()
+        paper_events_db.init_db(conn)
+        rows = conn.execute(
+            """
+            SELECT thread_id, start_at, end_at
+            FROM paper_events
+            WHERE thread_id IS NOT NULL
+                            AND server_id = ?
+            ORDER BY start_at ASC
+            """,
+                        [str(self.guild.id)],
+        ).fetchall()
+
+        for row in rows:
+            thread_id_str = row["thread_id"]
             if not thread_id_str:
                 continue
-                
             thread_id = int(thread_id_str)
-            
-            # Check if thread still exists
+
             try:
                 thread = await self.guild.fetch_channel(thread_id)
                 if not isinstance(thread, discord.Thread):
                     continue
             except (discord.errors.NotFound, discord.errors.Forbidden):
                 continue
-            
-            # Schedule timers for this event
+
+            start_str = row["start_at"]
+            end_str = row["end_at"]
+            event_start = datetime.fromisoformat(start_str) if start_str else None
+            event_end = datetime.fromisoformat(end_str) if end_str else None
+
+            if not event_start:
+                continue
+
             await schedule_event_timers(self.bot, self.guild, thread_id, event_start, event_end)
 
     async def _archive_thread(self, thread_id: int):
@@ -142,6 +144,15 @@ class PaperEventsStatusMonitor(Cog):
         except Exception as e:
             log.error(f"Error deleting thread {thread_id}: {e}")
         finally:
+            # Delete the database entry
+            try:
+                conn = paper_events_db.connect()
+                deleted = paper_events_db.delete_event_by_thread_id(conn, thread_id)
+                conn.close()
+                if deleted:
+                    log.debug(f"Deleted DB entry for thread {thread_id}")
+            except Exception as e:
+                log.error(f"Error deleting DB entry for thread {thread_id}: {e}")
             # Clean up timer references
             if thread_id in _active_timers:
                 del _active_timers[thread_id]
