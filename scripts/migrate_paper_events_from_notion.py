@@ -148,7 +148,9 @@ def _ensure_aware(value: datetime, fallback_tz: tzinfo) -> datetime:
 def _normalize_datetime(value: datetime | None, *, fallback_tz: tzinfo) -> str | None:
     if value is None:
         return None
-    return _ensure_aware(value, fallback_tz).isoformat()
+    aware_value = _ensure_aware(value, fallback_tz)
+    transposed_value = aware_value.astimezone(env.TIMEZONE)
+    return transposed_value.isoformat()
 
 
 def _utc_now_iso() -> str:
@@ -183,7 +185,6 @@ def _map_entry_to_row(entry: notion.Entry, *, default_server_id: str | None) -> 
         "description": _get_text(entry, "Freitext"),
         "start_at": start_at,
         "end_at": _normalize_datetime(date_data["end"], fallback_tz=event_timezone) if date_data else None,
-        "timezone": (date_data or {}).get("tz") or str(event_timezone),
         "location_name": _get_text(entry, "Name des Ladens"),
         "location_address": location_formula if location_formula and not location_formula.startswith("http") else None,
         "location_city": _get_text(entry, "Stadt"),
@@ -208,6 +209,7 @@ def _upsert_by_occurrence_key(conn, row: dict[str, Any]) -> str:
     payload = dict(row)
     payload.pop("for_test", None)
     payload.pop("deleted_at", None)
+    payload.pop("timezone", None)
     payload["formats_json"] = json.dumps(payload.pop("formats", []), ensure_ascii=True)
 
     if existing:

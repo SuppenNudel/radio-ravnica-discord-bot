@@ -1,4 +1,7 @@
+import asyncio
+import subprocess
 from datetime import datetime, timedelta
+from pathlib import Path
 import hashlib
 import discord
 from discord.utils import format_dt
@@ -8,6 +11,7 @@ from modules.util.generate_paper_events_calendar import generate_paper_events_ca
 
 # Grace period for showing past events (24 hours)
 PAST_EVENT_GRACE_PERIOD = timedelta(hours=24)
+MAX_CALENDAR_ITEMS = 8
 
 
 class PaperEventCalendarItem:
@@ -61,6 +65,8 @@ def _build_calendar_items(guild: discord.Guild) -> list[PaperEventCalendarItem]:
             start = _normalize_dt(datetime.fromisoformat(start_raw))
         except Exception:
             continue
+        if start is None:
+            continue
 
         end_raw = row["end_at"]
         end = start
@@ -103,8 +109,9 @@ def _build_calendar_message(items: list[PaperEventCalendarItem]) -> str:
         msg += "> _Keine kommenden Events._"
         return msg
 
+    visible_items = items[:MAX_CALENDAR_ITEMS]
     msg += "### \ud83d\udcc5 Kommende Events\n"
-    for item in items:
+    for item in visible_items:
         if item.url:
             line = f"> 🏠 **[{item.title}]({item.url})**"
         else:
@@ -123,10 +130,85 @@ def _build_calendar_message(items: list[PaperEventCalendarItem]) -> str:
             msg += f"> \u23f3 Ende: {end_text}\n"
         msg += "\n"
 
+    remaining_count = len(items) - len(visible_items)
+    if remaining_count > 0:
+        msg += f"> _… und {remaining_count} weitere kommende Events._\n"
+
     return msg
 
 
+async def _export_events_json_and_push(guild: discord.Guild) -> None:
+    """Export events.json to the paper-events repo and git commit+push."""
+    repo_path_str = env.PAPER_EVENTS_EXPORT_REPO_PATH
+    if not repo_path_str:
+        return
+
+    repo_path = Path(repo_path_str)
+    if not repo_path.is_dir():
+        log.warning(f"PAPER_EVENTS_EXPORT_REPO_PATH '{repo_path}' does not exist; skipping events.json export")
+        return
+
+    output_path = repo_path / "data" / "events.json"
+
+    conn = paper_events_db.connect()
+    paper_events_db.init_db(conn)
+    try:
+        paper_events_db.export_public_events_json(
+            conn,
+            output_path=output_path,
+            server_id=str(guild.id),
+        )
+    except Exception as e:
+        log.error(f"Failed to export events.json: {e}")
+        return
+
+    def _git_commit_push() -> str | None:
+        r = subprocess.run(
+            ["git", "add", str(output_path.relative_to(repo_path))],
+            cwd=str(repo_path),
+            capture_output=True,
+            text=True,
+        )
+        if r.returncode != 0:
+            return f"git add failed: {r.stderr.strip()}"
+
+        r = subprocess.run(
+            ["git", "commit", "-m", "Update events.json"],
+            cwd=str(repo_path),
+            capture_output=True,
+            text=True,
+        )
+        if r.returncode != 0:
+            # "nothing to commit" is not an error
+            combined = (r.stdout + r.stderr).lower()
+            if "nothing to commit" in combined:
+                return None
+            return f"git commit failed: {r.stderr.strip()}"
+
+        r = subprocess.run(
+            ["git", "push"],
+            cwd=str(repo_path),
+            capture_output=True,
+            text=True,
+        )
+        if r.returncode != 0:
+            return f"git push failed: {r.stderr.strip()}"
+
+        return None
+
+    try:
+        err = await asyncio.to_thread(_git_commit_push)
+        if err:
+            log.error(f"Failed to push events.json: {err}")
+        else:
+            log.info(f"Pushed updated events.json to {repo_path_str}")
+    except Exception as e:
+        log.error(f"Unexpected error during events.json git push: {e}")
+
+
 async def update_paper_events_calendar(bot: discord.Bot, guild: discord.Guild):
+    await _export_events_json_and_push(guild)
+
     if not env.PAPER_EVENTS_CALENDAR_CHANNEL_ID:
         log.warning("PAPER_EVENTS_CALENDAR_CHANNEL_ID not set; skipping paper events calendar update")
         return

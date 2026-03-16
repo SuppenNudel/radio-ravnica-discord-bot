@@ -64,18 +64,14 @@ def init_db(conn: sqlite3.Connection) -> None:
             recurrence_rule TEXT,
             recurrence_until TEXT,
             recurrence_count INTEGER,
-            parent_template_id INTEGER,
-            occurrence_key TEXT UNIQUE,
             is_generated INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-            FOREIGN KEY(parent_template_id) REFERENCES paper_events(id)
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
 
         CREATE INDEX IF NOT EXISTS idx_paper_events_server_start ON paper_events(server_id, start_at);
         CREATE INDEX IF NOT EXISTS idx_paper_events_thread_id ON paper_events(thread_id);
         CREATE UNIQUE INDEX IF NOT EXISTS ux_paper_events_server_thread ON paper_events(server_id, thread_id);
-        CREATE INDEX IF NOT EXISTS idx_paper_events_parent_template ON paper_events(parent_template_id);
         """
     )
     conn.commit()
@@ -172,13 +168,14 @@ def list_upcoming_events(
 
 
 def delete_event_by_thread_id(conn: sqlite3.Connection, thread_id: int | str) -> int:
-    """Hard-delete a paper event row by thread_id. Returns number of rows deleted."""
+    """Hard-delete a paper event row by thread_id."""
     cursor = conn.execute(
         "DELETE FROM paper_events WHERE thread_id = ?",
         (str(thread_id),),
     )
+    deleted_rows = cursor.rowcount
     conn.commit()
-    return cursor.rowcount
+    return deleted_rows
 
 
 def export_public_events_json(

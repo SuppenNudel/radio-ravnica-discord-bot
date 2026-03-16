@@ -2,7 +2,7 @@ import discord
 from datetime import datetime
 from typing import Literal, Optional
 import discord
-from modules import gmaps, env, ics
+from modules import gmaps, env, ics, paper_events_db
 from modules.paper_events_calendar import update_paper_events_calendar
 from enum import Enum
 import json
@@ -11,6 +11,12 @@ import json
 def _get_schedule_function():
     from cogs.paper_events.paper_events_status_monitor import schedule_event_timers
     return schedule_event_timers
+
+
+def _get_recurring_propagation_function():
+    from cogs.paper_events.paper_events_status_monitor import propagate_recurring_edits
+    return propagate_recurring_edits
+
 from modules import date_time_interpretation as dti
 import re
 import textwrap
@@ -33,7 +39,11 @@ RECURRENCE_OPTIONS = [
     "Alle 2 Wochen",
     "Monatlich",
 ]
+if DEBUG:
+    RECURRENCE_OPTIONS.insert(1, "1 Minute (Test)")
+
 RECURRENCE_RULE_MAP = {
+    "1 Minute (Test)": "FREQ=MINUTELY;INTERVAL=1",
     "Wöchentlich": "FREQ=WEEKLY;INTERVAL=1",
     "Alle 2 Wochen": "FREQ=WEEKLY;INTERVAL=2",
     "Monatlich": "FREQ=MONTHLY;INTERVAL=1",
@@ -123,6 +133,8 @@ class FieldName(Enum):
     LOCATION = "Veranstaltungsort"
     FORMATS = "Format(e)"
     RECURRING = "Wiederholung"
+    RECURRING_UNTIL = "Wiederholung bis"
+    RECURRING_COUNT = "Weitere Termine"
     END = "Ende"
     FEE = "Teilnahmegebühr [in €]"
     DESCRIPTION = "Beschreibung / Freitext"
@@ -320,9 +332,11 @@ class SubmitButton(discord.ui.Button):
 
             # Reschedule timers for the edited event
             schedule_fn = _get_schedule_function()
+            propagate_fn = _get_recurring_propagation_function()
             start = self.event.fields[FieldName.START].value
             end = self.event.fields[FieldName.END].value
             await schedule_fn(interaction.client, self.event.guild, self.event.thread.id, start, end)
+            await propagate_fn(interaction.client, self.event.guild, self.event.thread.id)
 
             await interaction.edit_original_response(
                 content=f"Post wurde bearbeitet:\n{message.jump_url}",
@@ -394,7 +408,11 @@ class EditTourneyView(discord.ui.View):
         )
     
     async def on_timeout(self):
-        await self.message.edit(view=None)
+        try:
+            await self.message.edit(view=None)
+        except discord.NotFound:
+            # Message was deleted, nothing to do
+            pass
     
 class EditPostView(discord.ui.View):
     def __init__(self, event:"PaperEvent"):
@@ -439,7 +457,9 @@ class PaperEvent():
             InputField(FieldName.DESCRIPTION, FIELD_TYPE_TEXT_LONG, icon="📜", description="Freitext"),
             InputField(FieldName.START, FIELD_TYPE_TIME, mandatory=True, icon="⏰", description="z.B. morgen um 17 Uhr, am 24.12.2025 um 12:00 Uhr, in 2 Stunden"),
             InputField(FieldName.END, FIELD_TYPE_TIME, icon="⏳", description="z.B. morgen um 22 Uhr, am 24.12.2025 um 18:00 Uhr, in 5 Stunden"),
-            InputField(FieldName.RECURRING, FIELD_TYPE_LIST, icon="🔁", description="Optional: Keine, Wöchentlich, Alle 2 Wochen, Monatlich", notion_column="Wiederholung"),
+            InputField(FieldName.RECURRING, FIELD_TYPE_LIST, icon="🔁", description="Optional: Keine, 1 Minute (Test), Wöchentlich, Alle 2 Wochen, Monatlich", notion_column="Wiederholung"),
+            InputField(FieldName.RECURRING_UNTIL, FIELD_TYPE_TIME, icon="📅", description="Optional: Letzter erlaubter Termin der Wiederholung"),
+            InputField(FieldName.RECURRING_COUNT, FIELD_TYPE_NUMBER, icon="🔢", description="Optional: Wie viele weitere Termine nach diesem noch folgen sollen"),
             InputField(FieldName.LOCATION, FIELD_TYPE_LOCATION, mandatory=True, icon="📍", description="Wo das Event/Turnier stattfindet"),
             InputField(FieldName.FEE, FIELD_TYPE_NUMBER, icon="💸"),
             InputField(FieldName.FORMATS, FieldType(parser=parse_list, max_items="max"), icon="🎮", description=f"Kommasepariert, welche(s) Format(e) gespielt wird/werden", mandatory=True, notion_column="Format(e)"),
@@ -448,6 +468,34 @@ class PaperEvent():
             InputField(FieldName.IMAGE, FIELD_TYPE_IMAGE, icon="🖼️", description="Repräsentiert die Veranstaltung. Wenn nicht angegeben: Versuch Bild aus Link"),
         ]
         self.fields:dict[FieldName, InputField] = {field.name: field for field in field_list}
+
+    def _build_recurrence_status_text(self) -> str | None:
+        recurrence_list = self.fields[FieldName.RECURRING].value
+        recurrence = recurrence_list[0] if recurrence_list else None
+        if not recurrence or recurrence == "Keine":
+            return None
+
+        recurrence_until = self.fields[FieldName.RECURRING_UNTIL].value
+        recurrence_count_raw = self.fields[FieldName.RECURRING_COUNT].value
+
+        lines: list[str] = []
+
+        if recurrence_count_raw:
+            try:
+                recurrence_count = int(recurrence_count_raw)
+            except Exception:
+                recurrence_count = None
+
+            if recurrence_count is not None:
+                suffix = "Termin" if recurrence_count == 1 else "Termine"
+                lines.append(f"Noch {recurrence_count} weitere {suffix}")
+
+        if recurrence_until:
+            lines.append(f"Bis {discord.utils.format_dt(recurrence_until, 'f')}")
+
+        if not lines:
+            return None
+        return "\n".join(lines)
     
     def fill_fields_from_db_row(self, row):
         """Populate fields from a SQLite row."""
@@ -480,6 +528,13 @@ class PaperEvent():
             recurrence_label = RECURRENCE_LABEL_MAP.get(recurrence_rule)
             if recurrence_label:
                 self.fields[FieldName.RECURRING]._value = [recurrence_label]
+        recurrence_until = row["recurrence_until"]
+        if recurrence_until:
+            try:
+                self.fields[FieldName.RECURRING_UNTIL]._value = datetime.fromisoformat(recurrence_until)
+            except Exception:
+                pass
+        self.fields[FieldName.RECURRING_COUNT]._value = row["recurrence_count"]
         event_type = row["event_type"]
         self.fields[FieldName.TYPE]._value = [event_type] if event_type else None
         self.fields[FieldName.URL]._value = row["url"]
@@ -503,6 +558,8 @@ class PaperEvent():
         recurrence_label = recurrence_list[0] if recurrence_list else None
         recurrence_rule = RECURRENCE_RULE_MAP.get(recurrence_label)
         is_recurring = 1 if recurrence_rule else 0
+        recurrence_until = self.fields[FieldName.RECURRING_UNTIL].value if is_recurring else None
+        recurrence_count = self.fields[FieldName.RECURRING_COUNT].value if is_recurring else None
         event_data = {
             "server_id": str(self.guild.id),
             "thread_id": str(self.thread.id) if self.thread else None,
@@ -520,6 +577,8 @@ class PaperEvent():
             "event_type": event_type_list[0] if event_type_list else None,
             "is_recurring": is_recurring,
             "recurrence_rule": recurrence_rule,
+            "recurrence_until": recurrence_until.isoformat() if recurrence_until else None,
+            "recurrence_count": recurrence_count,
             "url": self.fields[FieldName.URL].value,
             "image_url": self.fields[FieldName.IMAGE].value,
         }
@@ -630,6 +689,15 @@ class PaperEvent():
         recurrence = recurrence_list[0] if recurrence_list else None
         if recurrence and recurrence != "Keine":
             embed.add_field(name=FieldName.RECURRING.value, value=recurrence, inline=True)
+        recurrence_until = self.fields[FieldName.RECURRING_UNTIL].value
+        if recurrence_until:
+            embed.add_field(name=FieldName.RECURRING_UNTIL.value, value=discord.utils.format_dt(recurrence_until, 'f'), inline=True)
+        recurrence_count = self.fields[FieldName.RECURRING_COUNT].value
+        if recurrence_count:
+            embed.add_field(name=FieldName.RECURRING_COUNT.value, value=str(recurrence_count), inline=True)
+        recurrence_status = self._build_recurrence_status_text()
+        if recurrence_status:
+            embed.add_field(name="Wiederholung Status", value=recurrence_status, inline=False)
         return embed
 
     async def create_and_send_thread(self, channel:discord.ForumChannel):
