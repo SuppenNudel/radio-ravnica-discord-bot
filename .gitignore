@@ -7,3 +7,5 @@ test_participants_8.txt
 hall_of_fame.json
 tournaments/
 *.env
+data/
+scripts/

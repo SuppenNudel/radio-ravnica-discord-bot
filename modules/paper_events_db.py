@@ -21,6 +21,9 @@ class EventRow:
     location_name: str | None
     location_address: str | None
     location_city: str | None
+    location_country: str | None
+    location_lat: float | None
+    location_lng: float | None
     event_type: str | None
     url: str | None
     image_url: str | None
@@ -49,10 +52,12 @@ def init_db(conn: sqlite3.Connection) -> None:
             description TEXT,
             start_at TEXT NOT NULL,
             end_at TEXT,
-            timezone TEXT,
             location_name TEXT,
             location_address TEXT,
             location_city TEXT,
+            location_country TEXT,
+            location_lat REAL,
+            location_lng REAL,
             location_state TEXT,
             location_url TEXT,
             fee_eur REAL,
@@ -74,6 +79,30 @@ def init_db(conn: sqlite3.Connection) -> None:
         CREATE UNIQUE INDEX IF NOT EXISTS ux_paper_events_server_thread ON paper_events(server_id, thread_id);
         """
     )
+
+    has_timezone_column = bool(
+        conn.execute(
+            "SELECT 1 FROM pragma_table_info('paper_events') WHERE name = 'timezone' LIMIT 1"
+        ).fetchone()
+    )
+    if has_timezone_column:
+        try:
+            conn.execute("ALTER TABLE paper_events DROP COLUMN timezone")
+        except sqlite3.OperationalError:
+            # Older SQLite versions may not support DROP COLUMN.
+            pass
+
+    existing_columns = {
+        str(row["name"])
+        for row in conn.execute("PRAGMA table_info('paper_events')").fetchall()
+    }
+    if "location_country" not in existing_columns:
+        conn.execute("ALTER TABLE paper_events ADD COLUMN location_country TEXT")
+    if "location_lat" not in existing_columns:
+        conn.execute("ALTER TABLE paper_events ADD COLUMN location_lat REAL")
+    if "location_lng" not in existing_columns:
+        conn.execute("ALTER TABLE paper_events ADD COLUMN location_lng REAL")
+
     conn.commit()
 
 
@@ -115,7 +144,7 @@ def upsert_event(conn: sqlite3.Connection, event: dict[str, Any]) -> int:
         values,
     )
     conn.commit()
-    return cursor.lastrowid
+    return int(cursor.lastrowid or 0)
 
 
 def list_upcoming_events(
@@ -158,6 +187,9 @@ def list_upcoming_events(
                 location_name=row["location_name"],
                 location_address=row["location_address"],
                 location_city=row["location_city"],
+                location_country=row["location_country"] if "location_country" in row.keys() else None,
+                location_lat=row["location_lat"] if "location_lat" in row.keys() else None,
+                location_lng=row["location_lng"] if "location_lng" in row.keys() else None,
                 event_type=row["event_type"],
                 url=row["url"],
                 image_url=row["image_url"],
@@ -168,7 +200,36 @@ def list_upcoming_events(
 
 
 def delete_event_by_thread_id(conn: sqlite3.Connection, thread_id: int | str) -> int:
-    """Hard-delete a paper event row by thread_id."""
+    """Hard-delete a paper event row by thread_id.
+
+    Handles legacy schemas that still contain parent_template_id FK links by
+    detaching children first, so events remain independent.
+    """
+    target_rows = conn.execute(
+        "SELECT id FROM paper_events WHERE thread_id = ?",
+        (str(thread_id),),
+    ).fetchall()
+    if not target_rows:
+        return 0
+
+    has_parent_template_id = bool(
+        conn.execute(
+            "SELECT 1 FROM pragma_table_info('paper_events') WHERE name = 'parent_template_id' LIMIT 1"
+        ).fetchone()
+    )
+
+    if has_parent_template_id:
+        for target_row in target_rows:
+            conn.execute(
+                """
+                UPDATE paper_events
+                SET parent_template_id = NULL,
+                    updated_at = datetime('now')
+                WHERE parent_template_id = ?
+                """,
+                (int(target_row["id"]),),
+            )
+
     cursor = conn.execute(
         "DELETE FROM paper_events WHERE thread_id = ?",
         (str(thread_id),),
@@ -208,6 +269,9 @@ def export_public_events_json(
                 "location_name": item.location_name,
                 "location_address": item.location_address,
                 "location_city": item.location_city,
+                "location_country": item.location_country,
+                "location_lat": item.location_lat,
+                "location_lng": item.location_lng,
                 "event_type": item.event_type,
                 "formats": item.formats,
                 "url": item.url,

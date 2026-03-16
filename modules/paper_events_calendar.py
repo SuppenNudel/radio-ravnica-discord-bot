@@ -1,6 +1,6 @@
 import asyncio
 import subprocess
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 import hashlib
 import discord
@@ -9,8 +9,6 @@ from ezcord import log
 from modules import env, paper_events_db
 from modules.util.generate_paper_events_calendar import generate_paper_events_calendar
 
-# Grace period for showing past events (24 hours)
-PAST_EVENT_GRACE_PERIOD = timedelta(hours=24)
 MAX_CALENDAR_ITEMS = 8
 
 
@@ -41,7 +39,6 @@ def _normalize_dt(value: datetime | None) -> datetime | None:
 
 def _build_calendar_items(guild: discord.Guild) -> list[PaperEventCalendarItem]:
     now = datetime.now(tz=env.TIMEZONE)
-    grace_cutoff = now - PAST_EVENT_GRACE_PERIOD
     items: list[PaperEventCalendarItem] = []
 
     conn = paper_events_db.connect()
@@ -78,8 +75,8 @@ def _build_calendar_items(guild: discord.Guild) -> list[PaperEventCalendarItem]:
             except Exception:
                 pass
 
-        # Show events that haven't ended yet, or ended within the grace period
-        if end < grace_cutoff:
+        # Only show events that start in the future
+        if start <= now:
             continue
 
         title = row["title"] or "Paper Event"

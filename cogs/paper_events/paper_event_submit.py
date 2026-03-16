@@ -127,13 +127,36 @@ class PaperEventSubmit(Cog):
             thread_id = int(row["thread_id"])
             try:
                 guild = await discord.utils.get_or_fetch(self.bot, "guild", server_id)
-                author = await discord.utils.get_or_fetch(guild, "member", author_id) if author_id else None
+                if not guild:
+                    link_log.error(f"Guild not found for https://discord.com/channels/{server_id}/{thread_id}")
+                    continue
+
+                author = None
+                if author_id:
+                    try:
+                        author = await discord.utils.get_or_fetch(guild, "member", author_id)
+                    except discord.NotFound:
+                        link_log.warning(
+                            f"Author not found in guild for https://discord.com/channels/{server_id}/{thread_id} author <@{author_id}>; using fallback"
+                        )
+
                 paper_event = pe_common.PaperEvent(guild, author)
-                thread:discord.Thread = await discord.utils.get_or_fetch(guild, "channel", thread_id)
+
+                try:
+                    thread:discord.Thread = await discord.utils.get_or_fetch(guild, "channel", thread_id)
+                except discord.NotFound:
+                    link_log.warning(f"Thread not found while reconnecting view: https://discord.com/channels/{server_id}/{thread_id}")
+                    continue
+
                 paper_event.thread = thread
                 paper_event.fill_fields_from_db_row(row)
 
-                message: discord.Message = await thread.fetch_message(thread_id)
+                try:
+                    message: discord.Message = await thread.fetch_message(thread_id)
+                except discord.NotFound:
+                    link_log.warning(f"Starter message not found while reconnecting view: https://discord.com/channels/{server_id}/{thread_id}")
+                    continue
+
                 view = pe_common.EditPostView(paper_event)
 
                 # Unarchive thread temporarily if needed to edit the message
@@ -142,9 +165,6 @@ class PaperEventSubmit(Cog):
                     link_log.debug(f"Temporarily unarchived thread {thread_id} to edit message")
 
                 await message.edit(view=view)
-
-            except discord.NotFound:
-                link_log.error(f"Guild/member not found for https://discord.com/channels/{server_id}/{thread_id} author <@{author_id}>")
             except discord.errors.HTTPException as e:
                 if e.code == 50083:  # Thread is archived
                     link_log.warning(f"Thread {thread_id} is archived and could not be unarchived: {e}")

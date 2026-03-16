@@ -394,6 +394,35 @@ class PaperEventsStatusMonitor(Cog):
                 log.info(f"Recurring series for thread {thread_id} reached recurrence_count {recurrence_count}")
                 return
 
+        # Skip creation when an occurrence for the same next interval already exists.
+        # This prevents duplicate posts after restarts when an older occurrence and a
+        # newer active occurrence overlap in the DB during timer restoration.
+        existing_next = conn.execute(
+            """
+            SELECT id, thread_id
+            FROM paper_events
+            WHERE server_id = ?
+              AND id != ?
+              AND start_at = ?
+              AND title = ?
+              AND (thread_id IS NOT NULL)
+            LIMIT 1
+            """,
+            (
+                str(self.guild.id),
+                int(row["id"]),
+                next_start.isoformat(),
+                row["title"],
+            ),
+        ).fetchone()
+        if existing_next:
+            conn.close()
+            log.info(
+                f"Recurring series for thread {thread_id} skipped: next interval already exists "
+                f"(event_id={existing_next['id']}, thread_id={existing_next['thread_id']})"
+            )
+            return
+
         conn.close()
 
         forum_channel = self.guild.get_channel(env.CHANNEL_PAPER_EVENTS_ID)
