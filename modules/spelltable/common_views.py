@@ -576,8 +576,14 @@ async def update_hall_of_fame(tournament: SpelltableTournament):
         for player in tournament.swiss_tournament.players:
             if not player.dropped:
                 match_record = player.get_match_results()
+                try:
+                    member = await tournament.get_member(player.player_id)
+                    username = member.display_name if member else str(player.player_id)
+                except Exception:
+                    username = str(player.player_id)
                 results.append({
                     "user_id": player.player_id,
+                    "username": username,
                     "placement": placement,
                     "match_record": match_record
                 })
