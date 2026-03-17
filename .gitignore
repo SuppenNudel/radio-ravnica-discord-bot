@@ -181,3 +181,7 @@ tournament_import_ui.py
 hall_of_fame/
 data/
 scripts/
+
+# Raspi deployment files (not shared to repo)
+deploy/
+.last_requirements_hash
