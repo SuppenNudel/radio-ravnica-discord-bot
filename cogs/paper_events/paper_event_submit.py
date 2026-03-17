@@ -190,7 +190,10 @@ class PaperEventSubmit(Cog):
             paper_event = pe_common.PaperEvent(ctx.guild, user)
             embed = discord.Embed(image=SPIKE_ART_CROP, color=env.SPIKE_RED)
             await ctx.send_response(
-                content="# Lass uns zusammen eine Veranstaltung erstellen 💪",
+                content=(
+                    "# Lass uns zusammen eine Veranstaltung erstellen 💪\n"
+                    "Mit * markierte Felder sind Pflichtfelder."
+                ),
                 embed=embed,
                 view=pe_common.EditTourneyView(paper_event),
                 ephemeral=True,

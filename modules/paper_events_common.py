@@ -31,7 +31,7 @@ PAPER_EVENT_FORMATS = [
 ]
 PAPER_EVENT_TYPES = [
     "FNM", "RCQ", "Regional Championship", "Game Day", "Prerelease",
-    "Launch Party", "Store Championship", "Sunday Challenge", "Other",
+    "Launch Party", "Store Championship", "Sunday Challenge", "Andere(r)",
 ]
 RECURRENCE_OPTIONS = [
     "Keine",
@@ -134,12 +134,12 @@ class FieldName(Enum):
     FORMATS = "Format(e)"
     RECURRING = "Wiederholung"
     RECURRING_UNTIL = "Wiederholung bis"
-    RECURRING_COUNT = "Weitere Termine"
+    RECURRING_COUNT = "Anzahl weiterer Termine"
     END = "Ende"
     FEE = "Teilnahmegebühr [in €]"
-    DESCRIPTION = "Beschreibung / Freitext"
-    URL = "URL / Link"
-    IMAGE = "Bild"
+    DESCRIPTION = "Beschreibung"
+    URL = "Link"
+    IMAGE = "Flugblatt/Bild"
 
 class InputField:
     def __init__(self, name: FieldName, field_type: FieldType, mandatory: bool = False, icon:str = None, description=None, notion_column=None):
@@ -281,6 +281,98 @@ class SelectFieldModal(discord.ui.DesignerModal):
         except Exception as e:
             await interaction.followup.send(str(e), ephemeral=True)
 
+class EditStartEndModal(discord.ui.Modal):
+    def __init__(self, event: "PaperEvent"):
+        super().__init__(title="Zeit (Start & Ende)")
+        self.event = event
+        self.start_field = event.fields[FieldName.START]
+        self.end_field = event.fields[FieldName.END]
+
+        start_value = str(self.start_field.value) if self.start_field.value else ""
+        end_value = str(self.end_field.value) if self.end_field.value else ""
+
+        self.start_input = discord.ui.InputText(
+            label=FieldName.START.value,
+            placeholder=self.start_field.description,
+            required=self.start_field.mandatory,
+            value=start_value,
+            style=discord.InputTextStyle.singleline,
+        )
+        self.end_input = discord.ui.InputText(
+            label=FieldName.END.value,
+            placeholder=self.end_field.description,
+            required=False,
+            value=end_value,
+            style=discord.InputTextStyle.singleline,
+        )
+
+        self.add_item(self.start_input)
+        self.add_item(self.end_input)
+
+    async def callback(self, interaction: discord.Interaction):
+        try:
+            await interaction.response.defer()
+            self.start_field.value = self.start_input.value
+            end_input = self.end_input.value.strip() if self.end_input.value else ""
+            self.end_field.value = end_input if end_input else None
+            await edit_event_post(self.event, interaction, EditTourneyView(self.event))
+        except Exception as e:
+            await interaction.followup.send(str(e), ephemeral=True)
+
+class EditRecurringModal(discord.ui.DesignerModal):
+    def __init__(self, event: "PaperEvent"):
+        super().__init__(title="Wiederholung")
+        self.event = event
+        self.recurring_field = event.fields[FieldName.RECURRING]
+        self.until_field = event.fields[FieldName.RECURRING_UNTIL]
+        self.count_field = event.fields[FieldName.RECURRING_COUNT]
+
+        current_recurrence = self.recurring_field.value if isinstance(self.recurring_field.value, list) else ([self.recurring_field.value] if self.recurring_field.value else [])
+        self.recurrence_select = discord.ui.StringSelect(
+            placeholder="Wähle Wiederholung...",
+            options=[discord.SelectOption(label=opt, value=opt, default=opt in current_recurrence) for opt in RECURRENCE_OPTIONS],
+            min_values=1,
+            max_values=1,
+        )
+
+        self.until_input = discord.ui.InputText(
+            placeholder=self.until_field.description,
+            required=False,
+            value=str(self.until_field.value) if self.until_field.value else "",
+            style=discord.InputTextStyle.singleline,
+        )
+        self.count_input = discord.ui.InputText(
+            placeholder=self.count_field.description,
+            required=False,
+            value=str(self.count_field.value) if self.count_field.value else "",
+            style=discord.InputTextStyle.singleline,
+        )
+
+        self.add_item(discord.ui.Label(FieldName.RECURRING.value, self.recurrence_select))
+        self.add_item(discord.ui.Label(FieldName.RECURRING_UNTIL.value, self.until_input))
+        self.add_item(discord.ui.Label(FieldName.RECURRING_COUNT.value, self.count_input))
+
+    async def callback(self, interaction: discord.Interaction):
+        try:
+            await interaction.response.defer()
+            selected_recurrence = self.recurrence_select.values
+            self.recurring_field.value = selected_recurrence
+
+            recurrence = selected_recurrence[0] if selected_recurrence else None
+            if not recurrence or recurrence == "Keine":
+                self.until_field._value = None
+                self.count_field._value = None
+            else:
+                until_val = self.until_input.value.strip() if self.until_input.value else ""
+                self.until_field.value = until_val if until_val else None
+
+                count_val = self.count_input.value.strip() if self.count_input.value else ""
+                self.count_field.value = count_val if count_val else None
+
+            await edit_event_post(self.event, interaction, EditTourneyView(self.event))
+        except Exception as e:
+            await interaction.followup.send(str(e), ephemeral=True)
+
 def make_callback(event, field:InputField):
     async def edit_field_callback(interaction:discord.Interaction):
         if field.notion_column:
@@ -316,60 +408,127 @@ class SubmitButton(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction):
         """Handles the submission when clicked."""
         await interaction.response.defer()
+        
+        # Remove the view immediately to prevent user interaction during processing
+        await interaction.edit_original_response(view=None)
+        
         orig_view:EditTourneyView = self.view
 
         # Ensure all mandatory fields are filled
         if not all(field.value for field in self.event.fields.values() if field.mandatory):
-            await interaction.edit_original_response(content="Not all mandatory fields are filled!", view=orig_view)
+            await interaction.edit_original_response(content="Not all mandatory fields are filled!", embeds=[], attachments=[])
             return
 
-        if self.event.thread:
-            # edit
-            message:discord.Message = await self.event.thread.fetch_message(self.event.thread.id)
-            self.event.save_to_db()
-            await edit_event_post(self.event, message, EditPostView(self.event))
-            await update_paper_events_calendar(interaction.client, self.event.guild)
+        try:
+            if self.event.thread:
+                # edit
+                message:discord.Message = await self.event.thread.fetch_message(self.event.thread.id)
+                self.event.save_to_db()
+                await edit_event_post(self.event, message, EditPostView(self.event))
+                await update_paper_events_calendar(interaction.client, self.event.guild)
 
-            # Reschedule timers for the edited event
-            schedule_fn = _get_schedule_function()
-            propagate_fn = _get_recurring_propagation_function()
-            start = self.event.fields[FieldName.START].value
-            end = self.event.fields[FieldName.END].value
-            await schedule_fn(interaction.client, self.event.guild, self.event.thread.id, start, end)
-            await propagate_fn(interaction.client, self.event.guild, self.event.thread.id)
+                # Reschedule timers for the edited event
+                schedule_fn = _get_schedule_function()
+                propagate_fn = _get_recurring_propagation_function()
+                start = self.event.fields[FieldName.START].value
+                end = self.event.fields[FieldName.END].value
+                await schedule_fn(interaction.client, self.event.guild, self.event.thread.id, start, end)
+                await propagate_fn(interaction.client, self.event.guild, self.event.thread.id)
 
+                await interaction.edit_original_response(
+                    content=f"Post wurde bearbeitet:\n{message.jump_url}",
+                    embeds=[],
+                    attachments=[]
+                )
+            else:
+                await orig_view.send_forum_post(interaction)
+        except Exception as e:
             await interaction.edit_original_response(
-                content=f"Post wurde bearbeitet:\n{message.jump_url}",
+                content=f"Fehler: {str(e)}",
                 embeds=[],
-                attachments=[],
-                view=None
+                attachments=[]
             )
-        else:
-            await orig_view.send_forum_post(interaction)
 
 class EditTourneyView(discord.ui.View):
     def __init__(self, event:"PaperEvent"):
         super().__init__(timeout=None)
         self.event = event
 
+        row_counts = {0: 0, 1: 0, 2: 0, 3: 0}
+        max_buttons_per_row = 5
+
+        def resolve_row(preferred_rows: list[int]) -> int:
+            for row in preferred_rows:
+                if row_counts[row] < max_buttons_per_row:
+                    return row
+            for row in [0, 1, 2, 3]:
+                if row_counts[row] < max_buttons_per_row:
+                    return row
+            return 3
+
+        def add_field_button(button: discord.ui.Button, preferred_rows: list[int]):
+            row = resolve_row(preferred_rows)
+            button.row = row
+            row_counts[row] += 1
+            self.add_item(button)
+
+        grouped_fields = {
+            FieldName.START,
+            FieldName.END,
+            FieldName.RECURRING,
+            FieldName.RECURRING_UNTIL,
+            FieldName.RECURRING_COUNT,
+        }
+
         for field_name, field in self.event.fields.items():
+            if field_name in grouped_fields:
+                continue
             label = field.name.value
-            if field.mandatory or (field_name in [FieldName.TITLE, FieldName.TYPE]
-                                   and not (self.event.fields[FieldName.TITLE].value or self.event.fields[FieldName.TYPE].value)
-                                   ):
+            is_starred = (
+                field.mandatory
+                or (
+                    field_name in [FieldName.TITLE, FieldName.TYPE]
+                    and not (self.event.fields[FieldName.TITLE].value or self.event.fields[FieldName.TYPE].value)
+                )
+            )
+            is_primary_row = field.mandatory or field_name in [FieldName.TITLE, FieldName.TYPE]
+            if is_starred:
                 label += "*"
             label += " "+field.status_emoji(self.event.fields)
             button = discord.ui.Button(label=label, emoji=field.icon)
             button.callback = make_callback(event, field)
-            self.add_item(button)
+            add_field_button(button, [0, 1] if is_primary_row else [1, 0])
+
+        start_field = self.event.fields[FieldName.START]
+        end_field = self.event.fields[FieldName.END]
+        start_end_label = f"{FieldName.START.value} & {FieldName.END.value}"
+        if start_field.mandatory:
+            start_end_label += "*"
+        start_end_label += " " + start_field.status_emoji(self.event.fields)
+        start_end_button = discord.ui.Button(label=start_end_label, emoji="⏰")
+
+        async def start_end_callback(interaction: discord.Interaction):
+            await interaction.response.send_modal(EditStartEndModal(self.event))
+
+        start_end_button.callback = start_end_callback
+        add_field_button(start_end_button, [0, 1])
+
+        recurring_button = discord.ui.Button(label="Wiederholung", emoji="🔁")
+
+        async def recurring_callback(interaction: discord.Interaction):
+            await interaction.response.send_modal(EditRecurringModal(self.event))
+
+        recurring_button.callback = recurring_callback
+        add_field_button(recurring_button, [1, 0])
 
         # Submit Button
         self.submit_button = SubmitButton(event)
+        self.submit_button.row = 4
         self.add_item(self.submit_button)
         self.add_cancel_button(self)
 
     def add_cancel_button(self, view: discord.ui.View):
-        cancel_button = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.red)
+        cancel_button = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.red, row=4)
 
         # Define the cancel button's behavior
         async def cancel_button_callback(interaction: discord.Interaction):
@@ -383,29 +542,35 @@ class EditTourneyView(discord.ui.View):
         view.add_item(cancel_button)
 
     async def send_forum_post(self, interaction:discord.Interaction):
-        guild = self.event.guild
-        forum_channel = await discord.utils.get_or_fetch(guild, "channel", CHANNEL_PAPER_EVENTS_ID, default=None)
+        try:
+            guild = self.event.guild
+            forum_channel = await discord.utils.get_or_fetch(guild, "channel", CHANNEL_PAPER_EVENTS_ID, default=None)
 
-        if not isinstance(forum_channel, discord.ForumChannel):
-            await interaction.edit_original_response(content="This is not a forum channel!", view=None)
-            return
-        
-        thread = await self.event.create_and_send_thread(forum_channel)
-        self.event.save_to_db()
-        await update_paper_events_calendar(interaction.client, self.event.guild)
+            if not isinstance(forum_channel, discord.ForumChannel):
+                await interaction.edit_original_response(content="This is not a forum channel!", embeds=[], attachments=[])
+                return
+            
+            thread = await self.event.create_and_send_thread(forum_channel)
+            self.event.save_to_db()
+            await update_paper_events_calendar(interaction.client, self.event.guild)
 
-        # Schedule timers for the new event
-        schedule_fn = _get_schedule_function()
-        start = self.event.fields[FieldName.START].value
-        end = self.event.fields[FieldName.END].value
-        await schedule_fn(interaction.client, self.event.guild, thread.id, start, end)
+            # Schedule timers for the new event
+            schedule_fn = _get_schedule_function()
+            start = self.event.fields[FieldName.START].value
+            end = self.event.fields[FieldName.END].value
+            await schedule_fn(interaction.client, self.event.guild, thread.id, start, end)
 
-        await interaction.edit_original_response(
-            content=f"Forum Post erstellt: {thread.jump_url}",
-            embeds=[],
-            attachments=[],
-            view=None,
-        )
+            await interaction.edit_original_response(
+                content=f"Event Post erstellt: {thread.jump_url}",
+                embeds=[],
+                attachments=[]
+            )
+        except Exception as e:
+            await interaction.edit_original_response(
+                content=f"Fehler beim Erstellen des Posts: {str(e)}",
+                embeds=[],
+                attachments=[]
+            )
     
     async def on_timeout(self):
         try:
@@ -457,15 +622,15 @@ class PaperEvent():
             InputField(FieldName.DESCRIPTION, FIELD_TYPE_TEXT_LONG, icon="📜", description="Freitext"),
             InputField(FieldName.START, FIELD_TYPE_TIME, mandatory=True, icon="⏰", description="z.B. morgen um 17 Uhr, am 24.12.2025 um 12:00 Uhr, in 2 Stunden"),
             InputField(FieldName.END, FIELD_TYPE_TIME, icon="⏳", description="z.B. morgen um 22 Uhr, am 24.12.2025 um 18:00 Uhr, in 5 Stunden"),
-            InputField(FieldName.RECURRING, FIELD_TYPE_LIST, icon="🔁", description="Optional: Keine, 1 Minute (Test), Wöchentlich, Alle 2 Wochen, Monatlich", notion_column="Wiederholung"),
-            InputField(FieldName.RECURRING_UNTIL, FIELD_TYPE_TIME, icon="📅", description="Optional: Letzter erlaubter Termin der Wiederholung"),
-            InputField(FieldName.RECURRING_COUNT, FIELD_TYPE_NUMBER, icon="🔢", description="Optional: Wie viele weitere Termine nach diesem noch folgen sollen"),
+            InputField(FieldName.RECURRING, FIELD_TYPE_LIST, icon="🔁", description="Optional", notion_column="Wiederholung"),
+            InputField(FieldName.RECURRING_UNTIL, FIELD_TYPE_TIME, icon="📅", description="z.B. am 24.12.2025 um 18:00 Uhr, in 5 Stunden"),
+            InputField(FieldName.RECURRING_COUNT, FIELD_TYPE_NUMBER, icon="🔢", description="eine Ganzzahl, wie 3, 4, 5 etc"),
             InputField(FieldName.LOCATION, FIELD_TYPE_LOCATION, mandatory=True, icon="📍", description="Wo das Event/Turnier stattfindet"),
             InputField(FieldName.FEE, FIELD_TYPE_NUMBER, icon="💸"),
             InputField(FieldName.FORMATS, FieldType(parser=parse_list, max_items="max"), icon="🎮", description=f"Kommasepariert, welche(s) Format(e) gespielt wird/werden", mandatory=True, notion_column="Format(e)"),
             InputField(FieldName.TYPE, FIELD_TYPE_LIST, icon="🏷️", description="Kommasepariert, zum Beipsiel FNM, RCQ, Prerelease...", notion_column="Event Typ"),
             InputField(FieldName.URL, FIELD_TYPE_TEXT, icon="🔗", description="Der Link zur Veranstaltung"),
-            InputField(FieldName.IMAGE, FIELD_TYPE_IMAGE, icon="🖼️", description="Repräsentiert die Veranstaltung. Wenn nicht angegeben: Versuch Bild aus Link"),
+            InputField(FieldName.IMAGE, FIELD_TYPE_IMAGE, icon="🖼️", description="URL/Link zum Bild"),
         ]
         self.fields:dict[FieldName, InputField] = {field.name: field for field in field_list}
 

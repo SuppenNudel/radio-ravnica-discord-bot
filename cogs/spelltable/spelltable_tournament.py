@@ -4,7 +4,7 @@ from discord.ext.commands import slash_command
 from discord import ApplicationContext, Bot, Option
 import discord
 from modules import date_time_interpretation
-import os, re
+import os, re, shutil
 from modules import swiss_mtg
 from modules import env
 import logging
@@ -404,8 +404,16 @@ class SpelltableTournamentManager(Cog):
                 link_log.info(f"Turnier wurde geladen: {tournament_message.jump_url}")
             except discord.errors.NotFound:
                 file_path = TOURNAMENTS_FOLDER+"/"+(message_path.replace("/", "_"))+".json"
-                log.warning(f"Turnier konnte nicht geladen werden, weil vermutlich der entprechende Channel gelöscht wurde. Lösche Datei {file_path}")
-                os.remove(file_path)
+                failed_tournaments_folder = TOURNAMENTS_FOLDER + "/failed"
+                
+                # Create failed tournaments folder if it doesn't exist
+                if not os.path.exists(failed_tournaments_folder):
+                    os.makedirs(failed_tournaments_folder)
+                
+                # Move the file instead of deleting it
+                failed_file_path = os.path.join(failed_tournaments_folder, os.path.basename(file_path))
+                shutil.move(file_path, failed_file_path)
+                log.warning(f"Turnier konnte nicht geladen werden, weil vermutlich der entprechende Channel gelöscht wurde. Datei verschoben zu {failed_file_path}")
         
         await update_tournament_message(self.bot)
 
