@@ -159,6 +159,10 @@ async def _export_events_json_and_push(guild: discord.Guild) -> None:
         log.error(f"Failed to export events.json: {e}")
         return
 
+    if env.DEBUG:
+        log.debug("DEBUG mode active; exported events.json but skipped git sync")
+        return
+
     def _git_commit_push() -> str | None:
         r = subprocess.run(
             ["git", "add", str(output_path.relative_to(repo_path))],

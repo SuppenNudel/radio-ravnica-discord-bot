@@ -125,6 +125,23 @@ class PaperEventSubmit(Cog):
             author_id_raw = row["author_id"]
             author_id = int(author_id_raw) if author_id_raw else None
             thread_id = int(row["thread_id"])
+
+            start_at_raw = row["start_at"]
+            end_at_raw = row["end_at"]
+            try:
+                start_at = datetime.fromisoformat(start_at_raw) if start_at_raw else None
+                end_at = datetime.fromisoformat(end_at_raw) if end_at_raw else None
+            except Exception:
+                start_at = None
+                end_at = None
+
+            event_reference = end_at or start_at
+            if event_reference is not None:
+                now = datetime.now(tz=event_reference.tzinfo)
+                if event_reference < now:
+                    link_log.debug(f"Skipping view reconnect for past event thread {thread_id}")
+                    continue
+
             try:
                 guild = await discord.utils.get_or_fetch(self.bot, "guild", server_id)
                 if not guild:
@@ -190,7 +207,10 @@ class PaperEventSubmit(Cog):
             paper_event = pe_common.PaperEvent(ctx.guild, user)
             embed = discord.Embed(image=SPIKE_ART_CROP, color=env.SPIKE_RED)
             await ctx.send_response(
-                content="# Lass uns zusammen eine Veranstaltung erstellen 💪",
+                content=(
+                    "# Lass uns zusammen eine Veranstaltung erstellen 💪\n"
+                    "Mit * markierte Felder sind Pflichtfelder."
+                ),
                 embed=embed,
                 view=pe_common.EditTourneyView(paper_event),
                 ephemeral=True,

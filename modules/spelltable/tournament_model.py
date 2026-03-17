@@ -10,6 +10,7 @@ from modules.util.generate_calendar_image import generate_calendar
 from modules.serializable import Serializable
 from modules import env
 import os
+import shutil
 import pytz
 from pathlib import Path
 import asyncio
@@ -44,7 +45,16 @@ async def load_tournaments(bot) -> dict[str, "SpelltableTournament"]:
     if not os.path.exists(TOURNAMENTS_FOLDER):
         os.makedirs(TOURNAMENTS_FOLDER)  # Ensure the folder exists
 
+    # Create failed tournaments folder
+    failed_folder = os.path.join(TOURNAMENTS_FOLDER, "failed")
+    if not os.path.exists(failed_folder):
+        os.makedirs(failed_folder)
+
     for filename in os.listdir(TOURNAMENTS_FOLDER):
+        # Skip the failed folder itself
+        if filename == "failed":
+            continue
+            
         if filename.endswith(".json"):
             file_path = os.path.join(TOURNAMENTS_FOLDER, filename)
             with open(file_path, "r") as file:
@@ -55,8 +65,11 @@ async def load_tournaments(bot) -> dict[str, "SpelltableTournament"]:
                     tournament_id = filename[:-5].replace("_", "/")  # Convert back to original ID format
                     tournaments[tournament_id] = tournament
                 except Exception as e:
-                    log.error(f"Failed to load {filename}")
-                    raise e
+                    log.error(f"Failed to load {filename}: {e}")
+                    # Move the file to failed folder instead of deleting it
+                    failed_file_path = os.path.join(failed_folder, filename)
+                    shutil.move(file_path, failed_file_path)
+                    log.info(f"Moved failed tournament file to {failed_file_path}")
 
     return tournaments
         

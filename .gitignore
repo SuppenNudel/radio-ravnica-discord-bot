@@ -185,3 +185,4 @@ scripts/
 # Raspi deployment files (not shared to repo)
 deploy/
 .last_requirements_hash
+.vscode/
