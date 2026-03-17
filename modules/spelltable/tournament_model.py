@@ -222,9 +222,13 @@ class SpelltableTournament(Serializable):
                 except discord.errors.NotFound: 
                     return None
             link_log.error(f"User with ID {user_id} (<@{user_id}>) not found in guild {self.guild.id} for tournament {self.title}.")
-            user = await discord.utils.get_or_fetch(self.bot, "user", user_id)
-            self.members[user_id] = user
-            return user
+            try:
+                user = await discord.utils.get_or_fetch(self.bot, "user", user_id)
+                self.members[user_id] = user
+                return user
+            except discord.errors.NotFound:
+                link_log.error(f"User ID {user_id} does not exist on Discord (Unknown User).")
+                return None
 
     @property
     async def organizer(self) -> discord.Member|None:
@@ -434,7 +438,20 @@ class SpelltableTournament(Serializable):
     async def get_message(self, message_id) -> discord.Message|None:
         if message_id:
             tourney_message = await self.message
-            return await tourney_message.channel.fetch_message(message_id)
+            if not tourney_message:
+                return None
+            try:
+                return await tourney_message.channel.fetch_message(message_id)
+            except discord.errors.NotFound:
+                log.warning(
+                    f"Referenced tournament message {message_id} was not found in channel {tourney_message.channel.id} for tournament {self.title}."
+                )
+                return None
+            except discord.errors.Forbidden:
+                log.warning(
+                    f"Missing permission to fetch referenced tournament message {message_id} in channel {tourney_message.channel.id} for tournament {self.title}."
+                )
+                return None
         return None
     
     async def get_pairings(self, round=None) -> str:

@@ -402,10 +402,18 @@ class SpelltableTournamentManager(Cog):
                     await common_views.update_pairings(tournament, current_round)                
 
                 link_log.info(f"Turnier wurde geladen: {tournament_message.jump_url}")
-            except discord.errors.NotFound:
+            except discord.errors.NotFound as exc:
                 file_path = TOURNAMENTS_FOLDER+"/"+(message_path.replace("/", "_"))+".json"
-                log.warning(f"Turnier konnte nicht geladen werden, weil vermutlich der entprechende Channel gelöscht wurde. Lösche Datei {file_path}")
-                os.remove(file_path)
+                try:
+                    await self.bot.fetch_channel(tournament.channel_id)
+                except discord.errors.NotFound:
+                    log.warning(f"Turnier konnte nicht geladen werden, weil der Turnier-Thread nicht mehr existiert. Lösche Datei {file_path}")
+                    os.remove(file_path)
+                    continue
+
+                log.warning(
+                    f"Turnier konnte nicht vollständig geladen werden, obwohl der Thread noch existiert. Fehlende Discord-Ressource: {exc}. Datei bleibt erhalten: {file_path}"
+                )
         
         await update_tournament_message(self.bot)
 
