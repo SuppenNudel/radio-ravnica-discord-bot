@@ -185,3 +185,5 @@ scripts/
 deploy/
 .last_requirements_hash
 .vscode/
+web/
+tournaments.legacy/

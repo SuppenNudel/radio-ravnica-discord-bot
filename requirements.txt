@@ -13,3 +13,5 @@ babel
 networkx
 selenium
 apify-client
+sqlalchemy
+flask

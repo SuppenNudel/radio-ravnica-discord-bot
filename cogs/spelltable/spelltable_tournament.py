@@ -4,7 +4,7 @@ from discord.ext.commands import slash_command
 from discord import ApplicationContext, Bot, Option
 import discord
 from modules import date_time_interpretation
-import os, re, shutil
+import re
 from modules import swiss_mtg
 from modules import env
 import logging
@@ -12,7 +12,7 @@ import logging
 from discord.ext import tasks
 from datetime import datetime, time
 
-from modules.spelltable.tournament_model import TOURNAMENTS_FOLDER, SpelltableTournament, load_tournaments, active_tournaments, update_tournament_message
+from modules.spelltable.tournament_model import SpelltableTournament, load_tournaments, active_tournaments, update_tournament_message
 from modules.spelltable.common_views import SubmitDeckView, KickPlayerModal, ParticipationState, StartNextRoundView, FinishTournamentView, next_round, update_hall_of_fame
 from modules.spelltable import common_views
 
@@ -131,6 +131,12 @@ class ParticipationView(discord.ui.View):
 
         swiss_tournament = swiss_mtg.SwissTournament(players, max_rounds=self.tournament.max_rounds if self.tournament.max_rounds else None)
         self.tournament.swiss_tournament = swiss_tournament
+
+        # Populate member cache so users table gets human-readable names on first round save
+        registered_user_ids = set(self.tournament.users.keys()) | set(self.tournament.waitlist)
+        for user_id in registered_user_ids:
+            await self.tournament.get_member(user_id)
+
         await next_round(self.tournament, interaction)
     
     
@@ -397,18 +403,8 @@ class SpelltableTournamentManager(Cog):
                     await common_views.update_pairings(tournament, current_round)                
 
                 link_log.info(f"Turnier wurde geladen: {tournament_message.jump_url}")
-            except discord.errors.NotFound as exc:
-                file_path = TOURNAMENTS_FOLDER+"/"+(message_path.replace("/", "_"))+".json"
-                failed_tournaments_folder = TOURNAMENTS_FOLDER + "/failed"
-                
-                # Create failed tournaments folder if it doesn't exist
-                if not os.path.exists(failed_tournaments_folder):
-                    os.makedirs(failed_tournaments_folder)
-                
-                # Move the file instead of deleting it
-                failed_file_path = os.path.join(failed_tournaments_folder, os.path.basename(file_path))
-                shutil.move(file_path, failed_file_path)
-                log.warning(f"Turnier konnte nicht geladen werden, weil vermutlich der entprechende Channel gelöscht wurde. Datei verschoben zu {failed_file_path}")
+            except discord.errors.NotFound:
+                log.warning(f"Turnier konnte nicht geladen werden (message_path={message_path}): Channel oder Nachricht wurde vermutlich gelöscht.")
         
         await update_tournament_message(self.bot)
 

@@ -504,7 +504,18 @@ async def update_pairings(tournament:SpelltableTournament, round:swiss_mtg.Round
     if pairings_message:
         link_log.info(f"updating pairings {pairings_message.jump_url}")
         view, pairings_file, plain_text_pairings = await _prepare_pairings_content(round, tournament)
-        await pairings_message.edit(content=plain_text_pairings, attachments=[], file=pairings_file, view=view, embed=None)
+        try:
+            await pairings_message.edit(content=plain_text_pairings, attachments=[], file=pairings_file, view=view, embed=None)
+        except discord.errors.Forbidden as e:
+            author_id = pairings_message.author.id if pairings_message.author else "unknown"
+            log.error(
+                f"Cannot edit pairings message {pairings_message.jump_url} for tournament '{tournament.title}' "
+                f"(round {round.round_number}): bot lacks permission. "
+                f"Message was authored by user/bot ID {author_id}. "
+                f"This usually means the message was posted by a different bot or user. "
+                f"Original error: {e}"
+            )
+            raise
     else:
         pairings_message = await post_pairings(round, tournament)
         log.info(f"Issued new pairings message {pairings_message.jump_url} for tournament {tournament.title}.")

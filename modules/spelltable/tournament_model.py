@@ -1,6 +1,5 @@
 from datetime import datetime, timedelta
 from ezcord import log
-import json
 import logging
 import traceback
 import discord
@@ -9,8 +8,16 @@ from modules import swiss_mtg, table_to_image
 from modules.util.generate_calendar_image import generate_calendar
 from modules.serializable import Serializable
 from modules import env
-import os
-import shutil
+from modules.db import (
+    SessionLocal,
+    Tournament as TournamentRecord,
+    Participant,
+    SwissTournamentRecord,
+    SwissPlayer,
+    SwissRound,
+    SwissMatch,
+    DiscordUser,
+)
 import pytz
 from pathlib import Path
 import asyncio
@@ -26,11 +33,10 @@ class ParticipationState(StrEnum):
 link_log = logging.getLogger("link_logger")
 
 test_participants = []
-TOURNAMENTS_FOLDER = "tournaments"
 
 if env.DEBUG:
     with open("test_participants.txt", "r", encoding="utf-8") as file:
-        test_participants = [int(line.strip()) for line in file]  # Splits by spaces
+        test_participants = [int(line.strip()) for line in file]
 
 active_tournaments:dict[str, "SpelltableTournament"] = {}
 
@@ -39,46 +45,155 @@ async def save_tournaments():
         await tournament.save_tournament()
 
 
+def _build_swiss_json(db, swiss_t_row: SwissTournamentRecord) -> dict:
+    """Reconstruct the JSON-like dict that SwissTournament.deserialize() expects."""
+    player_rows = (
+        db.query(SwissPlayer)
+        .filter(SwissPlayer.swiss_tournament_id == swiss_t_row.id)
+        .all()
+    )
+    round_rows = (
+        db.query(SwissRound)
+        .filter(SwissRound.swiss_tournament_id == swiss_t_row.id)
+        .order_by(SwissRound.round_number.asc())
+        .all()
+    )
+
+    players = []
+    for p_row in player_rows:
+        deck_dict = None
+        if p_row.deck_link or p_row.deck_archetype:
+            deck_dict = {"link": p_row.deck_link, "archetype": p_row.deck_archetype}
+        player_dict: dict = {"player_id": p_row.player_id, "deck": deck_dict}
+        if p_row.dropped:
+            player_dict["dropped"] = True
+        players.append(player_dict)
+
+    rounds = []
+    for r_row in round_rows:
+        match_rows = (
+            db.query(SwissMatch)
+            .filter(SwissMatch.swiss_round_id == r_row.id)
+            .order_by(SwissMatch.id.asc())
+            .all()
+        )
+        matches = []
+        for m_row in match_rows:
+            p2_key = "null" if m_row.player2_id is None else str(m_row.player2_id)
+            matches.append({"wins": {
+                str(m_row.player1_id): m_row.player1_wins,
+                p2_key: m_row.player2_wins,
+                "draws": m_row.draws,
+            }})
+        rounds.append({
+            "round_number": r_row.round_number,
+            "matches": matches,
+            "message_pairings": r_row.message_id_pairings,
+            "message_standings": r_row.message_id_standings,
+        })
+
+    winner = {"player_id": swiss_t_row.winner_player_id} if swiss_t_row.winner_player_id else None
+    return {
+        "rounds_count": swiss_t_row.rounds_count,
+        "players": players,
+        "rounds": rounds,
+        "winner": winner,
+    }
+
+
 async def load_tournaments(bot) -> dict[str, "SpelltableTournament"]:
-    tournaments = {}
+    tournaments: dict[str, "SpelltableTournament"] = {}
+    db = SessionLocal()
+    users_dirty = False
+    try:
+        tournament_rows = db.query(TournamentRecord).all()
+        for t_row in tournament_rows:
+            try:
+                guild = await bot.fetch_guild(t_row.guild_id)
+                tournament = SpelltableTournament(guild, t_row.name, t_row.organizer_id, bot)
+                tournament.description = t_row.description
+                tournament.time = t_row.start_time
+                tournament.message_id = t_row.message_id
+                tournament.channel_id = t_row.channel_id
+                tournament.max_participants = t_row.max_participants
+                tournament.max_rounds = t_row.max_rounds
+                tournament.days_per_match = t_row.days_per_match if t_row.days_per_match is not None else 7
+                tournament.cancelled = t_row.cancelled
 
-    if not os.path.exists(TOURNAMENTS_FOLDER):
-        os.makedirs(TOURNAMENTS_FOLDER)  # Ensure the folder exists
+                # Participants
+                participant_rows = (
+                    db.query(Participant)
+                    .filter(Participant.tournament_id == t_row.id, Participant.state != "waitlist")
+                    .all()
+                )
+                for p_row in participant_rows:
+                    tournament.users[p_row.user_id] = ParticipationState(p_row.state)
 
-    # Create failed tournaments folder
-    failed_folder = os.path.join(TOURNAMENTS_FOLDER, "failed")
-    if not os.path.exists(failed_folder):
-        os.makedirs(failed_folder)
+                # Waitlist ordered by insertion order
+                waitlist_rows = (
+                    db.query(Participant)
+                    .filter(Participant.tournament_id == t_row.id, Participant.state == "waitlist")
+                    .order_by(Participant.id.asc())
+                    .all()
+                )
+                tournament.waitlist = [w.user_id for w in waitlist_rows]
 
-    for filename in os.listdir(TOURNAMENTS_FOLDER):
-        # Skip the failed folder itself
-        if filename == "failed":
-            continue
-            
-        if filename.endswith(".json"):
-            file_path = os.path.join(TOURNAMENTS_FOLDER, filename)
-            with open(file_path, "r") as file:
-                json_data = file.read()
-                try:
-                    raw_dict = json.loads(json_data)
-                    tournament = await SpelltableTournament.deserialize(raw_dict, bot)
-                    tournament_id = filename[:-5].replace("_", "/")  # Convert back to original ID format
-                    tournaments[tournament_id] = tournament
-                except Exception as e:
-                    log.error(f"Failed to load {filename}: {e}")
-                    # Move the file to failed folder instead of deleting it
-                    failed_file_path = os.path.join(failed_folder, filename)
-                    shutil.move(file_path, failed_file_path)
-                    log.info(f"Moved failed tournament file to {failed_file_path}")
+                # Swiss tournament
+                swiss_t_row = (
+                    db.query(SwissTournamentRecord)
+                    .filter(SwissTournamentRecord.tournament_id == t_row.id)
+                    .first()
+                )
+                if swiss_t_row:
+                    swiss_json = _build_swiss_json(db, swiss_t_row)
+                    tournament.swiss_tournament = swiss_mtg.SwissTournament.deserialize(swiss_json)
+
+                # Sync users table on load: add missing IDs and refresh known names
+                tracked_user_ids = set(tournament.users.keys()) | set(tournament.waitlist) | {tournament.organizer_id}
+                if tournament.swiss_tournament:
+                    tracked_user_ids.update(player.player_id for player in tournament.swiss_tournament.players)
+
+                for user_id in tracked_user_ids:
+                    member = await tournament.get_member(user_id)
+                    user_row = (
+                        db.query(DiscordUser)
+                        .filter(DiscordUser.user_id == user_id)
+                        .first()
+                    )
+                    if user_row is None:
+                        user_row = DiscordUser(user_id=user_id)
+                        db.add(user_row)
+                        users_dirty = True
+                        row_changed = True
+                    else:
+                        row_changed = False
+
+                    username = getattr(member, "name", None) if member else None
+                    display_name = getattr(member, "display_name", None) if member else None
+
+                    if username and user_row.username != username:
+                        user_row.username = username
+                        users_dirty = True
+                        row_changed = True
+                    if display_name and user_row.display_name != display_name:
+                        user_row.display_name = display_name
+                        users_dirty = True
+                        row_changed = True
+
+                    if row_changed:
+                        user_row.updated_at = datetime.utcnow()
+
+                tournament_id = f"{t_row.guild_id}/{t_row.channel_id}/{t_row.message_id}"
+                tournaments[tournament_id] = tournament
+            except Exception as e:
+                log.error(f"Failed to load tournament id={t_row.id} ({t_row.name}): {e}")
+
+        if users_dirty:
+            db.commit()
+    finally:
+        db.close()
 
     return tournaments
-        
-class CustomJSONEncoder(json.JSONEncoder):
-    def default(self, obj):
-        if isinstance(obj, Serializable):
-            mapping = obj.serialize()
-            return mapping
-        return super().default(obj)
     
 async def generate_tournament_message(tournaments: list["SpelltableTournament"]) -> str:
     # Sort tournaments by start date, placing those with `time=None` first
@@ -514,29 +629,157 @@ class SpelltableTournament(Serializable):
         return for_message
     
     async def save_tournament(self: "SpelltableTournament"):
-        # Ensure the directory exists
-        os.makedirs(TOURNAMENTS_FOLDER, exist_ok=True)
-        # concluded_folder = os.path.join(TOURNAMENTS_FOLDER, "concluded")
-        # os.makedirs(concluded_folder, exist_ok=True)
-
-        # Convert tournament ID (slashes to underscores) for filename
-        tournament_id = await self.get_id()
-        filename = tournament_id.replace("/", "_") + ".json"
-        file_path = os.path.join(TOURNAMENTS_FOLDER, filename)
-
-        serialized = await self.serialize()
+        db = SessionLocal()
         try:
-            with open(file_path, "w") as file:
-                json.dump(serialized, file, cls=CustomJSONEncoder, indent=4)
-            
-            # If the tournament is concluded, move the file to the concluded folder
-            # if (self.swiss_tournament and self.swiss_tournament.winner) or self.cancelled:
-                # concluded_path = os.path.join(concluded_folder, filename)
-                # os.rename(file_path, concluded_path)
-                # del active_tournaments[tournament_id]
-                # print(f"Tournament {tournament_id} has been concluded and moved to {concluded_path}")
+            # Find or create tournament record by unique message_id
+            t_row = db.query(TournamentRecord).filter(TournamentRecord.message_id == self.message_id).first()
+            if t_row is None:
+                t_row = TournamentRecord()
+                db.add(t_row)
+
+            t_row.name = self.title
+            t_row.organizer_id = self.organizer_id
+            t_row.description = self.description
+            t_row.start_time = self.time
+            t_row.guild_id = self.guild.id
+            t_row.channel_id = self.channel_id
+            t_row.message_id = self.message_id
+            t_row.max_participants = self.max_participants
+            t_row.max_rounds = self.max_rounds
+            t_row.days_per_match = self.days_per_match
+            t_row.cancelled = bool(self.cancelled) if self.cancelled is not None else False
+            db.flush()
+
+            # Replace participants (delete + re-insert preserves in-memory order)
+            db.query(Participant).filter(Participant.tournament_id == t_row.id).delete(synchronize_session=False)
+            registered_user_ids = set(self.users.keys()) | set(self.waitlist)
+            for user_id, state in self.users.items():
+                db.add(Participant(tournament_id=t_row.id, user_id=user_id, state=str(state)))
+            for user_id in self.waitlist:
+                db.add(Participant(tournament_id=t_row.id, user_id=user_id, state="waitlist"))
+
+            if self.swiss_tournament:
+                # Ensure all registered users exist in users table once tournament has started
+                for user_id in registered_user_ids:
+                    existing_user = (
+                        db.query(DiscordUser)
+                        .filter(DiscordUser.user_id == user_id)
+                        .first()
+                    )
+                    if existing_user is None:
+                        db.add(DiscordUser(user_id=user_id, updated_at=datetime.utcnow()))
+
+                # Upsert cached Discord display names
+                for user_id, member in self.members.items():
+                    existing_user = (
+                        db.query(DiscordUser)
+                        .filter(DiscordUser.user_id == user_id)
+                        .first()
+                    )
+                    if existing_user is None:
+                        existing_user = DiscordUser(user_id=user_id)
+                        db.add(existing_user)
+                    existing_user.display_name = member.display_name
+                    existing_user.username = member.name
+                    existing_user.updated_at = datetime.utcnow()
+
+            # Sync Swiss tournament data
+            if self.swiss_tournament:
+                swiss_t_row = (
+                    db.query(SwissTournamentRecord)
+                    .filter(SwissTournamentRecord.tournament_id == t_row.id)
+                    .first()
+                )
+                if swiss_t_row is None:
+                    swiss_t_row = SwissTournamentRecord(tournament_id=t_row.id)
+                    db.add(swiss_t_row)
+
+                winner = self.swiss_tournament.winner
+                swiss_t_row.rounds_count = self.swiss_tournament.rounds_count
+                swiss_t_row.winner_player_id = winner.player_id if winner else None
+                db.flush()
+
+                # Delete rounds + matches bottom-up, then players
+                round_ids = [
+                    r[0] for r in db.query(SwissRound.id)
+                    .filter(SwissRound.swiss_tournament_id == swiss_t_row.id)
+                    .all()
+                ]
+                if round_ids:
+                    db.query(SwissMatch).filter(
+                        SwissMatch.swiss_round_id.in_(round_ids)
+                    ).delete(synchronize_session=False)
+                db.query(SwissRound).filter(
+                    SwissRound.swiss_tournament_id == swiss_t_row.id
+                ).delete(synchronize_session=False)
+                db.query(SwissPlayer).filter(
+                    SwissPlayer.swiss_tournament_id == swiss_t_row.id
+                ).delete(synchronize_session=False)
+
+                for player in self.swiss_tournament.players:
+                    deck = player.deck
+                    db.add(SwissPlayer(
+                        swiss_tournament_id=swiss_t_row.id,
+                        player_id=player.player_id,
+                        dropped=player.dropped,
+                        deck_link=deck.link if deck else None,
+                        deck_archetype=deck.archetype if deck else None,
+                    ))
+
+                for round_obj in self.swiss_tournament.rounds:
+                    round_row = SwissRound(
+                        swiss_tournament_id=swiss_t_row.id,
+                        round_number=round_obj.round_number,
+                        message_id_pairings=round_obj.message_id_pairings,
+                        message_id_standings=round_obj.message_id_standings,
+                    )
+                    db.add(round_row)
+                    db.flush()
+
+                    for match in round_obj.matches:
+                        p1 = match.player1
+                        p2 = match.player2
+                        db.add(SwissMatch(
+                            swiss_round_id=round_row.id,
+                            player1_id=p1.player_id if p1 else None,
+                            player2_id=p2.player_id if p2 else None,
+                            player1_wins=int(match.wins.get(p1, 0) or 0),
+                            player2_wins=int(match.wins.get(p2, 0) or 0),
+                            draws=int(match.wins.get("draws", 0) or 0),
+                        ))
+            else:
+                # Remove Swiss data if tournament no longer has it
+                swiss_t_row = (
+                    db.query(SwissTournamentRecord)
+                    .filter(SwissTournamentRecord.tournament_id == t_row.id)
+                    .first()
+                )
+                if swiss_t_row:
+                    round_ids = [
+                        r[0] for r in db.query(SwissRound.id)
+                        .filter(SwissRound.swiss_tournament_id == swiss_t_row.id)
+                        .all()
+                    ]
+                    if round_ids:
+                        db.query(SwissMatch).filter(
+                            SwissMatch.swiss_round_id.in_(round_ids)
+                        ).delete(synchronize_session=False)
+                    db.query(SwissRound).filter(
+                        SwissRound.swiss_tournament_id == swiss_t_row.id
+                    ).delete(synchronize_session=False)
+                    db.query(SwissPlayer).filter(
+                        SwissPlayer.swiss_tournament_id == swiss_t_row.id
+                    ).delete(synchronize_session=False)
+                    db.delete(swiss_t_row)
+
+            db.commit()
         except Exception as e:
-            print(f"Error saving tournament {tournament_id}: {e}")
+            db.rollback()
+            log.error(f"Failed to save tournament {self.title}: {e}")
+            raise
+        finally:
+            db.close()
+
         await update_tournament_message(self.bot, trigger_guild=self.guild)
 
 
