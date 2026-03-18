@@ -105,7 +105,11 @@ async def load_tournaments(bot) -> dict[str, "SpelltableTournament"]:
     tournaments: dict[str, "SpelltableTournament"] = {}
     db = SessionLocal()
     users_dirty = False
+    known_users: dict[int, DiscordUser] = {}
     try:
+        for user_row in db.query(DiscordUser).all():
+            known_users[user_row.user_id] = user_row
+
         tournament_rows = db.query(TournamentRecord).all()
         for t_row in tournament_rows:
             try:
@@ -155,14 +159,11 @@ async def load_tournaments(bot) -> dict[str, "SpelltableTournament"]:
 
                 for user_id in tracked_user_ids:
                     member = await tournament.get_member(user_id)
-                    user_row = (
-                        db.query(DiscordUser)
-                        .filter(DiscordUser.user_id == user_id)
-                        .first()
-                    )
+                    user_row = known_users.get(user_id)
                     if user_row is None:
                         user_row = DiscordUser(user_id=user_id)
                         db.add(user_row)
+                        known_users[user_id] = user_row
                         users_dirty = True
                         row_changed = True
                     else:
