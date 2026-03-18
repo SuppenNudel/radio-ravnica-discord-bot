@@ -141,6 +141,19 @@ class SwissMatch(Base):
         return f"<SwissMatch(swiss_round_id={self.swiss_round_id}, player1_id={self.player1_id}, player2_id={self.player2_id})>"
 
 
+class DiscordUser(Base):
+    """Discord user display name cache"""
+    __tablename__ = "users"
+
+    user_id = Column(Integer, primary_key=True, autoincrement=False)
+    display_name = Column(String, nullable=True)
+    username = Column(String, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def __repr__(self):
+        return f"<DiscordUser(user_id={self.user_id}, display_name='{self.display_name}')>"
+
+
 def init_db():
     """Create all tables in the database"""
     Base.metadata.create_all(bind=engine)
