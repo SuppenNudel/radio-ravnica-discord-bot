@@ -171,6 +171,7 @@ class EnterTextModal(discord.ui.Modal):
 
         setattr(self.tournament, self.key, new_value)
         
+        self.view._refresh_mandatory_field_labels()
         self.view.submit_button.disabled = not bool(self.tournament.time)
         await interaction.edit_original_response(embed=await self.tournament.to_embed(), view=self.view)
 
@@ -183,12 +184,18 @@ class EditTournamentView(discord.ui.View):
         self.tournament = tournament
         self.channel = channel
 
+        self._refresh_mandatory_field_labels()
+
         # Dynamically set the disabled state of the "Abschicken" button
         self.submit_button.disabled = not bool(self.tournament.time)
 
         self.days_per_match_callback.label = (
             "Turnier am Stück spielen" if self.tournament.days_per_match else "Eine Woche pro Runde"
         )
+
+    def _refresh_mandatory_field_labels(self):
+        status = "✅" if self.tournament.time else "⚠️"
+        self.time_callback.label = f"Startzeit/-datum* {status}"
 
     @classmethod
     async def create(cls, tournament: SpelltableTournament, channel: discord.abc.Messageable):
@@ -365,10 +372,7 @@ class SpelltableTournamentManager(Cog):
                         message = await tournament.get_message(current_round.message_id_standings)
                         if message:
                             submit_deck_view = await SubmitDeckView.create(tournament)
-                            if message.embeds:
-                                await message.edit(embed=message.embeds[0], view=submit_deck_view)
-                            else:
-                                await message.edit(view=submit_deck_view)
+                            await message.edit(embeds=[], view=submit_deck_view)
                         else:
                             link_log.error(f"Could not find standings message for concluded tournament: {tournament_message.jump_url}")
 
@@ -381,16 +385,7 @@ class SpelltableTournamentManager(Cog):
                     if message and isinstance(message.channel, discord.Thread) and message.channel.archived:
                         await message.channel.edit(archived=False)
                     if message:
-                        is_last_round = current_round.round_number >= swiss_tournament.rounds_count
-                        if is_last_round:
-                            view = await FinishTournamentView.create(tournament)
-                        else:
-                            view = await StartNextRoundView.create(current_round, tournament)
-                        # Preserve existing content and embed when adding view
-                        if message.embeds:
-                            await message.edit(embed=message.embeds[0], view=view)
-                        else:
-                            await message.edit(view=view)
+                        await common_views.update_standings(tournament, None)
                 if current_round.message_id_pairings:
                     # pairings have been posted
                     message = await tournament.get_message(current_round.message_id_pairings)

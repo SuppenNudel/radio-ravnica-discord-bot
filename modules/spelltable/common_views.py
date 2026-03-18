@@ -160,6 +160,17 @@ class FinishTournamentView(discord.ui.View):
 
             await interaction.response.defer()
 
+            if interaction.message:
+                try:
+                    await interaction.message.edit(view=None)
+                except discord.NotFound:
+                    link_log.warning("[finish-tournament] Could not remove view from message: message not found")
+
+            await interaction.followup.send(
+                "Turnierabschluss läuft … bitte einen Moment warten.",
+                ephemeral=True,
+            )
+
             # Remove views from the last round pairings and standings messages
             current_round = self.tournament.swiss_tournament.current_round()
             pairings_message = await self.tournament.get_message(current_round.message_id_pairings)
@@ -174,13 +185,11 @@ class FinishTournamentView(discord.ui.View):
             # Update final standings with deck submissions and add submit deck button
             await self.tournament.update_metagame()
             
-            # Fetch the updated message to preserve the embed when adding the button
+            # Fetch the updated message and keep it as plain message (no embed)
             standings_message = await self.tournament.get_message(current_round.message_id_standings)
             submit_deck_view = await SubmitDeckView.create(self.tournament)
-            if standings_message and standings_message.embeds:
-                await standings_message.edit(embed=standings_message.embeds[0], view=submit_deck_view)
-            elif standings_message:
-                await standings_message.edit(view=submit_deck_view)
+            if standings_message:
+                await standings_message.edit(embeds=[], view=submit_deck_view)
 
 
             await interaction.followup.send(content, ephemeral=False)
@@ -331,9 +340,7 @@ class ReportMatchAdminModal(discord.ui.DesignerModal):
         self.draw_score_select = discord.ui.StringSelect(
             placeholder="Unentschieden",
             options=score_options_draw,
-            min_values=1,
-            max_values=1,
-            required=True
+            max_values=1
         )
         self.add_item(discord.ui.Label("Unentschieden", self.draw_score_select))
 
@@ -603,36 +610,62 @@ async def update_hall_of_fame(tournament: SpelltableTournament):
         log.error(f"Failed to update hall of fame for tournament {tournament.title}: {e}")
 
 
-async def update_standings(tournament:SpelltableTournament, interaction: discord.Interaction):
+def _standings_content_for_round(round_number: int, total_rounds: int) -> str:
+    return f"🏆 Platzierungen nach der {round_number}. Runde von {total_rounds}"
+
+
+async def _build_standings_file(tournament: SpelltableTournament, standings_round: swiss_mtg.Round | None = None) -> discord.File:
+    standings_image = await tournament.standings_to_image(standings_round)
+    return discord.File(standings_image, filename=standings_image)
+
+
+async def _edit_standings_message(
+    tournament: SpelltableTournament,
+    standings_round: swiss_mtg.Round,
+    standings_message: discord.Message,
+    *,
+    view: discord.ui.View | None,
+    keep_existing_content: bool = False,
+):
+    total_rounds = tournament.swiss_tournament.rounds_count
+    content = (
+        standings_message.content
+        if keep_existing_content and standings_message.content
+        else _standings_content_for_round(standings_round.round_number, total_rounds)
+    )
+    standings_file = await _build_standings_file(tournament, standings_round)
+    await standings_message.edit(content=content, embeds=[], attachments=[], file=standings_file, view=view)
+
+
+async def update_standings(tournament:SpelltableTournament, interaction: discord.Interaction | None):
     current_round = tournament.swiss_tournament.current_round()
     if not current_round.is_concluded():
         # as long as the current round has not concluded, don't post standings
         return
     message_standings = await tournament.get_message(current_round.message_id_standings)
 
-    is_last_round = current_round.round_number >= tournament.swiss_tournament.rounds_count
+    total_rounds = tournament.swiss_tournament.rounds_count
 
-    standings_image = await tournament.standings_to_image()
-    standings_file = discord.File(standings_image, filename=standings_image)
-    
-    # Create embed for standings
-    embed = discord.Embed(
-        title=f"🏆 Platzierungen nach der {current_round.round_number}.{' (und letzten)' if is_last_round else ''} Runde",
-        color=discord.Color.from_rgb(37, 88, 79)
-    )
-    embed.set_image(url=f"attachment://{standings_image}")
+    standings_file = await _build_standings_file(tournament)
+    standings_content = _standings_content_for_round(current_round.round_number, total_rounds)
 
-    if is_last_round:
+    if current_round.round_number >= total_rounds:
         # letzte Runde
         view = await FinishTournamentView.create(tournament)
     else:
         view = await StartNextRoundView.create(current_round, tournament)
 
     if message_standings:
-        await message_standings.edit(content=None, embed=embed, view=view, attachments=[], file=standings_file)
+        await _edit_standings_message(tournament, current_round, message_standings, view=view)
     else:
         async def do_the_thing():
-            message_standings = await interaction.followup.send(embed=embed, view=view, file=standings_file)
+            if interaction:
+                message_standings = await interaction.followup.send(content=standings_content, view=view, file=standings_file)
+            else:
+                tournament_message = await tournament.message
+                if not tournament_message:
+                    raise RuntimeError("Tournament message not found while creating standings message")
+                message_standings = await tournament_message.channel.send(content=standings_content, view=view, file=standings_file)
             # dm organizer
             to = await tournament.organizer
             can_do = None
@@ -949,11 +982,14 @@ async def _prepare_pairings_content(round: swiss_mtg.Round, tournament: Spelltab
     pairings_image = await tournament.pairings_to_image(round)
     pairings_file = discord.File(pairings_image, filename=pairings_image)
     pairings = await tournament.get_pairings(round)
+    is_last_round = round.round_number >= tournament.swiss_tournament.rounds_count
+    pairings_header = f"🤺 Paarungen für die {round.round_number}.{' (und letzte)' if is_last_round else ''} Runde:"
     max_plain_text_length = 2000
-    if len(pairings) > max_plain_text_length:
-        plain_text_pairings = pairings[:1950] + "\n\n_(gekürzt – vollständige Paarungen im Bild)_"
+    if len(pairings) > max_plain_text_length - len(pairings_header) - 2:
+        truncated_pairings = pairings[:1900] + "\n\n_(gekürzt – vollständige Paarungen im Bild)_"
+        plain_text_pairings = f"{pairings_header}\n{truncated_pairings}"
     else:
-        plain_text_pairings = pairings
+        plain_text_pairings = f"{pairings_header}\n{pairings}"
 
     return view, pairings_file, plain_text_pairings
 
@@ -1006,17 +1042,27 @@ async def next_round(tournament:SpelltableTournament, interaction:discord.Intera
                 error_msg += "Der Bot benötigt folgende Berechtigungen:\n• Nachrichten senden\n• Dateien anhängen\n• Nachrichten verwalten (zum Anpinnen)"
             await interaction.followup.send(error_msg, ephemeral=True)
             previous_standings_message = await tournament.get_message(previous_round.message_id_standings)
-            standings_image = await tournament.standings_to_image(previous_round)
-            standings_file = discord.File(standings_image, filename=standings_image)
-            await previous_standings_message.edit(attachments=[], file=standings_file, view=await StartNextRoundView.create(previous_round, tournament))
+            if previous_standings_message:
+                await _edit_standings_message(
+                    tournament,
+                    previous_round,
+                    previous_standings_message,
+                    view=await StartNextRoundView.create(previous_round, tournament),
+                    keep_existing_content=True,
+                )
             return
         except discord.errors.HTTPException as e:
             log.error(f"Failed to send pairings message: {e}")
             await interaction.followup.send(f"Fehler beim Senden der Paarungen: {e}\nBitte versuche es später erneut.", ephemeral=True)
             previous_standings_message = await tournament.get_message(previous_round.message_id_standings)
-            standings_image = await tournament.standings_to_image(previous_round)
-            standings_file = discord.File(standings_image, filename=standings_image)
-            await previous_standings_message.edit(attachments=[], file=standings_file, view=await StartNextRoundView.create(previous_round, tournament))
+            if previous_standings_message:
+                await _edit_standings_message(
+                    tournament,
+                    previous_round,
+                    previous_standings_message,
+                    view=await StartNextRoundView.create(previous_round, tournament),
+                    keep_existing_content=True,
+                )
             return
 
         if not isinstance(new_pairings_message, discord.Message):
@@ -1095,6 +1141,17 @@ class StartNextRoundView(discord.ui.View):
             except discord.NotFound:
                 link_log.warning("[next-round] Interaction expired before defer; aborting next-round start")
                 return
+
+            if interaction.message:
+                try:
+                    await interaction.message.edit(view=None)
+                except discord.NotFound:
+                    link_log.warning("[next-round] Could not remove view from message: message not found")
+
+            await interaction.followup.send(
+                "Rundenberechnung läuft … bitte einen Moment warten.",
+                ephemeral=True,
+            )
             
             # Get or create a lock for this tournament
             tournament_id = await self.tournament.get_id()
@@ -1131,11 +1188,13 @@ class StartNextRoundView(discord.ui.View):
 
                 # Immediately remove the standings view to prevent repeated clicks.
                 if previous_standings_message:
-                    await previous_standings_message.edit(view=None)
-
-                standings_image = await self.tournament.standings_to_image(self.previous_round)
-                standings_file = discord.File(standings_image, filename=standings_image)
-                await previous_standings_message.edit(attachments=[], file=standings_file, view=None) #content=previous_pairings_message.content, view=None, attachments=previous_pairings_message.attachments)
+                    await _edit_standings_message(
+                        self.tournament,
+                        self.previous_round,
+                        previous_standings_message,
+                        view=None,
+                        keep_existing_content=True,
+                    )
 
                 pairings_image = await self.tournament.pairings_to_image(self.previous_round)
                 pairings_file = discord.File(pairings_image, filename=pairings_image)
@@ -1145,6 +1204,13 @@ class StartNextRoundView(discord.ui.View):
                 try:
                     await next_round(self.tournament, interaction)
                 except Exception as e:
-                    await previous_standings_message.edit(attachments=[], file=standings_file, view=await StartNextRoundView.create(self.previous_round, self.tournament))
+                    if previous_standings_message:
+                        await _edit_standings_message(
+                            self.tournament,
+                            self.previous_round,
+                            previous_standings_message,
+                            view=await StartNextRoundView.create(self.previous_round, self.tournament),
+                            keep_existing_content=True,
+                        )
 
         await use_custom_try("Nächste Runde Erstellen", do_the_thing, self.tournament)
