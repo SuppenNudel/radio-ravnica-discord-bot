@@ -13,6 +13,55 @@ link_log = logging.getLogger("link_logger")
 # Global dictionary to store locks per tournament to prevent race conditions
 _tournament_round_locks: dict[str, asyncio.Lock] = {}
 
+
+def _score_select_options(default_score: int) -> list[discord.SelectOption]:
+    return [
+        discord.SelectOption(label="0", value="0", default=default_score == 0),
+        discord.SelectOption(label="1", value="1", default=default_score == 1),
+        discord.SelectOption(label="2", value="2", default=default_score == 2),
+    ]
+
+
+def _match_score_defaults(match: swiss_mtg.Match) -> tuple[int, int, int]:
+    if not match.is_finished():
+        return 0, 0, 0
+    return (
+        int(match.wins.get(match.player1, 0) or 0),
+        int(match.wins.get(match.player2, 0) or 0),
+        int(match.wins.get("draws", 0) or 0),
+    )
+
+
+async def _resolve_match_participants(tournament: SpelltableTournament, match: swiss_mtg.Match):
+    p1_id = match.player1.player_id if match.player1 else None
+    p2_id = match.player2.player_id if match.player2 else None
+    p1_member = await tournament.get_member(p1_id) if p1_id is not None else None
+    p2_member = await tournament.get_member(p2_id) if p2_id is not None else None
+    p1_mention = p1_member.mention if p1_member else (f"<@{p1_id}>" if p1_id is not None else "Unbekannt")
+    p2_mention = p2_member.mention if p2_member else (f"<@{p2_id}>" if p2_id is not None else "Unbekannt")
+    p1_name = p1_member.display_name if p1_member else (f"Player({p1_id})" if p1_id is not None else "Unbekannt")
+    p2_name = p2_member.display_name if p2_member else (f"Player({p2_id})" if p2_id is not None else "Unbekannt")
+    return p1_mention, p2_mention, p1_name, p2_name
+
+
+async def _open_submit_deck_modal(tournament: SpelltableTournament, interaction: discord.Interaction):
+    if not interaction.user:
+        await interaction.response.send_message("Der Interaction User ist None. Das sollte nicht passieren.", ephemeral=True)
+        return
+
+    player = tournament.swiss_tournament.player_by_id(interaction.user.id)
+    if not player:
+        await interaction.response.send_message("Du bist kein Teilnehmer in diesem Turnier.", ephemeral=True)
+        return
+
+    try:
+        await interaction.response.send_modal(SubmitDeckModal(tournament, interaction.user, player))
+    except discord.errors.NotFound:
+        try:
+            await interaction.followup.send("Die Anfrage hat zu lange gedauert. Bitte versuche es erneut.", ephemeral=True)
+        except Exception:
+            pass
+
 class SubmitDeckView(discord.ui.View):
     def __init__(self):
         raise RuntimeError("Use 'await SubmitDeckView.create(...)' instead")
@@ -29,23 +78,10 @@ class SubmitDeckView(discord.ui.View):
 
     @discord.ui.button(label="Deck einreichen", style=discord.ButtonStyle.primary, emoji="📝")
     async def submit_deck_button(self, button: discord.ui.Button, interaction: discord.Interaction):
-        # Check if user is part of the tournament first
-        player = self.tournament.swiss_tournament.player_by_id(interaction.user.id)
-        if not player:
-            await interaction.response.send_message("Du bist kein Teilnehmer in diesem Turnier.", ephemeral=True)
-            return
-        
-        try:
-            await interaction.response.send_modal(SubmitDeckModal(self.tournament, interaction.user, player))
-        except discord.errors.NotFound:
-            # Interaction expired, try to send error message if possible
-            try:
-                await interaction.followup.send("Die Anfrage hat zu lange gedauert. Bitte versuche es erneut.", ephemeral=True)
-            except:
-                pass
+        await _open_submit_deck_modal(self.tournament, interaction)
 
 class SubmitDeckModal(discord.ui.DesignerModal):
-    def __init__(self, tournament: SpelltableTournament, player: discord.User, tournament_player: swiss_mtg.Player = None):
+    def __init__(self, tournament: SpelltableTournament, player: discord.User | discord.Member, tournament_player: swiss_mtg.Player | None = None):
         super().__init__(title="Dein Deck; erst nach Abschluss veröffentlicht")
         self.tournament = tournament
         self.player = player
@@ -297,31 +333,11 @@ class ReportMatchAdminModal(discord.ui.DesignerModal):
         p1_display = p1_name if p1_name else f"Player({match.player1.player_id})"
         p2_display = p2_name if p2_name else f"Player({match.player2.player_id})"
 
-        default_p1 = int(match.wins.get(match.player1, 0) or 0) if match.is_finished() else 0
-        default_p2 = int(match.wins.get(match.player2, 0) or 0) if match.is_finished() else 0
-        default_draws = int(match.wins.get("draws", 0) or 0) if match.is_finished() else 0
-
-        score_options_p1 = [
-            discord.SelectOption(label="0", value="0", default=default_p1 == 0),
-            discord.SelectOption(label="1", value="1", default=default_p1 == 1),
-            discord.SelectOption(label="2", value="2", default=default_p1 == 2)
-        ]
-
-        score_options_p2 = [
-            discord.SelectOption(label="0", value="0", default=default_p2 == 0),
-            discord.SelectOption(label="1", value="1", default=default_p2 == 1),
-            discord.SelectOption(label="2", value="2", default=default_p2 == 2)
-        ]
-
-        score_options_draw = [
-            discord.SelectOption(label="0", value="0", default=default_draws == 0),
-            discord.SelectOption(label="1", value="1", default=default_draws == 1),
-            discord.SelectOption(label="2", value="2", default=default_draws == 2)
-        ]
+        default_p1, default_p2, default_draws = _match_score_defaults(match)
 
         self.p1_score_select = discord.ui.StringSelect(
             placeholder="Siege",
-            options=score_options_p1,
+            options=_score_select_options(default_p1),
             min_values=1,
             max_values=1,
             required=True
@@ -330,7 +346,7 @@ class ReportMatchAdminModal(discord.ui.DesignerModal):
 
         self.p2_score_select = discord.ui.StringSelect(
             placeholder="Siege",
-            options=score_options_p2,
+            options=_score_select_options(default_p2),
             min_values=1,
             max_values=1,
             required=True
@@ -339,7 +355,7 @@ class ReportMatchAdminModal(discord.ui.DesignerModal):
 
         self.draw_score_select = discord.ui.StringSelect(
             placeholder="Unentschieden",
-            options=score_options_draw,
+            options=_score_select_options(default_draws),
             max_values=1
         )
         self.add_item(discord.ui.Label("Unentschieden", self.draw_score_select))
@@ -364,12 +380,7 @@ class ReportMatchAdminModal(discord.ui.DesignerModal):
 
             await interaction.response.defer()
 
-            p1_member = await self.tournament.get_member(self.match.player1.player_id)
-            p2_member = await self.tournament.get_member(self.match.player2.player_id)
-            p1_mention = p1_member.mention if p1_member else f"<@{self.match.player1.player_id}>"
-            p2_mention = p2_member.mention if p2_member else f"<@{self.match.player2.player_id}>"
-            p1_name = p1_member.display_name if p1_member else f"Player({self.match.player1.player_id})"
-            p2_name = p2_member.display_name if p2_member else f"Player({self.match.player2.player_id})"
+            p1_mention, p2_mention, p1_name, p2_name = await _resolve_match_participants(self.tournament, self.match)
 
             message_to_opponend = f"Nachricht von der Turnierorganisation:\n> {self.message_label.item.value}"  # type: ignore
             message_result = await interaction.followup.send(f"{p1_mention} {score1} - {score2} {p2_mention}{f' ({draw_score} Unentschieden)' if draw_score else ''}\n{message_to_opponend}", wait=True)
@@ -406,31 +417,11 @@ class ReportMatchModal(discord.ui.DesignerModal):
         p1_display = p1_name if p1_name else f"Player({match.player1.player_id})"
         p2_display = p2_name if p2_name else f"Player({match.player2.player_id})"
 
-        default_p1 = int(match.wins.get(match.player1, 0) or 0) if match.is_finished() else 0
-        default_p2 = int(match.wins.get(match.player2, 0) or 0) if match.is_finished() else 0
-        default_draws = int(match.wins.get("draws", 0) or 0) if match.is_finished() else 0
-
-        score_options_p1 = [
-            discord.SelectOption(label="0", value="0", default=default_p1 == 0),
-            discord.SelectOption(label="1", value="1", default=default_p1 == 1),
-            discord.SelectOption(label="2", value="2", default=default_p1 == 2)
-        ]
-
-        score_options_p2 = [
-            discord.SelectOption(label="0", value="0", default=default_p2 == 0),
-            discord.SelectOption(label="1", value="1", default=default_p2 == 1),
-            discord.SelectOption(label="2", value="2", default=default_p2 == 2)
-        ]
-
-        score_options_draw = [
-            discord.SelectOption(label="0", value="0", default=default_draws == 0),
-            discord.SelectOption(label="1", value="1", default=default_draws == 1),
-            discord.SelectOption(label="2", value="2", default=default_draws == 2)
-        ]
+        default_p1, default_p2, default_draws = _match_score_defaults(match)
 
         self.p1_score_select = discord.ui.StringSelect(
             placeholder="Siege",
-            options=score_options_p1,
+            options=_score_select_options(default_p1),
             min_values=1,
             max_values=1,
             required=True
@@ -439,7 +430,7 @@ class ReportMatchModal(discord.ui.DesignerModal):
 
         self.p2_score_select = discord.ui.StringSelect(
             placeholder="Siege",
-            options=score_options_p2,
+            options=_score_select_options(default_p2),
             min_values=1,
             max_values=1,
             required=True
@@ -448,7 +439,7 @@ class ReportMatchModal(discord.ui.DesignerModal):
 
         self.draw_score_select = discord.ui.StringSelect(
             placeholder="Draws",
-            options=score_options_draw,
+            options=_score_select_options(default_draws),
             min_values=1,
             max_values=1,
             required=True
@@ -477,12 +468,7 @@ class ReportMatchModal(discord.ui.DesignerModal):
 
             await interaction.response.defer()
 
-            p1_member = await self.tournament.get_member(self.match.player1.player_id)
-            p2_member = await self.tournament.get_member(self.match.player2.player_id)
-            p1_mention = p1_member.mention if p1_member else f"<@{self.match.player1.player_id}>"
-            p2_mention = p2_member.mention if p2_member else f"<@{self.match.player2.player_id}>"
-            p1_name = p1_member.display_name if p1_member else f"Player({self.match.player1.player_id})"
-            p2_name = p2_member.display_name if p2_member else f"Player({self.match.player2.player_id})"
+            p1_mention, p2_mention, p1_name, p2_name = await _resolve_match_participants(self.tournament, self.match)
 
             message_to_opponend = f"{interaction.user.mention} lässt ausrichten:\n> {self.message_label.item.value}" if self.message_label.item.value else "GGs!"  # type: ignore
             gg_message = await interaction.followup.send(f"{p1_mention} {score1} - {score2} {p2_mention}{f' ({draw_score} Unentschieden)' if draw_score else ''}\n{message_to_opponend}", wait=True)
@@ -900,18 +886,7 @@ class ReportMatchView(discord.ui.View):
 
     @discord.ui.button(label="Deck einreichen", style=discord.ButtonStyle.primary, emoji="📝", row=0)
     async def submit_deck_button(self, button: discord.ui.Button, interaction: discord.Interaction):
-        player = self.tournament.swiss_tournament.player_by_id(interaction.user.id)
-        if not player:
-            await interaction.response.send_message("Du bist kein Teilnehmer in diesem Turnier.", ephemeral=True)
-            return
-
-        try:
-            await interaction.response.send_modal(SubmitDeckModal(self.tournament, interaction.user, player))
-        except discord.errors.NotFound:
-            try:
-                await interaction.followup.send("Die Anfrage hat zu lange gedauert. Bitte versuche es erneut.", ephemeral=True)
-            except Exception:
-                pass
+        await _open_submit_deck_modal(self.tournament, interaction)
 
     @discord.ui.button(label="Ergebnis setzen (Admin)", style=discord.ButtonStyle.secondary, emoji="🔏", row=1)
     async def admin_report_button(self, button: discord.ui.Button, interaction: discord.Interaction):
@@ -982,8 +957,9 @@ async def _prepare_pairings_content(round: swiss_mtg.Round, tournament: Spelltab
     pairings_image = await tournament.pairings_to_image(round)
     pairings_file = discord.File(pairings_image, filename=pairings_image)
     pairings = await tournament.get_pairings(round)
-    is_last_round = round.round_number >= tournament.swiss_tournament.rounds_count
-    pairings_header = f"🤺 Paarungen für die {round.round_number}.{' (und letzte)' if is_last_round else ''} Runde:"
+    total_rounds = tournament.swiss_tournament.rounds_count
+    is_last_round = round.round_number >= total_rounds
+    pairings_header = f"🤺 Paarungen für Runde {round.round_number} von {total_rounds}{' (letzte Runde)' if is_last_round else ''}:"
     max_plain_text_length = 2000
     if len(pairings) > max_plain_text_length - len(pairings_header) - 2:
         truncated_pairings = pairings[:1900] + "\n\n_(gekürzt – vollständige Paarungen im Bild)_"
