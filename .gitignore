@@ -179,3 +179,6 @@ parse_discord_reactions.py
 parsed_users.json
 tournament_import_ui.py
 hall_of_fame/
+.vscode/
+data/
+scripts/
