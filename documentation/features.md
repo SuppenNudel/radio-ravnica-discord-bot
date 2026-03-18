@@ -5,21 +5,36 @@
 `/erstelle_turnier`
 
 - Befehl in einem normalen Text-Kanal verwenden (kein Thread oder Forum), da der Bot einen Thread für das Turnier erstellt.
-![Befehl verwenden](images/turnier-01-befehl-verwenden.png)
-![Turnier einrichten](images/turnier-02-turnier-einrichten.png)
+
+    ![Befehl verwenden](images/turnier-01-befehl-verwenden.png)
+
+    ![Turnier einrichten](images/turnier-02-turnier-einrichten.png)
+
 - Nach dem Abschicken wird im aktuellen Kanal ein Turnier-Thread erstellt.
-![Turnier wurde erstellt und Mitglieder benachrichtigt](images/turnier-03-thread-erstellt.png)
+
+    ![Turnier wurde erstellt und Mitglieder benachrichtigt](images/turnier-03-thread-erstellt.png)
+
 - Mitglieder können teilnehmen, der Organisator kann das Turnier starten.
-![Mitglieder können teilnehmen, Organisator kann Turnier starten](images/turnier-04-teilnahme-und-start.png)
+
+    ![Mitglieder können teilnehmen, Organisator kann Turnier starten](images/turnier-04-teilnahme-und-start.png)
+
 - Nach dem Start werden automatisch die ersten Pairings erstellt.
-![Turnier wurde gestartet und erste Pairings erstellt](images/turnier-05-erste-pairings.png)
+
+    ![Turnier wurde gestartet und erste Pairings erstellt](images/turnier-05-erste-pairings.png)
+
 - Ergebnisse können pro Match gemeldet und bestätigt werden.
-![Report Match Ansicht](images/turnier-06-report-match.png)
-![Eingegebenes Ergebnis wird bestätigt](images/turnier-07-ergebnis-bestaetigt.png)
+
+    ![Report Match Ansicht](images/turnier-06-report-match.png)
+
+    ![Eingegebenes Ergebnis wird bestätigt](images/turnier-07-ergebnis-bestaetigt.png)
+
 - Übermittelte Ergebnisse und Standings werden fortlaufend angezeigt.
-![Überreichte Ergebnisse werden angezeigt](images/turnier-08-ergebnisse-angezeigt.png)
-![Standings, nachdem alle Ergebnisse übermittelt wurden](images/turnier-09-standings.png)
-![Ergebnis der finalen Runde](images/turnier-10-finale-runde.png)
+
+    ![Überreichte Ergebnisse werden angezeigt](images/turnier-08-ergebnisse-angezeigt.png)
+
+    ![Standings, nachdem alle Ergebnisse übermittelt wurden](images/turnier-09-standings.png)
+
+    ![Ergebnis der finalen Runde](images/turnier-10-finale-runde.png)
 
 
 ## YouTube
