@@ -4,7 +4,7 @@ from discord.ext.commands import slash_command
 from discord import ApplicationContext, Bot, Option
 import discord
 from modules import date_time_interpretation
-import os, re
+import os, re, shutil
 from modules import swiss_mtg
 from modules import env
 import logging
@@ -44,7 +44,7 @@ class ParticipationView(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
         message = await self.tournament.user_state(interaction.user.id, ParticipationState.PARTICIPATE)
         if message:
-            await interaction.respond(message, ephemeral=True)
+            await interaction.followup.send(message, ephemeral=True)
 
     # no use - either participate or tentative
     # @discord.ui.button(label="Warteliste", style=discord.ButtonStyle.primary, emoji="⌚")
@@ -293,7 +293,7 @@ class EditTournamentView(discord.ui.View):
             await interaction.edit_original_response(content="Turnier wurde bearbeitet", embed=None, view=None)
         else:
             if not isinstance(interaction.channel, discord.TextChannel):
-                await interaction.respond("Threads können nur in Textkanälen erstellt werden.", ephemeral=True)
+                await interaction.followup.send("Threads können nur in Textkanälen erstellt werden.", ephemeral=True)
                 return
             # Create new thread
             thread = await interaction.channel.create_thread(
@@ -397,10 +397,18 @@ class SpelltableTournamentManager(Cog):
                     await common_views.update_pairings(tournament, current_round)                
 
                 link_log.info(f"Turnier wurde geladen: {tournament_message.jump_url}")
-            except discord.errors.NotFound:
+            except discord.errors.NotFound as exc:
                 file_path = TOURNAMENTS_FOLDER+"/"+(message_path.replace("/", "_"))+".json"
-                log.warning(f"Turnier konnte nicht geladen werden, weil vermutlich der entprechende Channel gelöscht wurde. Lösche Datei {file_path}")
-                os.remove(file_path)
+                failed_tournaments_folder = TOURNAMENTS_FOLDER + "/failed"
+                
+                # Create failed tournaments folder if it doesn't exist
+                if not os.path.exists(failed_tournaments_folder):
+                    os.makedirs(failed_tournaments_folder)
+                
+                # Move the file instead of deleting it
+                failed_file_path = os.path.join(failed_tournaments_folder, os.path.basename(file_path))
+                shutil.move(file_path, failed_file_path)
+                log.warning(f"Turnier konnte nicht geladen werden, weil vermutlich der entprechende Channel gelöscht wurde. Datei verschoben zu {failed_file_path}")
         
         await update_tournament_message(self.bot)
 
@@ -539,7 +547,7 @@ class SpelltableTournamentManager(Cog):
         # Nur Turnierorganisatoren dürfen in Känalen unter der Kategorie "Spelltable Turniere" Turniere erstellen
         official_tournament_roles = ["Turnier-Organisation", "Moderator", "Admin"]
         if (ctx.channel.category
-            and ctx.channel.category.name in ("Spelltable Turniere")
+            and ctx.channel.category.name == "Spelltable Turniere"
             and not any(role.name in official_tournament_roles for role in ctx.author.roles)):
             # Use official_tournament_roles to look up roles
             roles = [discord.utils.get(ctx.guild.roles, name=role_name) for role_name in official_tournament_roles]

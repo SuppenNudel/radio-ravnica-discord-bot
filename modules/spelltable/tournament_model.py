@@ -10,6 +10,7 @@ from modules.util.generate_calendar_image import generate_calendar
 from modules.serializable import Serializable
 from modules import env
 import os
+import shutil
 import pytz
 from pathlib import Path
 import asyncio
@@ -44,7 +45,16 @@ async def load_tournaments(bot) -> dict[str, "SpelltableTournament"]:
     if not os.path.exists(TOURNAMENTS_FOLDER):
         os.makedirs(TOURNAMENTS_FOLDER)  # Ensure the folder exists
 
+    # Create failed tournaments folder
+    failed_folder = os.path.join(TOURNAMENTS_FOLDER, "failed")
+    if not os.path.exists(failed_folder):
+        os.makedirs(failed_folder)
+
     for filename in os.listdir(TOURNAMENTS_FOLDER):
+        # Skip the failed folder itself
+        if filename == "failed":
+            continue
+            
         if filename.endswith(".json"):
             file_path = os.path.join(TOURNAMENTS_FOLDER, filename)
             with open(file_path, "r") as file:
@@ -55,8 +65,11 @@ async def load_tournaments(bot) -> dict[str, "SpelltableTournament"]:
                     tournament_id = filename[:-5].replace("_", "/")  # Convert back to original ID format
                     tournaments[tournament_id] = tournament
                 except Exception as e:
-                    log.error(f"Failed to load {filename}")
-                    raise e
+                    log.error(f"Failed to load {filename}: {e}")
+                    # Move the file to failed folder instead of deleting it
+                    failed_file_path = os.path.join(failed_folder, filename)
+                    shutil.move(file_path, failed_file_path)
+                    log.info(f"Moved failed tournament file to {failed_file_path}")
 
     return tournaments
         
@@ -222,9 +235,13 @@ class SpelltableTournament(Serializable):
                 except discord.errors.NotFound: 
                     return None
             link_log.error(f"User with ID {user_id} (<@{user_id}>) not found in guild {self.guild.id} for tournament {self.title}.")
-            user = await discord.utils.get_or_fetch(self.bot, "user", user_id)
-            self.members[user_id] = user
-            return user
+            try:
+                user = await discord.utils.get_or_fetch(self.bot, "user", user_id)
+                self.members[user_id] = user
+                return user
+            except discord.errors.NotFound:
+                link_log.error(f"User ID {user_id} does not exist on Discord (Unknown User).")
+                return None
 
     @property
     async def organizer(self) -> discord.Member|None:
@@ -434,7 +451,20 @@ class SpelltableTournament(Serializable):
     async def get_message(self, message_id) -> discord.Message|None:
         if message_id:
             tourney_message = await self.message
-            return await tourney_message.channel.fetch_message(message_id)
+            if not tourney_message:
+                return None
+            try:
+                return await tourney_message.channel.fetch_message(message_id)
+            except discord.errors.NotFound:
+                log.warning(
+                    f"Referenced tournament message {message_id} was not found in channel {tourney_message.channel.id} for tournament {self.title}."
+                )
+                return None
+            except discord.errors.Forbidden:
+                log.warning(
+                    f"Missing permission to fetch referenced tournament message {message_id} in channel {tourney_message.channel.id} for tournament {self.title}."
+                )
+                return None
         return None
     
     async def get_pairings(self, round=None) -> str:
