@@ -55,6 +55,116 @@ EVENT_SELECT_OPTIONS = {
     "Wiederholung": RECURRENCE_OPTIONS,
 }
 
+# Weekday options for the recurring event modal
+WEEKDAY_OPTIONS = [
+    ("Montag", "MO"),
+    ("Dienstag", "TU"),
+    ("Mittwoch", "WE"),
+    ("Donnerstag", "TH"),
+    ("Freitag", "FR"),
+    ("Samstag", "SA"),
+    ("Sonntag", "SU"),
+]
+
+# Which week(s) of the month
+WEEK_POSITION_OPTIONS = [
+    ("1. Woche", "1"),
+    ("2. Woche", "2"),
+    ("3. Woche", "3"),
+    ("4. Woche", "4"),
+    ("Letzte Woche", "-1"),
+]
+
+# Interval options (every week / every 2 weeks, or none)
+INTERVAL_OPTIONS = [
+    ("Jede Woche", "1"),
+    ("Alle 2 Wochen", "2"),
+]
+
+ICAL_WEEKDAY_SHORT = {"MO": "Mo", "TU": "Di", "WE": "Mi", "TH": "Do", "FR": "Fr", "SA": "Sa", "SU": "So"}
+ICAL_WEEKDAY_TO_PYTHON = {"MO": 0, "TU": 1, "WE": 2, "TH": 3, "FR": 4, "SA": 5, "SU": 6}
+WEEK_POSITION_LABEL = {"1": "1.", "2": "2.", "3": "3.", "4": "4.", "-1": "Letzte"}
+
+
+def build_recurrence_rule(interval_val: str, weekdays: list[str], week_positions: list[str]) -> str | None:
+    """Build an RRULE string from modal select values."""
+    if not weekdays:
+        return None
+    if week_positions:
+        # Monthly: specific week-of-month + weekday → FREQ=MONTHLY;BYDAY=2WE,4WE
+        sorted_positions = sorted(week_positions, key=lambda p: int(p))
+        byday_parts = [f"{pos}{day}" for pos in sorted_positions for day in weekdays]
+        return f"FREQ=MONTHLY;BYDAY={','.join(byday_parts)}"
+
+    interval = int(interval_val) if interval_val else 1
+    byday = ",".join(weekdays)
+    return f"FREQ=WEEKLY;INTERVAL={interval};BYDAY={byday}"
+
+
+def parse_recurrence_rule(rule: str | None) -> dict:
+    """Parse an RRULE string back into component parts for the modal selects.
+
+    Returns a dict with keys: 'interval' (str), 'weekdays' (list[str]), 'week_positions' (list[str]).
+    'interval' is '0' when there is no recurrence.
+    """
+    result: dict = {"interval": "", "weekdays": [], "week_positions": []}
+    if not rule:
+        return result
+    rule_parts: dict[str, str] = {}
+    for part in rule.split(";"):
+        if "=" in part:
+            k, v = part.split("=", 1)
+            rule_parts[k.upper()] = v.upper()
+    freq = rule_parts.get("FREQ", "")
+    try:
+        interval = int(rule_parts.get("INTERVAL", "1"))
+    except ValueError:
+        interval = 1
+    byday = rule_parts.get("BYDAY", "")
+    if freq == "WEEKLY":
+        result["interval"] = str(interval)
+        if byday:
+            result["weekdays"] = re.findall(r"[A-Z]{2}", byday)
+    elif freq == "MONTHLY":
+        result["interval"] = ""
+        if byday:
+            matches = re.findall(r"(-?\d+)([A-Z]{2})", byday)
+            positions: list[str] = []
+            days: list[str] = []
+            for pos, day in matches:
+                if pos not in positions:
+                    positions.append(pos)
+                if day not in days:
+                    days.append(day)
+            result["week_positions"] = positions
+            result["weekdays"] = days
+    return result
+
+
+def recurrence_rule_to_display(rule: str | None) -> str | None:
+    """Convert an RRULE string to a short human-readable German label."""
+    if not rule or rule == "Keine":
+        return None
+    label = RECURRENCE_LABEL_MAP.get(rule)
+    if label:
+        return label
+    parsed = parse_recurrence_rule(rule)
+    interval_val = parsed["interval"]
+    weekdays = parsed["weekdays"]
+    week_positions = parsed["week_positions"]
+    if not weekdays:
+        return None
+    day_str = ", ".join(ICAL_WEEKDAY_SHORT.get(d, d) for d in weekdays)
+    if week_positions:
+        pos_str = ", ".join(WEEK_POSITION_LABEL.get(p, p) for p in week_positions)
+        return f"Monatlich: {pos_str} {day_str}"
+    else:
+        interval = int(interval_val) if interval_val else 1
+        if interval == 1:
+            return f"Wöchentlich: {day_str}"
+        else:
+            return f"Alle {interval} Wochen: {day_str}"
+
 class FieldType:
     def __init__(self, parser=None, long=False, max_items=1):
         self.parser = parser
@@ -327,14 +437,49 @@ class EditRecurringModal(discord.ui.DesignerModal):
         self.until_field = event.fields[FieldName.RECURRING_UNTIL]
         self.count_field = event.fields[FieldName.RECURRING_COUNT]
 
-        current_recurrence = self.recurring_field.value if isinstance(self.recurring_field.value, list) else ([self.recurring_field.value] if self.recurring_field.value else [])
-        self.recurrence_select = discord.ui.StringSelect(
-            placeholder="Wähle Wiederholung...",
-            options=[discord.SelectOption(label=opt, value=opt, default=opt in current_recurrence) for opt in RECURRENCE_OPTIONS],
-            min_values=1,
-            max_values=1,
-        )
+        # Resolve current rule (may be a legacy label or a raw RRULE string)
+        current_raw = self.recurring_field.value
+        current_rule = (current_raw[0] if isinstance(current_raw, list) else current_raw) or ""
+        if current_rule and not current_rule.startswith("FREQ="):
+            current_rule = RECURRENCE_RULE_MAP.get(current_rule, "")
+        parsed = parse_recurrence_rule(current_rule)
+        current_weekdays = parsed["weekdays"]
+        current_positions = parsed["week_positions"]
+        current_interval = parsed["interval"]
 
+        self.weekday_select = discord.ui.StringSelect(
+            custom_id="pe_recur_weekdays",
+            placeholder="Wochentage wählen...",
+            min_values=0,
+            max_values=len(WEEKDAY_OPTIONS),
+            required=False,
+            options=[
+                discord.SelectOption(label=label, value=value, default=value in current_weekdays)
+                for label, value in WEEKDAY_OPTIONS
+            ],
+        )
+        self.week_position_select = discord.ui.StringSelect(
+            custom_id="pe_recur_week_positions",
+            placeholder="Woche(n) im Monat (leer = jede Woche)...",
+            min_values=0,
+            max_values=len(WEEK_POSITION_OPTIONS),
+            required=False,
+            options=[
+                discord.SelectOption(label=label, value=value, default=value in current_positions)
+                for label, value in WEEK_POSITION_OPTIONS
+            ],
+        )
+        self.interval_select = discord.ui.StringSelect(
+            custom_id="pe_recur_interval",
+            placeholder="Häufigkeit...",
+            min_values=0,
+            max_values=1,
+            required=False,
+            options=[
+                discord.SelectOption(label=label, value=value, default=value == current_interval)
+                for label, value in INTERVAL_OPTIONS
+            ],
+        )
         self.until_input = discord.ui.InputText(
             placeholder=self.until_field.description,
             required=False,
@@ -348,25 +493,79 @@ class EditRecurringModal(discord.ui.DesignerModal):
             style=discord.InputTextStyle.singleline,
         )
 
-        self.add_item(discord.ui.Label(FieldName.RECURRING.value, self.recurrence_select))
-        self.add_item(discord.ui.Label(FieldName.RECURRING_UNTIL.value, self.until_input))
-        self.add_item(discord.ui.Label(FieldName.RECURRING_COUNT.value, self.count_input))
+        self.add_item(discord.ui.Label(
+            "Wochentage",
+            self.weekday_select,
+            description="Pflichtfeld fur jede Wiederholung",
+        ))
+        self.add_item(discord.ui.Label(
+            "Woche(n) im Monat",
+            self.week_position_select,
+            description="Optional; zusammen mit Wochentagen = monatliche Wiederholung",
+        ))
+        self.add_item(discord.ui.Label(
+            "Häufigkeit",
+            self.interval_select,
+            description="Optional fur wochentliche Wiederholung; leer = jede Woche",
+        ))
+        self.add_item(discord.ui.Label(
+            FieldName.RECURRING_UNTIL.value,
+            self.until_input,
+            description="Optionales Enddatum der Serie",
+        ))
+        self.add_item(discord.ui.Label(
+            FieldName.RECURRING_COUNT.value,
+            self.count_input,
+            description="Optionales Limit; wenn beides gesetzt ist, endet die Serie beim früheren Limit",
+        ))
 
     async def callback(self, interaction: discord.Interaction):
         try:
             await interaction.response.defer()
-            selected_recurrence = self.recurrence_select.values
-            self.recurring_field.value = selected_recurrence
 
-            recurrence = selected_recurrence[0] if selected_recurrence else None
-            if not recurrence or recurrence == "Keine":
+            def _get_select_values_from_payload(select_custom_id: str) -> list[str]:
+                data = interaction.data if isinstance(interaction.data, dict) else {}
+                components = data.get("components", []) if isinstance(data, dict) else []
+                for row in components:
+                    row_components = row.get("components", []) if isinstance(row, dict) else []
+                    for component in row_components:
+                        if not isinstance(component, dict):
+                            continue
+                        if component.get("custom_id") == select_custom_id:
+                            values = component.get("values", [])
+                            if isinstance(values, list):
+                                return [str(v) for v in values]
+                            return []
+                return []
+
+            interval_values = _get_select_values_from_payload("pe_recur_interval") or list(self.interval_select.values or [])
+            weekday_values = _get_select_values_from_payload("pe_recur_weekdays") or list(self.weekday_select.values or [])
+            week_position_values = _get_select_values_from_payload("pe_recur_week_positions") or list(self.week_position_select.values or [])
+
+            interval_val = interval_values[0] if interval_values else ""
+            weekdays = weekday_values
+            week_positions = week_position_values
+            until_val = self.until_input.value.strip() if self.until_input.value else ""
+            count_val = self.count_input.value.strip() if self.count_input.value else ""
+
+            has_recurrence_input = bool(weekdays or week_positions or interval_values or until_val or count_val)
+
+            if has_recurrence_input and not weekdays:
+                await interaction.followup.send(
+                    "Bitte mindestens einen Wochentag wählen, damit die Wiederholung gespeichert wird.",
+                    ephemeral=True,
+                )
+                return
+
+            rule = build_recurrence_rule(interval_val, weekdays, week_positions)
+
+            self.recurring_field._value = [rule] if rule else None
+
+            if not rule:
                 self.until_field._value = None
                 self.count_field._value = None
             else:
-                until_val = self.until_input.value.strip() if self.until_input.value else ""
                 self.until_field.value = until_val if until_val else None
-
-                count_val = self.count_input.value.strip() if self.count_input.value else ""
                 self.count_field.value = count_val if count_val else None
 
             await edit_event_post(self.event, interaction, EditTourneyView(self.event))
@@ -513,7 +712,13 @@ class EditTourneyView(discord.ui.View):
         start_end_button.callback = start_end_callback
         add_field_button(start_end_button, [0, 1])
 
-        recurring_button = discord.ui.Button(label="Wiederholung", emoji="🔁")
+        recurring_field = self.event.fields[FieldName.RECURRING]
+        recurring_until_field = self.event.fields[FieldName.RECURRING_UNTIL]
+        recurring_count_field = self.event.fields[FieldName.RECURRING_COUNT]
+        recurring_label = "Wiederholung"
+        if recurring_field.value or recurring_until_field.value or recurring_count_field.value:
+            recurring_label += " ✅"
+        recurring_button = discord.ui.Button(label=recurring_label, emoji="🔁")
 
         async def recurring_callback(interaction: discord.Interaction):
             await interaction.response.send_modal(EditRecurringModal(self.event))
@@ -693,6 +898,9 @@ class PaperEvent():
             recurrence_label = RECURRENCE_LABEL_MAP.get(recurrence_rule)
             if recurrence_label:
                 self.fields[FieldName.RECURRING]._value = [recurrence_label]
+            else:
+                # Store the raw RRULE string for BYDAY-style rules
+                self.fields[FieldName.RECURRING]._value = [recurrence_rule]
         recurrence_until = row["recurrence_until"]
         if recurrence_until:
             try:
@@ -721,7 +929,10 @@ class PaperEvent():
         event_type_list = self.fields[FieldName.TYPE].value
         recurrence_list = self.fields[FieldName.RECURRING].value
         recurrence_label = recurrence_list[0] if recurrence_list else None
-        recurrence_rule = RECURRENCE_RULE_MAP.get(recurrence_label)
+        if recurrence_label and recurrence_label.startswith("FREQ="):
+            recurrence_rule = recurrence_label  # already a raw RRULE string
+        else:
+            recurrence_rule = RECURRENCE_RULE_MAP.get(recurrence_label)
         is_recurring = 1 if recurrence_rule else 0
         recurrence_until = self.fields[FieldName.RECURRING_UNTIL].value if is_recurring else None
         recurrence_count = self.fields[FieldName.RECURRING_COUNT].value if is_recurring else None
@@ -856,7 +1067,8 @@ class PaperEvent():
         recurrence_list = self.fields[FieldName.RECURRING].value
         recurrence = recurrence_list[0] if recurrence_list else None
         if recurrence and recurrence != "Keine":
-            embed.add_field(name=FieldName.RECURRING.value, value=recurrence, inline=True)
+            display = recurrence_rule_to_display(recurrence) or recurrence
+            embed.add_field(name=FieldName.RECURRING.value, value=display, inline=True)
         recurrence_until = self.fields[FieldName.RECURRING_UNTIL].value
         if recurrence_until:
             embed.add_field(name=FieldName.RECURRING_UNTIL.value, value=discord.utils.format_dt(recurrence_until, 'f'), inline=True)

@@ -6,11 +6,12 @@ from ezcord import log
 from modules import env, paper_events_db
 import modules.paper_events_common as pe_common
 from modules.paper_events_calendar import update_paper_events_calendar
-from datetime import datetime, timedelta, time
+from datetime import datetime, timedelta, time, date
 import os
 import logging
 import asyncio
 import calendar
+import re
 
 link_log = logging.getLogger("link_logger")
 
@@ -172,7 +173,7 @@ class PaperEventsStatusMonitor(Cog):
 
     def _next_occurrence(self, start_at: datetime, end_at: datetime | None, recurrence_rule: str) -> tuple[datetime, datetime | None] | None:
         duration = (end_at - start_at) if end_at else None
-        rule_parts = {}
+        rule_parts: dict[str, str] = {}
         for part in (recurrence_rule or "").split(";"):
             if "=" in part:
                 key, value = part.split("=", 1)
@@ -184,12 +185,83 @@ class PaperEventsStatusMonitor(Cog):
         except ValueError:
             interval = 1
 
+        ICAL_TO_PYTHON = {"MO": 0, "TU": 1, "WE": 2, "TH": 3, "FR": 4, "SA": 5, "SU": 6}
+        byday = rule_parts.get("BYDAY", "")
+
         if freq == "MINUTELY":
             next_start = start_at + timedelta(minutes=interval)
         elif freq == "WEEKLY":
-            next_start = start_at + timedelta(weeks=interval)
+            if byday:
+                weekday_strs = re.findall(r"[A-Z]{2}", byday)
+                weekday_nums = sorted([ICAL_TO_PYTHON[d] for d in weekday_strs if d in ICAL_TO_PYTHON])
+                if not weekday_nums:
+                    next_start = start_at + timedelta(weeks=interval)
+                else:
+                    current_dow = start_at.weekday()
+                    delta_days: int | None = None
+                    for dow in weekday_nums:
+                        if dow > current_dow:
+                            delta_days = dow - current_dow
+                            break
+                    if delta_days is None:
+                        # Wrap: jump to first day of the next interval cycle
+                        delta_days = interval * 7 - current_dow + weekday_nums[0]
+                    next_start = start_at + timedelta(days=delta_days)
+            else:
+                next_start = start_at + timedelta(weeks=interval)
         elif freq == "MONTHLY":
-            next_start = self._add_months(start_at, interval)
+            if byday:
+                # Parse entries like "2WE", "4WE", "-1MO"
+                matches = re.findall(r"(-?\d+)([A-Z]{2})", byday)
+                if not matches:
+                    next_start = self._add_months(start_at, interval)
+                else:
+                    def nth_weekday_date(year: int, month: int, n: int, weekday: int) -> date:
+                        """Return the date of the n-th weekday (1-based; -1 = last) in the given month."""
+                        if n > 0:
+                            first = date(year, month, 1)
+                            days_until = (weekday - first.weekday()) % 7
+                            return first + timedelta(days=days_until + (n - 1) * 7)
+                        else:  # n == -1 → last occurrence
+                            last = date(year, month, calendar.monthrange(year, month)[1])
+                            days_back = (last.weekday() - weekday) % 7
+                            return last - timedelta(days=days_back)
+
+                    # Build sorted list of (position, python_weekday) tuples
+                    # Sort by position (treat -1 as 5 so it comes after 4)
+                    occurrences_in_cycle = [
+                        (int(pos), ICAL_TO_PYTHON[day])
+                        for pos, day in matches
+                        if day in ICAL_TO_PYTHON
+                    ]
+                    occurrences_in_cycle.sort(key=lambda x: x[0] if x[0] > 0 else 5)
+
+                    current_date = start_at.date()
+                    cy, cm = current_date.year, current_date.month
+
+                    # Find which entry the current event matches
+                    current_idx: int | None = None
+                    for i, (pos, dow) in enumerate(occurrences_in_cycle):
+                        if nth_weekday_date(cy, cm, pos, dow) == current_date:
+                            current_idx = i
+                            break
+
+                    if current_idx is not None and current_idx < len(occurrences_in_cycle) - 1:
+                        # Next occurrence is later in the same month
+                        next_pos, next_dow = occurrences_in_cycle[current_idx + 1]
+                        next_date = nth_weekday_date(cy, cm, next_pos, next_dow)
+                    else:
+                        # Move to next month, take the first occurrence in the cycle
+                        if cm == 12:
+                            ny, nm = cy + 1, 1
+                        else:
+                            ny, nm = cy, cm + 1
+                        first_pos, first_dow = occurrences_in_cycle[0]
+                        next_date = nth_weekday_date(ny, nm, first_pos, first_dow)
+
+                    next_start = start_at.replace(year=next_date.year, month=next_date.month, day=next_date.day)
+            else:
+                next_start = self._add_months(start_at, interval)
         else:
             return None
 
