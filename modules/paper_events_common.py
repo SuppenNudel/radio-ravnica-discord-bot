@@ -227,6 +227,28 @@ def parse_list(message_or_text):
     if type(message_or_text) == str:
         return [part.strip() for part in re.split(r'[;,|]', message_or_text)]
 
+
+def sanitize_filename(name: str, fallback: str = "event") -> str:
+    """Sanitize a string for safe use as a Windows filename."""
+    if not name:
+        return fallback
+    # Replace invalid Windows filename characters and control chars
+    sanitized = re.sub(r'[<>:"/\\|?*\x00-\x1F]', "_", name)
+    sanitized = sanitized.strip().rstrip(".")
+    if not sanitized:
+        sanitized = fallback
+
+    # Avoid reserved Windows device names
+    reserved = {
+        "CON", "PRN", "AUX", "NUL",
+        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    }
+    if sanitized.upper() in reserved:
+        sanitized = f"_{sanitized}"
+
+    return sanitized[:120]
+
 # Defining field types
 FIELD_TYPE_TIME = FieldType(parse_datetime)
 FIELD_TYPE_TEXT = FieldType()
@@ -980,7 +1002,8 @@ class PaperEvent():
         if location:
             files.append(discord.File(location.file_path, filename=location.file_name))
         title = self.build_title()
-        ics_file = ics.create_ics_file(f"tmp/{title}.ics", title, self.fields[FieldName.START].value, self.fields[FieldName.END].value, description=self.fields[FieldName.DESCRIPTION].value, location=location.formatted_address if location else None)
+        safe_title = sanitize_filename(title)
+        ics_file = ics.create_ics_file(f"tmp/{safe_title}.ics", title, self.fields[FieldName.START].value, self.fields[FieldName.END].value, description=self.fields[FieldName.DESCRIPTION].value, location=location.formatted_address if location else None)
         if ics_file:
             files.append(discord.File(ics_file, filename=ics_file))
         return files

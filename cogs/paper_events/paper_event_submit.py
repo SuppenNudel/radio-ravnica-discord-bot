@@ -1,6 +1,6 @@
 from ezcord import log, Cog
 from discord.ext.commands import slash_command
-from discord import ApplicationContext, Bot, InteractionContextType, IntegrationType
+from discord import ApplicationContext, Bot, InteractionContextType, IntegrationType, Option
 import discord
 from modules import env, paper_events_db
 import modules.paper_events_common as pe_common
@@ -197,7 +197,11 @@ class PaperEventSubmit(Cog):
         description="Reiche ein Paper Turnier/Event ein",
         integration_type={IntegrationType.user_install},
     )
-    async def poste_turnier(self, ctx:ApplicationContext):
+    async def poste_turnier(
+        self,
+        ctx: ApplicationContext,
+        titel: Option(str, description="Titel der Veranstaltung"),
+    ):
         try:
             if not ctx.guild:
                 await ctx.send_response("Dieser Befehl kann nur auf einem Server verwendet werden.", ephemeral=True)
@@ -205,6 +209,7 @@ class PaperEventSubmit(Cog):
 
             user = ctx.author
             paper_event = pe_common.PaperEvent(ctx.guild, user)
+            paper_event.fields[pe_common.FieldName.TITLE].value = titel
             embed = discord.Embed(image=SPIKE_ART_CROP, color=env.SPIKE_RED)
             await ctx.send_response(
                 content=(
