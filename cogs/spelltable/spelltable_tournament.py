@@ -12,6 +12,16 @@ import logging
 from discord.ext import tasks
 from datetime import datetime, time
 
+from modules.db import (
+    SessionLocal,
+    Tournament as TournamentRecord,
+    Participant,
+    SwissTournamentRecord,
+    SwissRound,
+    SwissPlayer,
+    SwissMatch,
+    DiscordUser,
+)
 from modules.spelltable.tournament_model import SpelltableTournament, load_tournaments, active_tournaments, update_tournament_message
 from modules.spelltable.common_views import SubmitDeckView, KickPlayerModal, ParticipationState, StartNextRoundView, FinishTournamentView, next_round, update_hall_of_fame
 from modules.spelltable import common_views
@@ -327,6 +337,147 @@ class SpelltableTournamentManager(Cog):
         self.bot = bot
         self.schedule_midnight_update.start()
 
+    async def _resolve_discord_user(self, guild: discord.Guild, user_id: int) -> discord.abc.User | None:
+        member = guild.get_member(user_id)
+        if member is None:
+            try:
+                member = await guild.fetch_member(user_id)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                member = None
+
+        if member is not None:
+            return member
+
+        user = self.bot.get_user(user_id)
+        if user is None:
+            try:
+                user = await self.bot.fetch_user(user_id)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                user = None
+
+        return user
+
+    async def _sync_tournament_user_mappings(self, guild: discord.Guild) -> dict[str, object]:
+        db = SessionLocal()
+        try:
+            tournament_rows = (
+                db.query(TournamentRecord.id, TournamentRecord.organizer_id)
+                .filter(TournamentRecord.guild_id == guild.id)
+                .all()
+            )
+
+            tournament_ids = [row.id for row in tournament_rows]
+            referenced_user_ids = {row.organizer_id for row in tournament_rows if row.organizer_id is not None}
+
+            if tournament_ids:
+                participant_ids = (
+                    db.query(Participant.user_id)
+                    .filter(Participant.tournament_id.in_(tournament_ids))
+                    .all()
+                )
+                referenced_user_ids.update(user_id for (user_id,) in participant_ids if user_id is not None)
+
+                swiss_rows = (
+                    db.query(SwissTournamentRecord.id, SwissTournamentRecord.winner_player_id)
+                    .filter(SwissTournamentRecord.tournament_id.in_(tournament_ids))
+                    .all()
+                )
+                swiss_ids = [row.id for row in swiss_rows]
+                referenced_user_ids.update(
+                    winner_player_id
+                    for _, winner_player_id in swiss_rows
+                    if winner_player_id is not None
+                )
+
+                if swiss_ids:
+                    swiss_player_ids = (
+                        db.query(SwissPlayer.player_id)
+                        .filter(SwissPlayer.swiss_tournament_id.in_(swiss_ids))
+                        .all()
+                    )
+                    referenced_user_ids.update(
+                        user_id for (user_id,) in swiss_player_ids if user_id is not None
+                    )
+
+                    swiss_match_rows = (
+                        db.query(SwissMatch.player1_id, SwissMatch.player2_id)
+                        .join(SwissRound, SwissRound.id == SwissMatch.swiss_round_id)
+                        .filter(SwissRound.swiss_tournament_id.in_(swiss_ids))
+                        .all()
+                    )
+                    referenced_user_ids.update(
+                        user_id
+                        for match_row in swiss_match_rows
+                        for user_id in match_row
+                        if user_id is not None
+                    )
+
+            existing_user_rows = {
+                row.user_id: row
+                for row in db.query(DiscordUser).filter(DiscordUser.user_id.in_(referenced_user_ids)).all()
+            } if referenced_user_ids else {}
+
+            created_count = 0
+            updated_count = 0
+            unresolved_user_ids: list[int] = []
+            missing_row_ids = sorted(user_id for user_id in referenced_user_ids if user_id not in existing_user_rows)
+            incomplete_row_ids = sorted(
+                user_id
+                for user_id, row in existing_user_rows.items()
+                if not row.username or not row.display_name
+            )
+
+            for user_id in sorted(referenced_user_ids):
+                user_row = existing_user_rows.get(user_id)
+                needs_sync = user_row is None or not user_row.username or not user_row.display_name
+                if not needs_sync:
+                    continue
+
+                discord_user = await self._resolve_discord_user(guild, user_id)
+                if discord_user is None:
+                    unresolved_user_ids.append(user_id)
+                    continue
+
+                if user_row is None:
+                    user_row = DiscordUser(user_id=user_id)
+                    db.add(user_row)
+                    existing_user_rows[user_id] = user_row
+                    created_count += 1
+                    created_row = True
+                else:
+                    created_row = False
+
+                username = getattr(discord_user, "name", None)
+                display_name = getattr(discord_user, "display_name", None) or getattr(discord_user, "global_name", None)
+
+                row_changed = False
+                if username and user_row.username != username:
+                    user_row.username = username
+                    row_changed = True
+                if display_name and user_row.display_name != display_name:
+                    user_row.display_name = display_name
+                    row_changed = True
+
+                if row_changed or created_row:
+                    user_row.updated_at = datetime.utcnow()
+                    if row_changed and not created_row:
+                        updated_count += 1
+
+            if created_count or updated_count:
+                db.commit()
+
+            return {
+                "tournaments": len(tournament_ids),
+                "referenced_user_ids": sorted(referenced_user_ids),
+                "missing_row_ids": missing_row_ids,
+                "incomplete_row_ids": incomplete_row_ids,
+                "created_count": created_count,
+                "updated_count": updated_count,
+                "unresolved_user_ids": unresolved_user_ids,
+            }
+        finally:
+            db.close()
+
     @Cog.listener()
     async def on_ready(self):
         loaded_tournaments = await load_tournaments(self.bot)
@@ -515,6 +666,53 @@ class SpelltableTournamentManager(Cog):
         message_str += f"\n\n>>> {message}"
         await ctx.channel.send(message_str)
         await ctx.respond("Alle Teilnehmer wurden gepingt.", ephemeral=True)
+
+    @slash_command(
+        name="sync_tournament_users",
+        description="Prüft und ergänzt User-Mappings in tournaments.db",
+        guild_ids=[env.GUILD_ID],
+        default_member_permissions=discord.Permissions(administrator=True),
+    )
+    async def sync_tournament_users(self, ctx: ApplicationContext):
+        await ctx.defer(ephemeral=True)
+
+        if ctx.guild is None or not isinstance(ctx.author, discord.Member):
+            await ctx.followup.send("Dieser Befehl kann nur auf dem Server verwendet werden.", ephemeral=True)
+            return
+
+        stats = await self._sync_tournament_user_mappings(ctx.guild)
+        referenced_user_ids: list[int] = stats["referenced_user_ids"]
+        missing_row_ids: list[int] = stats["missing_row_ids"]
+        incomplete_row_ids: list[int] = stats["incomplete_row_ids"]
+        unresolved_user_ids: list[int] = stats["unresolved_user_ids"]
+
+        embed = discord.Embed(
+            title="Turnier-User-Mappings synchronisiert",
+            color=discord.Color.green() if not unresolved_user_ids else discord.Color.orange(),
+            timestamp=datetime.utcnow(),
+        )
+        embed.add_field(name="Turniere", value=str(stats["tournaments"]), inline=True)
+        embed.add_field(name="Referenzierte User-IDs", value=str(len(referenced_user_ids)), inline=True)
+        embed.add_field(name="Neu angelegt", value=str(stats["created_count"]), inline=True)
+        embed.add_field(name="Ergänzt", value=str(stats["updated_count"]), inline=True)
+        embed.add_field(name="Fehlende Rows vorher", value=str(len(missing_row_ids)), inline=True)
+        embed.add_field(name="Unvollständige Rows vorher", value=str(len(incomplete_row_ids)), inline=True)
+
+        if unresolved_user_ids:
+            preview = ", ".join(str(user_id) for user_id in unresolved_user_ids[:20])
+            if len(unresolved_user_ids) > 20:
+                preview += ", ..."
+            embed.add_field(
+                name="Nicht auflösbar",
+                value=preview,
+                inline=False,
+            )
+        elif not referenced_user_ids:
+            embed.description = "Für diesen Server wurden keine Turnier-User-IDs in der Datenbank gefunden."
+        else:
+            embed.description = "Alle fehlenden oder unvollständigen User-Mappings wurden geprüft und soweit möglich ergänzt."
+
+        await ctx.followup.send(embed=embed, ephemeral=True)
 
     # @has_role("Moderator")
     @slash_command(description="Erstelle ein Spelltable Turnier für den Server")
