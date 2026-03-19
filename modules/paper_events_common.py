@@ -21,6 +21,10 @@ from modules import date_time_interpretation as dti
 import re
 import textwrap
 from ezcord import log
+import asyncio
+import requests
+from bs4 import BeautifulSoup
+from urllib.parse import urljoin
 
 CHANNEL_PAPER_EVENTS_ID = env.CHANNEL_PAPER_EVENTS_ID
 DEBUG = env.DEBUG
@@ -316,7 +320,64 @@ def get_timestamp_style(timestamp1: datetime|None, timestamp2: datetime|None) ->
     else:
         return "D"  # Different dates: long date and time
     
+def _fetch_og_image_sync(url: str) -> str | None:
+    """Synchronously fetch the best preview image (og:image / twitter:image) from a webpage."""
+    try:
+        response = requests.get(url, timeout=10, allow_redirects=True,
+                                headers={"User-Agent": "Mozilla/5.0"})
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
+        page_url = response.url or url
+        for attr in (
+            {"property": "og:image"},
+            {"name": "og:image"},
+            {"name": "twitter:image"},
+            {"property": "twitter:image"},
+        ):
+            tag = soup.find("meta", attrs=attr)
+            if tag and tag.get("content"):
+                return urljoin(page_url, tag["content"])
+
+        min_favicon_resolution = 64 * 64
+        best_favicon_url = None
+        best_favicon_resolution = -1
+        icon_links = soup.find_all("link", rel=lambda rel: rel and "icon" in rel.lower())
+        for link in icon_links:
+            href = link.get("href")
+            if not href or href.startswith("data:"):
+                continue
+
+            resolution = 0
+            sizes_raw = (link.get("sizes") or "").strip().lower()
+            for token in sizes_raw.split():
+                if "x" not in token:
+                    continue
+                try:
+                    width, height = token.split("x", 1)
+                    resolution = max(resolution, int(width) * int(height))
+                except Exception:
+                    continue
+
+            if resolution >= best_favicon_resolution:
+                best_favicon_resolution = resolution
+                best_favicon_url = urljoin(page_url, href)
+
+        if best_favicon_url and best_favicon_resolution >= min_favicon_resolution:
+            return best_favicon_url
+
+        return urljoin(page_url, "/favicon.ico")
+    except Exception as exc:
+        log.warning(f"fetch_og_image failed for {url}: {exc}")
+    return None
+
+
+async def fetch_og_image(url: str) -> str | None:
+    """Async wrapper — runs the blocking HTTP fetch in a thread."""
+    return await asyncio.to_thread(_fetch_og_image_sync, url)
+
+
 async def edit_event_post(event:"PaperEvent", interaction_or_message:discord.Interaction|discord.Message, view):
+    await event.resolve_image()
     embeds = [event.construct_event_embed()]
     gmaps_embed = event.construct_gmaps_embed()
     if gmaps_embed:
@@ -820,6 +881,7 @@ class EditPostView(discord.ui.View):
         if self.event.author != interaction.user and not any(role.name == "Moderator" for role in interaction.user.roles):
             await interaction.response.send_message("Du bist nicht Author dieses Posts!", ephemeral=True)
             return
+        await self.event.resolve_image()
         embeds = [self.event.construct_event_embed()]
         gmaps_embed = self.event.construct_gmaps_embed()
         if gmaps_embed:
@@ -860,6 +922,8 @@ class PaperEvent():
             InputField(FieldName.IMAGE, FIELD_TYPE_IMAGE, icon="🖼️", description="URL/Link zum Bild"),
         ]
         self.fields:dict[FieldName, InputField] = {field.name: field for field in field_list}
+        self._resolved_image_url: str | None = None
+        self._image_cache_key = None
 
     def _build_recurrence_status_text(self) -> str | None:
         recurrence_list = self.fields[FieldName.RECURRING].value
@@ -1053,6 +1117,37 @@ class PaperEvent():
         )
         return embed
     
+    async def resolve_image(self) -> str | None:
+        """Pre-resolve and cache the best image URL for this event.
+
+        Priority: explicit IMAGE field > og:image from venue website > og:image from event URL.
+        Result is cached per (venue_url, event_url) pair to avoid redundant HTTP requests.
+        """
+        explicit = self.fields[FieldName.IMAGE].value
+        if explicit:
+            self._resolved_image_url = explicit
+            self._image_cache_key = None  # reset so removing explicit triggers a fresh auto-fetch
+            return explicit
+
+        location: gmaps.Location = self.fields[FieldName.LOCATION].value
+        venue_url = getattr(location, "url", None) if location else None
+        event_url = self.fields[FieldName.URL].value
+        cache_key = (venue_url, event_url)
+
+        if self._image_cache_key == cache_key:
+            return self._resolved_image_url
+
+        self._image_cache_key = cache_key
+        self._resolved_image_url = None
+
+        for url in filter(None, [venue_url, event_url]):
+            img = await fetch_og_image(url)
+            if img:
+                self._resolved_image_url = img
+                return img
+
+        return None
+
     def construct_event_embed(self):
         start = self.fields[FieldName.START].value
         if start:
@@ -1067,7 +1162,7 @@ class PaperEvent():
                 discord.EmbedField(FieldName.START.value, value=start_value, inline=True)
             ],
         )
-        image = self.fields[FieldName.IMAGE].value
+        image = self.fields[FieldName.IMAGE].value or self._resolved_image_url
         if image:
             embed.set_image(url=image)
         end = self.fields[FieldName.END].value
@@ -1107,6 +1202,7 @@ class PaperEvent():
         location:gmaps.Location = self.fields[FieldName.LOCATION].value
         (area_name, tag_name) = location.get_area_and_tag_name()
         tag = discord.utils.get(channel.available_tags, name=tag_name)
+        await self.resolve_image()
         forum_post = await channel.create_thread(
             name=self.construct_thread_title(),
             content=self.construct_content(preview=False),
@@ -1119,6 +1215,7 @@ class PaperEvent():
         return forum_post
     
     async def send_preview(self, user:discord.User):
+        await self.resolve_image()
         embeds = []
         tourney_embed = self.construct_event_embed()
         if tourney_embed:
