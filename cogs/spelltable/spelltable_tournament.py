@@ -528,8 +528,14 @@ class SpelltableTournamentManager(Cog):
                     if current_round.message_id_standings:
                         message = await tournament.get_message(current_round.message_id_standings)
                         if message:
-                            submit_deck_view = await SubmitDeckView.create(tournament)
-                            await message.edit(embeds=[], view=submit_deck_view)
+                            if self.bot.user and message.author and message.author.id != self.bot.user.id:
+                                link_log.warning(
+                                    f"Skipping standings message edit because message {message.jump_url} in tournament `{tournament.title}` "
+                                    f"is authored by user {message.author.id}, not the bot."
+                                )
+                            else:
+                                submit_deck_view = await SubmitDeckView.create(tournament)
+                                await message.edit(embeds=[], view=submit_deck_view)
                         else:
                             link_log.error(f"Could not find standings message for concluded tournament: {tournament_message.jump_url}")
 
