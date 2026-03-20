@@ -24,6 +24,9 @@ class EventRow:
     location_country: str | None
     location_lat: float | None
     location_lng: float | None
+    fee_from: float | None
+    fee_to: float | None
+    fee_currency: str | None
     event_type: str | None
     url: str | None
     image_url: str | None
@@ -61,6 +64,9 @@ def init_db(conn: sqlite3.Connection) -> None:
             location_state TEXT,
             location_url TEXT,
             fee_eur REAL,
+            fee_from REAL,
+            fee_to REAL,
+            fee_currency TEXT,
             formats_json TEXT,
             event_type TEXT,
             url TEXT,
@@ -102,6 +108,21 @@ def init_db(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE paper_events ADD COLUMN location_lat REAL")
     if "location_lng" not in existing_columns:
         conn.execute("ALTER TABLE paper_events ADD COLUMN location_lng REAL")
+    if "fee_from" not in existing_columns:
+        conn.execute("ALTER TABLE paper_events ADD COLUMN fee_from REAL")
+    if "fee_to" not in existing_columns:
+        conn.execute("ALTER TABLE paper_events ADD COLUMN fee_to REAL")
+    if "fee_currency" not in existing_columns:
+        conn.execute("ALTER TABLE paper_events ADD COLUMN fee_currency TEXT")
+
+    conn.execute(
+        """
+        UPDATE paper_events
+        SET fee_from = COALESCE(fee_from, fee_eur),
+            fee_currency = COALESCE(fee_currency, CASE WHEN fee_eur IS NOT NULL THEN 'EUR' ELSE fee_currency END)
+        WHERE fee_eur IS NOT NULL
+        """
+    )
 
     conn.commit()
 
@@ -190,6 +211,9 @@ def list_upcoming_events(
                 location_country=row["location_country"] if "location_country" in row.keys() else None,
                 location_lat=row["location_lat"] if "location_lat" in row.keys() else None,
                 location_lng=row["location_lng"] if "location_lng" in row.keys() else None,
+                fee_from=row["fee_from"] if "fee_from" in row.keys() else row["fee_eur"] if "fee_eur" in row.keys() else None,
+                fee_to=row["fee_to"] if "fee_to" in row.keys() else None,
+                fee_currency=row["fee_currency"] if "fee_currency" in row.keys() else "EUR" if row["fee_eur"] is not None else None,
                 event_type=row["event_type"],
                 url=row["url"],
                 image_url=row["image_url"],
@@ -272,6 +296,9 @@ def export_public_events_json(
                 "location_country": item.location_country,
                 "location_lat": item.location_lat,
                 "location_lng": item.location_lng,
+                "fee_from": item.fee_from,
+                "fee_to": item.fee_to,
+                "fee_currency": item.fee_currency,
                 "event_type": item.event_type,
                 "formats": item.formats,
                 "url": item.url,

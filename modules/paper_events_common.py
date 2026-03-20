@@ -225,6 +225,14 @@ def parse_int(message_or_text:int|discord.Message|str):
         message_or_text = message_or_text.content
     return int(message_or_text)
 
+def parse_fee_amount(message_or_text: float | int | discord.Message | str):
+    if type(message_or_text) in [float, int]:
+        return float(message_or_text)
+    if type(message_or_text) == discord.Message:
+        message_or_text = message_or_text.content
+    normalized = str(message_or_text).strip().replace(",", ".")
+    return float(normalized)
+
 def parse_list(message_or_text):
     if type(message_or_text) == list:
         return message_or_text
@@ -259,8 +267,21 @@ FIELD_TYPE_TEXT = FieldType()
 FIELD_TYPE_TEXT_LONG = FieldType(long=True)
 FIELD_TYPE_LIST = FieldType(parse_list)
 FIELD_TYPE_NUMBER = FieldType(parse_int)
+FIELD_TYPE_FEE_AMOUNT = FieldType(parse_fee_amount)
 FIELD_TYPE_IMAGE = FieldType(parse_image)
 FIELD_TYPE_LOCATION = FieldType(parse_location)
+
+CURRENCY_OPTIONS = [
+    ("Euro", "EUR"),
+    ("Schweizer Franken", "CHF"),
+    ("Dollar", "USD"),
+]
+
+CURRENCY_SYMBOLS = {
+    "EUR": "€",
+    "CHF": "CHF",
+    "USD": "$",
+}
 
 class FieldName(Enum):
     TYPE = "Typ"
@@ -272,10 +293,38 @@ class FieldName(Enum):
     RECURRING_UNTIL = "Wiederholung bis"
     RECURRING_COUNT = "Anzahl weiterer Termine"
     END = "Ende"
-    FEE = "Teilnahmegebühr [in €]"
+    FEE = "Teilnahmegebühr"
+    FEE_FROM = "Preis von"
+    FEE_TO = "Preis bis"
+    FEE_CURRENCY = "Währung"
     DESCRIPTION = "Beschreibung"
     URL = "Link"
     IMAGE = "Flugblatt/Bild"
+
+
+def format_fee_amount(value: float | int | None) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return (f"{value:g}").replace(".", ",")
+
+
+def build_fee_display(fee_from: float | None, fee_to: float | None, currency: str | None) -> str | None:
+    if fee_from is None and fee_to is None:
+        return None
+
+    currency_label = CURRENCY_SYMBOLS.get(currency or "EUR", currency or "EUR")
+    from_text = format_fee_amount(fee_from)
+    to_text = format_fee_amount(fee_to)
+
+    if from_text and to_text:
+        if fee_from == fee_to:
+            return f"{from_text} {currency_label}"
+        return f"{from_text} bis {to_text} {currency_label}"
+    if from_text:
+        return f"{from_text} {currency_label}"
+    return f"bis {to_text} {currency_label}"
 
 class InputField:
     def __init__(self, name: FieldName, field_type: FieldType, mandatory: bool = False, icon:str = None, description=None, notion_column=None):
@@ -512,6 +561,81 @@ class EditStartEndModal(discord.ui.Modal):
         except Exception as e:
             await interaction.followup.send(str(e), ephemeral=True)
 
+
+class EditFeeModal(discord.ui.DesignerModal):
+    def __init__(self, event: "PaperEvent"):
+        super().__init__(title=FieldName.FEE.value)
+        self.event = event
+        self.from_field = event.fields[FieldName.FEE_FROM]
+        self.to_field = event.fields[FieldName.FEE_TO]
+        self.currency_field = event.fields[FieldName.FEE_CURRENCY]
+        self.current_currency = self.currency_field.value or "EUR"
+
+        self.from_input = discord.ui.InputText(
+            placeholder=self.from_field.description,
+            required=False,
+            value=format_fee_amount(self.from_field.value) or "",
+            style=discord.InputTextStyle.singleline,
+        )
+        self.to_input = discord.ui.InputText(
+            placeholder=self.to_field.description,
+            required=False,
+            value=format_fee_amount(self.to_field.value) or "",
+            style=discord.InputTextStyle.singleline,
+        )
+        self.currency_select = discord.ui.StringSelect(
+            custom_id="pe_fee_currency",
+            placeholder="Währung wählen...",
+            min_values=1,
+            max_values=1,
+            options=[
+                discord.SelectOption(label=label, value=value, default=value == self.current_currency)
+                for label, value in CURRENCY_OPTIONS
+            ],
+        )
+
+        self.add_item(discord.ui.Label(FieldName.FEE_FROM.value, self.from_input, description="Optional; z.B. 10 oder 12,50"))
+        self.add_item(discord.ui.Label(FieldName.FEE_TO.value, self.to_input, description="Optional; z.B. 25 oder 29,90"))
+        self.add_item(discord.ui.Label(FieldName.FEE_CURRENCY.value, self.currency_select, description="Standard ist Euro"))
+
+    async def callback(self, interaction: discord.Interaction):
+        try:
+            await interaction.response.defer()
+
+            def _get_select_values_from_payload(select_custom_id: str) -> list[str]:
+                data = interaction.data if isinstance(interaction.data, dict) else {}
+                components = data.get("components", []) if isinstance(data, dict) else []
+                for row in components:
+                    row_components = row.get("components", []) if isinstance(row, dict) else []
+                    for component in row_components:
+                        if not isinstance(component, dict):
+                            continue
+                        if component.get("custom_id") == select_custom_id:
+                            values = component.get("values", [])
+                            if isinstance(values, list):
+                                return [str(v) for v in values]
+                            return []
+                return []
+
+            fee_from_raw = self.from_input.value.strip() if self.from_input.value else ""
+            fee_to_raw = self.to_input.value.strip() if self.to_input.value else ""
+            currency_values = _get_select_values_from_payload("pe_fee_currency") or list(self.currency_select.values or []) or [self.current_currency]
+            currency_value = currency_values[0] if currency_values else "EUR"
+
+            fee_from = parse_fee_amount(fee_from_raw) if fee_from_raw else None
+            fee_to = parse_fee_amount(fee_to_raw) if fee_to_raw else None
+
+            if fee_from is not None and fee_to is not None and fee_to < fee_from:
+                raise Exception("'Preis bis' darf nicht kleiner als 'Preis von' sein")
+
+            self.from_field._value = fee_from
+            self.to_field._value = fee_to
+            self.currency_field._value = currency_value
+
+            await edit_event_post(self.event, interaction, EditTourneyView(self.event))
+        except Exception as e:
+            await interaction.followup.send(str(e), ephemeral=True)
+
 class EditRecurringModal(discord.ui.DesignerModal):
     def __init__(self, event: "PaperEvent"):
         super().__init__(title="Wiederholung")
@@ -657,7 +781,10 @@ class EditRecurringModal(discord.ui.DesignerModal):
 
 def make_callback(event, field:InputField):
     async def edit_field_callback(interaction:discord.Interaction):
-        if field.notion_column:
+        if field.name in {FieldName.FEE_FROM, FieldName.FEE_TO, FieldName.FEE_CURRENCY}:
+            modal = EditFeeModal(event)
+            await interaction.response.send_modal(modal)
+        elif field.notion_column:
             modal = SelectFieldModal(event, field)
             await interaction.response.send_modal(modal)
         else:
@@ -760,6 +887,9 @@ class EditTourneyView(discord.ui.View):
             FieldName.RECURRING,
             FieldName.RECURRING_UNTIL,
             FieldName.RECURRING_COUNT,
+            FieldName.FEE_FROM,
+            FieldName.FEE_TO,
+            FieldName.FEE_CURRENCY,
         }
 
         for field_name, field in self.event.fields.items():
@@ -808,6 +938,22 @@ class EditTourneyView(discord.ui.View):
 
         recurring_button.callback = recurring_callback
         add_field_button(recurring_button, [1, 0])
+
+        fee_from_field = self.event.fields[FieldName.FEE_FROM]
+        fee_to_field = self.event.fields[FieldName.FEE_TO]
+        fee_currency_field = self.event.fields[FieldName.FEE_CURRENCY]
+        fee_label = FieldName.FEE.value
+        if fee_from_field.value is not None or fee_to_field.value is not None:
+            fee_label += " ✅"
+        elif fee_currency_field.value and fee_currency_field.value != "EUR":
+            fee_label += " ⚙️"
+        fee_button = discord.ui.Button(label=fee_label, emoji="💸")
+
+        async def fee_callback(interaction: discord.Interaction):
+            await interaction.response.send_modal(EditFeeModal(self.event))
+
+        fee_button.callback = fee_callback
+        add_field_button(fee_button, [1, 0])
 
         # Submit Button
         self.submit_button = SubmitButton(event)
@@ -915,13 +1061,16 @@ class PaperEvent():
             InputField(FieldName.RECURRING_UNTIL, FIELD_TYPE_TIME, icon="📅", description="z.B. am 24.12.2025 um 18:00 Uhr, in 5 Stunden"),
             InputField(FieldName.RECURRING_COUNT, FIELD_TYPE_NUMBER, icon="🔢", description="eine Ganzzahl, wie 3, 4, 5 etc"),
             InputField(FieldName.LOCATION, FIELD_TYPE_LOCATION, mandatory=True, icon="📍", description="Wo das Event/Turnier stattfindet"),
-            InputField(FieldName.FEE, FIELD_TYPE_NUMBER, icon="💸"),
+            InputField(FieldName.FEE_FROM, FIELD_TYPE_FEE_AMOUNT, icon="💸", description="z.B. 10 oder 12,50"),
+            InputField(FieldName.FEE_TO, FIELD_TYPE_FEE_AMOUNT, icon="💸", description="z.B. 25 oder 29,90"),
+            InputField(FieldName.FEE_CURRENCY, FIELD_TYPE_TEXT, icon="💱", description="EUR, CHF oder USD"),
             InputField(FieldName.FORMATS, FieldType(parser=parse_list, max_items="max"), icon="🎮", description=f"Kommasepariert, welche(s) Format(e) gespielt wird/werden", mandatory=True, notion_column="Format(e)"),
             InputField(FieldName.TYPE, FIELD_TYPE_LIST, icon="🏷️", description="Kommasepariert, zum Beipsiel FNM, RCQ, Prerelease...", notion_column="Event Typ"),
             InputField(FieldName.URL, FIELD_TYPE_TEXT, icon="🔗", description="Der Link zur Veranstaltung"),
             InputField(FieldName.IMAGE, FIELD_TYPE_IMAGE, icon="🖼️", description="URL/Link zum Bild"),
         ]
         self.fields:dict[FieldName, InputField] = {field.name: field for field in field_list}
+        self.fields[FieldName.FEE_CURRENCY]._value = "EUR"
         self._resolved_image_url: str | None = None
         self._image_cache_key = None
 
@@ -976,7 +1125,13 @@ class PaperEvent():
                 self.fields[FieldName.LOCATION].value = location_str
             except Exception as e:
                 log.error(f"Could not resolve location '{location_str}': {e}")
-        self.fields[FieldName.FEE]._value = row["fee_eur"]
+        fee_from = row["fee_from"] if "fee_from" in row.keys() else None
+        fee_to = row["fee_to"] if "fee_to" in row.keys() else None
+        fee_currency = row["fee_currency"] if "fee_currency" in row.keys() else None
+        legacy_fee = row["fee_eur"] if "fee_eur" in row.keys() else None
+        self.fields[FieldName.FEE_FROM]._value = fee_from if fee_from is not None else legacy_fee
+        self.fields[FieldName.FEE_TO]._value = fee_to
+        self.fields[FieldName.FEE_CURRENCY]._value = fee_currency or "EUR"
         formats_json = row["formats_json"]
         self.fields[FieldName.FORMATS]._value = json.loads(formats_json) if formats_json else None
         recurrence_rule = row["recurrence_rule"]
@@ -1022,6 +1177,10 @@ class PaperEvent():
         is_recurring = 1 if recurrence_rule else 0
         recurrence_until = self.fields[FieldName.RECURRING_UNTIL].value if is_recurring else None
         recurrence_count = self.fields[FieldName.RECURRING_COUNT].value if is_recurring else None
+        fee_from = self.fields[FieldName.FEE_FROM].value
+        fee_to = self.fields[FieldName.FEE_TO].value
+        fee_currency = self.fields[FieldName.FEE_CURRENCY].value or "EUR"
+        legacy_fee_eur = fee_from if fee_currency == "EUR" and (fee_to is None or fee_to == fee_from) else None
         event_data = {
             "server_id": str(self.guild.id),
             "thread_id": str(self.thread.id) if self.thread else None,
@@ -1037,7 +1196,10 @@ class PaperEvent():
             "location_country": _long_name(location.country) if location else None,
             "location_lat": location.coord.lat if location and location.coord else None,
             "location_lng": location.coord.lng if location and location.coord else None,
-            "fee_eur": self.fields[FieldName.FEE].value,
+            "fee_eur": legacy_fee_eur,
+            "fee_from": fee_from,
+            "fee_to": fee_to,
+            "fee_currency": fee_currency,
             "formats": self.fields[FieldName.FORMATS].value or [],
             "event_type": event_type_list[0] if event_type_list else None,
             "is_recurring": is_recurring,
@@ -1172,9 +1334,13 @@ class PaperEvent():
         if start and end:
             embed.add_field(name="Dauer", value=dti.human_delta(end, start), inline=True)
 
-        fee = self.fields[FieldName.FEE].value
-        if fee:
-            embed.add_field(name=FieldName.FEE.value, value=str(fee)+" €", inline=True)
+        fee_text = build_fee_display(
+            self.fields[FieldName.FEE_FROM].value,
+            self.fields[FieldName.FEE_TO].value,
+            self.fields[FieldName.FEE_CURRENCY].value,
+        )
+        if fee_text:
+            embed.add_field(name=FieldName.FEE.value, value=fee_text, inline=True)
         formats = self.fields[FieldName.FORMATS].value
         format = ", ".join(formats) if formats else f"<{FieldName.FORMATS.value}>"
         embed.add_field(name=FieldName.FORMATS.value, value=format, inline=False)
