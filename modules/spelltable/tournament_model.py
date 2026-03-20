@@ -916,6 +916,10 @@ class SpelltableTournament(Serializable):
                         await standings_message.edit(content="", embeds=[], attachments=[], suppress=False)
                         await standings_message.edit(content="", embeds=[embed], attachments=[], file=metagame_file, suppress=False)
                         return
+                    except discord.errors.Forbidden:
+                        # Bot doesn't have permission to edit this message (likely authored by another user)
+                        logging.warning(f"Cannot edit metagame standings message: Bot does not have permission (message may be authored by another user)")
+                        return
                     except (aiohttp.ClientOSError, aiohttp.ClientConnectionError, discord.errors.HTTPException) as e:
                         if attempt < max_retries - 1:
                             # Exponential backoff: 1s, 2s, 4s
