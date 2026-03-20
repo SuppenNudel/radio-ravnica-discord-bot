@@ -177,18 +177,38 @@ class Match(Serializable):
     
     @classmethod
     def deserialize(cls, match_data, players:dict[int, Player], round_number:int):#
-        wins:dict[str, int] = match_data['wins']
-        draws:int = wins.pop('draws')
-        p1:tuple[str, int] = wins.popitem()
-        p2:tuple[str, int]|None = wins.popitem()
+        wins:dict[str, int] = dict(match_data['wins'])
+        draws:int = wins.pop('draws', 0)
+        player_items:list[tuple[str, int]] = list(wins.items())
+
+        if len(player_items) != 2:
+            raise ValueError(
+                f"Datenkorrektur erforderlich: Ungueltige Match-Daten in Runde {round_number} "
+                f"(erwartet 2 Spieler-Eintraege, erhalten: {player_items})."
+            )
+
+        p1 = player_items[0]
+        p2 = player_items[1]
+
         if p1[0] == 'null':
             p2, p1 = p1, p2
+        if p1[0] == 'null':
+            raise ValueError(
+                f"Datenkorrektur erforderlich: Ungueltige Match-Daten in Runde {round_number} "
+                f"(kein primaerer Spieler in {player_items})."
+            )
         if p2[0] == 'null':
             p2 = None
 
         player1 = players[int(p1[0])]
         player2 = players[int(p2[0])] if p2 else None
-        match = Match(player1, player2, round_number)
+        try:
+            match = Match(player1, player2, round_number)
+        except ValueError as exc:
+            raise ValueError(
+                f"Datenkorrektur erforderlich: Ungueltige Paarung in Runde {round_number} "
+                f"({player1.player_id} vs {player2.player_id if player2 else 'BYE'}): {exc}"
+            ) from exc
         if p2 and (p1[1] or p2[1] or draws):
             match.set_result(p1[1], p2[1], draws)
         return match
