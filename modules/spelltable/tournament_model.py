@@ -350,13 +350,13 @@ class SpelltableTournament(Serializable):
                     return user
                 except discord.errors.NotFound: 
                     return None
-            link_log.error(f"User with ID {user_id} (<@{user_id}>) not found in guild {self.guild.id} for tournament {self.title}.")
+            link_log.debug(f"User with ID {user_id} (<@{user_id}>) not found in guild {self.guild.id} for tournament {self.title}.")
             try:
                 user = await discord.utils.get_or_fetch(self.bot, "user", user_id)
                 self.members[user_id] = user
                 return user
             except discord.errors.NotFound:
-                link_log.error(f"User ID {user_id} does not exist on Discord (Unknown User).")
+                link_log.debug(f"User ID {user_id} does not exist on Discord (Unknown User).")
                 return None
 
     @property

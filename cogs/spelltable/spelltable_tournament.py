@@ -556,7 +556,7 @@ class SpelltableTournamentManager(Cog):
                     # pairings have not been posted yet
                     await common_views.update_pairings(tournament, current_round)                
 
-                link_log.info(f"Turnier wurde geladen: {tournament_message.jump_url}")
+                link_log.info(f"Turnier geladen: {tournament.title}")
             except discord.errors.NotFound:
                 log.warning(f"Turnier konnte nicht geladen werden (message_path={message_path}): Channel oder Nachricht wurde vermutlich gelöscht.")
         

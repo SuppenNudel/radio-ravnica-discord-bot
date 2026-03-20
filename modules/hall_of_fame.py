@@ -159,7 +159,7 @@ class HallOfFame:
                 for tourney_dict in data.get("tournaments", []):
                     self.tournaments.append(TournamentRecord.from_dict(tourney_dict))
                 
-                log.info(f"Loaded hall of fame with {len(self.participants)} participants and {len(self.tournaments)} tournaments")
+                log.debug(f"Hall of Fame geladen: {len(self.participants)} Teilnehmer, {len(self.tournaments)} Turniere")
             except Exception as e:
                 log.error(f"Failed to load hall of fame: {e}")
     
@@ -172,7 +172,7 @@ class HallOfFame:
             }
             with open(HOF_FILE, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
-            log.info("Hall of fame saved to file")
+            log.debug("Hall of Fame gespeichert")
         except Exception as e:
             log.error(f"Failed to save hall of fame: {e}")
     

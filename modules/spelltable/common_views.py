@@ -602,7 +602,7 @@ async def update_hall_of_fame(tournament: SpelltableTournament):
             results=results
         )
         
-        log.info(f"Hall of fame updated with tournament results: {tournament.title}")
+        log.info("Hall of Fame aktualisiert")
     except Exception as e:
         log.error(f"Failed to update hall of fame for tournament {tournament.title}: {e}")
 
