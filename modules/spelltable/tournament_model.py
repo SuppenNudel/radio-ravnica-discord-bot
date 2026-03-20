@@ -79,6 +79,11 @@ def _build_swiss_json(db, swiss_t_row: SwissTournamentRecord) -> dict:
         )
         matches = []
         for m_row in match_rows:
+            if m_row.player2_id == m_row.player1_id:
+                raise ValueError(
+                    f"Datenkorrektur erforderlich: Ungueltiges Self-Match in der Turnier-DB "
+                    f"(match_id={m_row.id}, round_id={r_row.id}, player_id={m_row.player1_id})."
+                )
             p2_key = "null" if m_row.player2_id is None else str(m_row.player2_id)
             matches.append({"wins": {
                 str(m_row.player1_id): m_row.player1_wins,
@@ -187,7 +192,18 @@ async def load_tournaments(bot) -> dict[str, "SpelltableTournament"]:
                 tournament_id = f"{t_row.guild_id}/{t_row.channel_id}/{t_row.message_id}"
                 tournaments[tournament_id] = tournament
             except Exception as e:
-                log.error(f"Failed to load tournament id={t_row.id} ({t_row.name}): {e}")
+                message = str(e)
+                if "Datenkorrektur erforderlich" in message:
+                    link_log.error(f"Turnier konnte nicht geladen werden: {t_row.name}. {message}")
+                    # Notify admin user about data integrity issue
+                    try:
+                        admin_user = await bot.fetch_user(699263016113405993)
+                        if admin_user:
+                            await admin_user.send(f"⚠️ **Turnier-Datenkorrektur erforderlich**\n\nTurnier: {t_row.name}\n\n{message}")
+                    except Exception as dm_error:
+                        log.debug(f"Konnte Benachrichtigung nicht senden: {dm_error}")
+                else:
+                    log.error(f"Failed to load tournament id={t_row.id} ({t_row.name}): {e}")
 
         if users_dirty:
             db.commit()
