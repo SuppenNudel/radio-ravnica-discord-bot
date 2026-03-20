@@ -424,18 +424,15 @@ class SpelltableTournamentManager(Cog):
             incomplete_row_ids = sorted(
                 user_id
                 for user_id, row in existing_user_rows.items()
-                if not row.username or not row.display_name
+                if row.username in (None, "") or row.display_name in (None, "")
             )
 
             for user_id in sorted(referenced_user_ids):
                 user_row = existing_user_rows.get(user_id)
-                needs_sync = user_row is None or not user_row.username or not user_row.display_name
-                if not needs_sync:
-                    continue
-
                 discord_user = await self._resolve_discord_user(guild, user_id)
                 if discord_user is None:
-                    unresolved_user_ids.append(user_id)
+                    if user_row is None or user_row.username in (None, "") or user_row.display_name in (None, ""):
+                        unresolved_user_ids.append(user_id)
                     continue
 
                 if user_row is None:
@@ -716,7 +713,7 @@ class SpelltableTournamentManager(Cog):
         elif not referenced_user_ids:
             embed.description = "Für diesen Server wurden keine Turnier-User-IDs in der Datenbank gefunden."
         else:
-            embed.description = "Alle fehlenden oder unvollständigen User-Mappings wurden geprüft und soweit möglich ergänzt."
+            embed.description = "Alle fehlenden, unvollständigen oder veralteten User-Mappings wurden geprüft und soweit möglich aktualisiert."
 
         await ctx.followup.send(embed=embed, ephemeral=True)
 
