@@ -76,8 +76,7 @@ class SwissTournamentRecord(Base):
     """Normalized Swiss tournament root record"""
     __tablename__ = "swiss_tournaments"
 
-    id = Column(Integer, primary_key=True, index=True)
-    tournament_id = Column(Integer, ForeignKey("tournaments.id"), unique=True, index=True)
+    tournament_id = Column(Integer, ForeignKey("tournaments.id"), primary_key=True)
     rounds_count = Column(Integer, nullable=False)
     winner_player_id = Column(Integer, nullable=True)
 
@@ -94,7 +93,7 @@ class SwissPlayer(Base):
     __tablename__ = "swiss_players"
 
     id = Column(Integer, primary_key=True, index=True)
-    swiss_tournament_id = Column(Integer, ForeignKey("swiss_tournaments.id"), index=True)
+    swiss_tournament_id = Column(Integer, ForeignKey("swiss_tournaments.tournament_id"), index=True)
     player_id = Column(Integer, index=True)
     dropped = Column(Boolean, default=False)
     deck_link = Column(Text, nullable=True)
@@ -111,7 +110,7 @@ class SwissRound(Base):
     __tablename__ = "swiss_rounds"
 
     id = Column(Integer, primary_key=True, index=True)
-    swiss_tournament_id = Column(Integer, ForeignKey("swiss_tournaments.id"), index=True)
+    swiss_tournament_id = Column(Integer, ForeignKey("swiss_tournaments.tournament_id"), index=True)
     round_number = Column(Integer, nullable=False)
     message_id_pairings = Column(Integer, nullable=True)
     message_id_standings = Column(Integer, nullable=True)

@@ -49,12 +49,12 @@ def _build_swiss_json(db, swiss_t_row: SwissTournamentRecord) -> dict:
     """Reconstruct the JSON-like dict that SwissTournament.deserialize() expects."""
     player_rows = (
         db.query(SwissPlayer)
-        .filter(SwissPlayer.swiss_tournament_id == swiss_t_row.id)
+        .filter(SwissPlayer.swiss_tournament_id == swiss_t_row.tournament_id)
         .all()
     )
     round_rows = (
         db.query(SwissRound)
-        .filter(SwissRound.swiss_tournament_id == swiss_t_row.id)
+        .filter(SwissRound.swiss_tournament_id == swiss_t_row.tournament_id)
         .order_by(SwissRound.round_number.asc())
         .all()
     )
@@ -714,7 +714,7 @@ class SpelltableTournament(Serializable):
                 # Delete rounds + matches bottom-up, then players
                 round_ids = [
                     r[0] for r in db.query(SwissRound.id)
-                    .filter(SwissRound.swiss_tournament_id == swiss_t_row.id)
+                    .filter(SwissRound.swiss_tournament_id == swiss_t_row.tournament_id)
                     .all()
                 ]
                 if round_ids:
@@ -722,16 +722,16 @@ class SpelltableTournament(Serializable):
                         SwissMatch.swiss_round_id.in_(round_ids)
                     ).delete(synchronize_session=False)
                 db.query(SwissRound).filter(
-                    SwissRound.swiss_tournament_id == swiss_t_row.id
+                    SwissRound.swiss_tournament_id == swiss_t_row.tournament_id
                 ).delete(synchronize_session=False)
                 db.query(SwissPlayer).filter(
-                    SwissPlayer.swiss_tournament_id == swiss_t_row.id
+                    SwissPlayer.swiss_tournament_id == swiss_t_row.tournament_id
                 ).delete(synchronize_session=False)
 
                 for player in self.swiss_tournament.players:
                     deck = player.deck
                     db.add(SwissPlayer(
-                        swiss_tournament_id=swiss_t_row.id,
+                        swiss_tournament_id=swiss_t_row.tournament_id,
                         player_id=player.player_id,
                         dropped=player.dropped,
                         deck_link=deck.link if deck else None,
@@ -740,7 +740,7 @@ class SpelltableTournament(Serializable):
 
                 for round_obj in self.swiss_tournament.rounds:
                     round_row = SwissRound(
-                        swiss_tournament_id=swiss_t_row.id,
+                        swiss_tournament_id=swiss_t_row.tournament_id,
                         round_number=round_obj.round_number,
                         message_id_pairings=round_obj.message_id_pairings,
                         message_id_standings=round_obj.message_id_standings,
@@ -769,7 +769,7 @@ class SpelltableTournament(Serializable):
                 if swiss_t_row:
                     round_ids = [
                         r[0] for r in db.query(SwissRound.id)
-                        .filter(SwissRound.swiss_tournament_id == swiss_t_row.id)
+                        .filter(SwissRound.swiss_tournament_id == swiss_t_row.tournament_id)
                         .all()
                     ]
                     if round_ids:
@@ -777,10 +777,10 @@ class SpelltableTournament(Serializable):
                             SwissMatch.swiss_round_id.in_(round_ids)
                         ).delete(synchronize_session=False)
                     db.query(SwissRound).filter(
-                        SwissRound.swiss_tournament_id == swiss_t_row.id
+                        SwissRound.swiss_tournament_id == swiss_t_row.tournament_id
                     ).delete(synchronize_session=False)
                     db.query(SwissPlayer).filter(
-                        SwissPlayer.swiss_tournament_id == swiss_t_row.id
+                        SwissPlayer.swiss_tournament_id == swiss_t_row.tournament_id
                     ).delete(synchronize_session=False)
                     db.delete(swiss_t_row)
 
