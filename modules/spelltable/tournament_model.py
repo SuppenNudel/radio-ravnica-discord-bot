@@ -396,16 +396,11 @@ class SpelltableTournament(Serializable):
                 return None
             try:
                 channel = await self.bot.fetch_channel(self.channel_id)
-                # thread:discord.Thread = await discord.utils.get_or_fetch(self.guild, "channel", self.channel_id)
-                if isinstance(channel, discord.Thread):
-                    thread = channel
-                else:
-                    raise TypeError(f"Expected Thread, got {type(channel)}")
+                # Support both Thread (new tournaments) and TextChannel (legacy tournaments)
                 try:
-                    # thread does not have get_message method, so we need to fetch the message
-                    self._message = await thread.fetch_message(self.message_id)
+                    self._message = await channel.fetch_message(self.message_id)
                 except Exception as e:
-                    log.error(e)
+                    log.error(f"Could not fetch message {self.message_id} from channel {self.channel_id}: {e}")
                     return None
             except discord.errors.Forbidden:
                 log.error(f"Bot does not have permission to access channel {self.channel_id} in guild {self.guild.id} ({self.guild.name}).")
