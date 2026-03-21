@@ -273,7 +273,7 @@ async def update_tournament_message(bot:discord.Bot, trigger_guild:discord.Guild
     if trigger_guild and trigger_guild.id != env.GUILD_ID:
         return  # Only update for the main guild
     guild:discord.Guild = bot.get_guild(env.GUILD_ID)
-    log.info(f"Updating tournament message")
+    log.debug(f"Updating tournament message")
     rr_tournaments:list["SpelltableTournament"] = [t for t in active_tournaments.values() if t.guild.id == guild.id]
     # Remove concluded or cancelled tournaments from rr_tournaments
     rr_tournaments = [
@@ -305,7 +305,7 @@ async def update_tournament_message(bot:discord.Bot, trigger_guild:discord.Guild
             calendar_message = await guild.get_channel(env.SPELLTABLE_CALENDAR_CHANNEL_ID).send(tourney_list_message)
         env.SPELLTABLE_CALENDAR_MESSAGE_ID = calendar_message.id
         env.save_to_env("SPELLTABLE_CALENDAR_MESSAGE_ID", calendar_message.id)
-    link_log.info(f"Tournament Overview Message updated: {calendar_message.jump_url}")
+    link_log.debug(f"Tournament Overview Message updated: {calendar_message.jump_url}")
 
     tournament_count = len(rr_tournaments)
     activity_name = f"Veranstaltet {tournament_count} Turnier{'e' if tournament_count != 1 else ''}"
