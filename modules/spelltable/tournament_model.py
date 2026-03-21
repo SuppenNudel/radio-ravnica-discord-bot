@@ -119,11 +119,6 @@ async def load_tournaments(bot) -> dict[str, "SpelltableTournament"]:
         for t_row in tournament_rows:
             try:
                 guild = await bot.fetch_guild(t_row.guild_id)
-                # Bulk-fetch all guild members into the gateway cache so that
-                # subsequent get_member() calls are cache hits instead of
-                # individual REST requests per user.
-                if not guild.chunked:
-                    await guild.chunk()
                 tournament = SpelltableTournament(guild, t_row.name, t_row.organizer_id, bot)
                 tournament.description = t_row.description
                 tournament.time = t_row.start_time
