@@ -588,8 +588,8 @@ class SpelltableTournament(Serializable):
             try:
                 return await tourney_message.channel.fetch_message(message_id)
             except discord.errors.NotFound:
-                log.warning(
-                    f"Referenced tournament message {message_id} was not found in channel {tourney_message.channel.id} for tournament {self.title}."
+                link_log.warning(
+                    f"Referenced tournament message {message_id} was not found in channel {tourney_message.channel.id} for tournament `{self.title}`: {tourney_message.jump_url}"
                 )
                 return None
             except discord.errors.Forbidden:
