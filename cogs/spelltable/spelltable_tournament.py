@@ -378,15 +378,15 @@ class SpelltableTournamentManager(Cog):
                 referenced_user_ids.update(user_id for (user_id,) in participant_ids if user_id is not None)
 
                 swiss_rows = (
-                    db.query(SwissTournamentRecord.id, SwissTournamentRecord.winner_player_id)
+                    db.query(SwissTournamentRecord.tournament_id, SwissTournamentRecord.winner_player_id)
                     .filter(SwissTournamentRecord.tournament_id.in_(tournament_ids))
                     .all()
                 )
-                swiss_ids = [row.id for row in swiss_rows]
+                swiss_ids = [row.tournament_id for row in swiss_rows]
                 referenced_user_ids.update(
-                    winner_player_id
-                    for _, winner_player_id in swiss_rows
-                    if winner_player_id is not None
+                    row.winner_player_id
+                    for row in swiss_rows
+                    if row.winner_player_id is not None
                 )
 
                 if swiss_ids:
