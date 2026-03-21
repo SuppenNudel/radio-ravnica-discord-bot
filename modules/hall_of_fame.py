@@ -5,13 +5,11 @@ Stores persistent data in JSON format.
 
 import json
 import os
-import logging
 from datetime import datetime
 from typing import Dict, List, Optional
 from ezcord import log
 
 HOF_FILE = "hall_of_fame.json"
-link_log = logging.getLogger("link_logger")
 
 class ParticipantStats:
     """Represents statistics for a tournament participant."""
@@ -210,15 +208,7 @@ class HallOfFame:
                 - matches: List of match results (optional)
         """
         if self.get_tournament_results(tournament_id):
-            jump_url = None
-            tournament_id_parts = tournament_id.split("/")
-            if len(tournament_id_parts) == 3:
-                guild_id_str, channel_id_str, message_id_str = tournament_id_parts
-                jump_url = f"https://discord.com/channels/{guild_id_str}/{channel_id_str}/{message_id_str}"
-            link_log.info(
-                f"Hall of fame already contains tournament `{tournament_title}` ({tournament_id}), skipping"
-                + (f": {jump_url}" if jump_url else "")
-            )
+            log.info(f"Hall of fame already contains tournament {tournament_id}, skipping")
             return
 
         # Create tournament record
