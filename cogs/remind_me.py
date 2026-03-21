@@ -246,7 +246,7 @@ class RemindMe(commands.Cog):
     async def on_ready(self):
         if not self.check_reminders.is_running():
             self.check_reminders.start()
-        log.debug(self.__class__.__name__ + " is ready")
+        log.info(self.__class__.__name__ + " is ready")
 
     @tasks.loop(minutes=5)
     async def check_reminders(self):

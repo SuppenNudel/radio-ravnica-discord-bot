@@ -47,7 +47,7 @@ class Youtube(commands.Cog):
         if not self.check_channels.is_running():
             self.check_channels.start()
 
-        log.debug(self.__class__.__name__ + " is ready")
+        log.info(self.__class__.__name__ + " is ready")
 
     async def post_video(self, yt_channel:YoutubeChannel, content_type:ContentType, content):
         url = f"https://www.youtube.com/watch?v={content['videoId']}"

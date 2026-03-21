@@ -53,7 +53,7 @@ class PaperEventsStatusMonitor(Cog):
                 self.midnight_calendar_update.start()
         else:
             log.error("Guild not found")
-        log.debug(self.__class__.__name__ + " is ready")
+        log.info(self.__class__.__name__ + " is ready")
 
     @tasks.loop(time=time(hour=0, minute=0, second=0, tzinfo=env.TIMEZONE))
     async def midnight_calendar_update(self):

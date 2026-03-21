@@ -14,7 +14,11 @@ class HallOfFameCog(Cog):
     
     def __init__(self, bot: Bot):
         self.bot = bot
-    
+
+    @Cog.listener()
+    async def on_ready(self):
+        log.info(self.__class__.__name__ + " is ready")
+
     @slash_command(description="Zeige die Hall of Fame der Turniersieger und Top-Spieler")
     async def hall_of_fame(
         self,

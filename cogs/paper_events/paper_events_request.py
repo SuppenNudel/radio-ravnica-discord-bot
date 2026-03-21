@@ -15,7 +15,7 @@ class PaperEventsRequest(Cog):
 
     @Cog.listener()
     async def on_ready(self):
-        log.debug(self.__class__.__name__ + " is ready")
+        log.info(self.__class__.__name__ + " is ready")
         
     def get_paper_events(self, plz, land):
         conn = paper_events_db.connect()

@@ -143,7 +143,7 @@ class MTGTop8Preview(Cog):
     
     @Cog.listener()
     async def on_ready(self):
-        log.debug(self.__class__.__name__ + " is ready")
+        log.info(self.__class__.__name__ + " is ready")
 
     @Cog.listener()
     async def on_message(self, message: discord.Message):

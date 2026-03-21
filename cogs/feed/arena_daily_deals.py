@@ -30,7 +30,7 @@ class ArenaDailyDeals(Cog):
         if not self.check_bsky_posts.is_running():
             self.check_bsky_posts.start()
             
-        log.debug(self.__class__.__name__ + " is ready")
+        log.info(self.__class__.__name__ + " is ready")
 
     async def get_latest_post(self):
         try:

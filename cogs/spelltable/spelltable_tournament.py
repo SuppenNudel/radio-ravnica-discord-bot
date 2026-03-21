@@ -562,7 +562,7 @@ class SpelltableTournamentManager(Cog):
         
         await update_tournament_message(self.bot)
 
-        log.debug(self.__class__.__name__ + " is ready")
+        log.info(self.__class__.__name__ + " is ready")
 
     @slash_command(description="Pingt alle Spieler, die ihre Matches noch nicht gemeldet haben")
     async def ping_missing_matches(

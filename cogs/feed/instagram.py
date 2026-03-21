@@ -97,7 +97,7 @@ class InstagramMonitor(commands.Cog):
         if not self.check_channels.is_running():
             self.check_channels.start()
             
-        log.debug(self.__class__.__name__ + " is ready")
+        log.info(self.__class__.__name__ + " is ready")
 
     async def post_content(self, ig_channel:InstagramProfile, new_post):
         caption = new_post.get("caption")

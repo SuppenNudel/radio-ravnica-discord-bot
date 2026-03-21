@@ -189,7 +189,7 @@ class PaperEventSubmit(Cog):
                     link_log.error(f"HTTP error when editing message in thread {thread_id}: {e}")
             except Exception as e:
                 link_log.error(f"Error reconnecting view for thread {thread_id}: {e}")
-        log.debug(self.__class__.__name__ + " is ready")
+        log.info(self.__class__.__name__ + " is ready")
 
     # Weitere Checks https://gist.github.com/Painezor/eb2519022cd2c907b56624105f94b190
     @slash_command(

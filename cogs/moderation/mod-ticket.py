@@ -53,7 +53,7 @@ class ModTicket(Cog):
                         log.warning(f"Dem Bot fehlt die Berechtigung 'manage_channels' in der Kategorie '{category_name}'.")
             
                     
-        log.debug(self.__class__.__name__ + " is ready")
+        log.info(self.__class__.__name__ + " is ready")
 
     @slash_command(guild_ids=[env.GUILD_ID], description="Erstellt einen Kanal als Ticket, in dem du dein Anliegen diskutieren kannst.")
     async def mods_kontaktieren(self, ctx:discord.commands.ApplicationContext):

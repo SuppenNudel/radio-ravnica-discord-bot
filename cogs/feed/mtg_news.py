@@ -54,7 +54,7 @@ class MtgNews(Cog):
         if not self.check_mtg_news.is_running():
             self.check_mtg_news.start()
             
-        log.debug(self.__class__.__name__ + " is ready")
+        log.info(self.__class__.__name__ + " is ready")
 
     @discord.ext.tasks.loop(minutes=10)
     async def check_mtg_news(self):
