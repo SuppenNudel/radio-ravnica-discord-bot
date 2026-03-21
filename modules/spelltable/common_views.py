@@ -634,6 +634,119 @@ async def _edit_standings_message(
     await standings_message.edit(content=content, embeds=[], attachments=[], file=standings_file, view=view)
 
 
+class LinkStandingsMessageModal(discord.ui.Modal):
+    def __init__(self, tournament: SpelltableTournament, prompt_message: discord.Message | None = None):
+        super().__init__(title="Platzierungsnachricht verknüpfen")
+        self.tournament = tournament
+        self.prompt_message = prompt_message
+
+        self.channel_id_input = discord.ui.InputText(
+            label="Channel ID (leer lassen für diesen Channel)",
+            placeholder="z.B. 123456789012345678",
+            required=False,
+        )
+        self.add_item(self.channel_id_input)
+
+        self.message_id_input = discord.ui.InputText(
+            label="Message ID",
+            placeholder="z.B. 987654321098765432",
+            required=True,
+        )
+        self.add_item(self.message_id_input)
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            message_id = int(self.message_id_input.value.strip())
+        except ValueError:
+            await interaction.followup.send("Ungültige Message ID.", ephemeral=True)
+            return
+
+        channel_id_str = self.channel_id_input.value.strip()
+        if channel_id_str:
+            try:
+                channel_id = int(channel_id_str)
+            except ValueError:
+                await interaction.followup.send("Ungültige Channel ID.", ephemeral=True)
+                return
+        else:
+            channel_id = None
+
+        try:
+            if channel_id:
+                channel = await self.tournament.guild.fetch_channel(channel_id)
+                message = await channel.fetch_message(message_id)
+            else:
+                tournament_message = await self.tournament.message
+                message = await tournament_message.channel.fetch_message(message_id)
+        except discord.NotFound:
+            await interaction.followup.send("Nachricht nicht gefunden. Bitte überprüfe die IDs.", ephemeral=True)
+            return
+
+        current_round = self.tournament.swiss_tournament.current_round()
+        current_round.message_id_standings = message_id
+        await self.tournament.save_tournament()
+
+        if self.prompt_message:
+            try:
+                await self.prompt_message.delete()
+            except discord.NotFound:
+                pass
+
+        await interaction.followup.send(f"Platzierungsnachricht erfolgreich verknüpft: {message.jump_url}", ephemeral=True)
+
+
+class MissingStandingsView(discord.ui.View):
+    def __init__(self):
+        raise RuntimeError("Use 'await MissingStandingsView.create(...)' instead")
+
+    async def _init(self, tournament: SpelltableTournament):
+        super().__init__(timeout=None)
+        self.tournament = tournament
+        self.prompt_message: discord.Message | None = None
+
+    @classmethod
+    async def create(cls, tournament: SpelltableTournament):
+        instance = object.__new__(cls)
+        await instance._init(tournament)
+        return instance
+
+    @discord.ui.button(label="Platzierungen jetzt posten", style=discord.ButtonStyle.success, emoji="📤")
+    async def confirm_post_button(self, button: discord.ui.Button, interaction: discord.Interaction):
+        await interaction.response.defer()
+        current_round = self.tournament.swiss_tournament.current_round()
+        total_rounds = self.tournament.swiss_tournament.rounds_count
+        standings_content = _standings_content_for_round(current_round.round_number, total_rounds)
+        standings_file = await _build_standings_file(self.tournament)
+
+        if current_round.round_number >= total_rounds:
+            action_view = await FinishTournamentView.create(self.tournament)
+        else:
+            action_view = await StartNextRoundView.create(current_round, self.tournament)
+
+        tournament_message = await self.tournament.message
+        new_message = await tournament_message.channel.send(content=standings_content, view=action_view, file=standings_file)
+        current_round.message_id_standings = new_message.id
+        await self.tournament.save_tournament()
+
+        to = await self.tournament.organizer
+        can_do = "das Turnier abschließen" if type(action_view) == FinishTournamentView else "die nächste Runde starten"
+        await to.send(f"🏆 Die Platzierungen für die {current_round.round_number}. Runde des Turniers `{self.tournament.title}` wurden gepostet.\nDu kannst {can_do}...\n{new_message.jump_url}")
+
+        if self.prompt_message:
+            try:
+                await self.prompt_message.delete()
+            except discord.NotFound:
+                pass
+
+        await interaction.followup.send("Platzierungen wurden gepostet!", ephemeral=True)
+
+    @discord.ui.button(label="Vorhandene Nachricht verknüpfen", style=discord.ButtonStyle.secondary, emoji="🔗")
+    async def link_message_button(self, button: discord.ui.Button, interaction: discord.Interaction):
+        await interaction.response.send_modal(LinkStandingsMessageModal(self.tournament, self.prompt_message))
+
+
 async def update_standings(tournament:SpelltableTournament, interaction: discord.Interaction | None):
     current_round = tournament.swiss_tournament.current_round()
     if not current_round.is_concluded():
@@ -654,15 +767,9 @@ async def update_standings(tournament:SpelltableTournament, interaction: discord
 
     if message_standings:
         await _edit_standings_message(tournament, current_round, message_standings, view=view)
-    else:
+    elif interaction:
         async def do_the_thing():
-            if interaction:
-                message_standings = await interaction.followup.send(content=standings_content, view=view, file=standings_file)
-            else:
-                tournament_message = await tournament.message
-                if not tournament_message:
-                    raise RuntimeError("Tournament message not found while creating standings message")
-                message_standings = await tournament_message.channel.send(content=standings_content, view=view, file=standings_file)
+            message_standings = await interaction.followup.send(content=standings_content, view=view, file=standings_file)
             # dm organizer
             to = await tournament.organizer
             can_do = None
@@ -673,6 +780,18 @@ async def update_standings(tournament:SpelltableTournament, interaction: discord
             await to.send(f"🏆 Die Platzierungen für die {tournament.swiss_tournament.current_round().round_number}. Runde des Turniers `{tournament.title}` wurden gepostet.\nDu kannst {can_do}...\n{message_standings.jump_url}")
             current_round.message_id_standings = message_standings.id
         await use_custom_try("Platzierungen Senden", do_the_thing, tournament)
+    else:
+        # No interaction — bot is recovering from a restart; prompt the organizer for action
+        tournament_message = await tournament.message
+        if not tournament_message:
+            log.error(f"Tournament message not found while handling missing standings for '{tournament.title}'")
+            return
+        confirm_view = await MissingStandingsView.create(tournament)
+        prompt_msg = await tournament_message.channel.send(
+            content=f"⚠️ Die Platzierungsnachricht für Runde {current_round.round_number} des Turniers `{tournament.title}` wurde nicht gefunden. Was soll getan werden?",
+            view=confirm_view,
+        )
+        confirm_view.prompt_message = prompt_msg
 
     await tournament.save_tournament()
 
