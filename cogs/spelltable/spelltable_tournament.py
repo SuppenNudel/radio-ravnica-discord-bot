@@ -544,9 +544,9 @@ class SpelltableTournamentManager(Cog):
                     message = await tournament.get_message(current_round.message_id_standings)
                     if message and isinstance(message.channel, discord.Thread) and message.channel.archived:
                         await message.channel.edit(archived=False)
-                        # Always call update_standings: if message is found it edits it,
-                        # if it is missing it shows the MissingStandingsView recovery prompt.
-                        await common_views.update_standings(tournament, None)
+                    # Always call update_standings: if message is found it edits it,
+                    # if it is missing it shows the MissingStandingsView recovery prompt.
+                    await common_views.update_standings(tournament, None)
                 if current_round.message_id_pairings:
                     # pairings have been posted
                     message = await tournament.get_message(current_round.message_id_pairings)
