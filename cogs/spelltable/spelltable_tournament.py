@@ -526,7 +526,7 @@ class SpelltableTournamentManager(Cog):
                         message = await tournament.get_message(current_round.message_id_standings)
                         if message:
                             if self.bot.user and message.author and message.author.id != self.bot.user.id:
-                                link_log.warning(
+                                link_log.debug(
                                     f"Skipping standings message edit because message {message.jump_url} in tournament `{tournament.title}` "
                                     f"is authored by user {message.author.id}, not the bot."
                                 )

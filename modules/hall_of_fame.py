@@ -208,7 +208,7 @@ class HallOfFame:
                 - matches: List of match results (optional)
         """
         if self.get_tournament_results(tournament_id):
-            log.info(f"Hall of fame already contains tournament {tournament_id}, skipping")
+            log.debug(f"Hall of fame already contains tournament {tournament_id}, skipping")
             return
 
         # Create tournament record
