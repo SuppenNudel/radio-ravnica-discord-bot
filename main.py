@@ -40,6 +40,45 @@ ezcord.set_log(
     log_format="`%(levelname)s` %(message)s"
 )
 
+
+def install_safe_message_edit_patch() -> None:
+    if getattr(discord.Message.edit, "_rr_safe_patch", False):
+        return
+
+    original_edit = discord.Message.edit
+    link_log = logging.getLogger("link_logger")
+
+    async def safe_edit(self, *args, **kwargs):
+        bot_user_id = getattr(getattr(self, "_state", None), "self_id", None)
+        author_id = getattr(getattr(self, "author", None), "id", None)
+
+        if bot_user_id is not None and author_id is not None and author_id != bot_user_id:
+            link_log.debug(
+                "Skipping message edit for message_id=%s in channel_id=%s: message authored by user_id=%s, bot_user_id=%s",
+                getattr(self, "id", "unknown"),
+                getattr(getattr(self, "channel", None), "id", "unknown"),
+                author_id,
+                bot_user_id,
+            )
+            return self
+
+        try:
+            return await original_edit(self, *args, **kwargs)
+        except discord.errors.Forbidden as error:
+            link_log.debug(
+                "Skipping message edit due to forbidden for message_id=%s in channel_id=%s: %s",
+                getattr(self, "id", "unknown"),
+                getattr(getattr(self, "channel", None), "id", "unknown"),
+                error,
+            )
+            return self
+
+    safe_edit._rr_safe_patch = True
+    discord.Message.edit = safe_edit
+
+
+install_safe_message_edit_patch()
+
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True

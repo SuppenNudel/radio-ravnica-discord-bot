@@ -498,9 +498,29 @@ class SpelltableTournamentManager(Cog):
         message: discord.Message | None,
         destination_without_extension: Path,
         session: aiohttp.ClientSession,
-    ) -> bool:
+    ) -> int:
         if not message:
-            return False
+            return 0
+
+        saved_count = 0
+        used_destinations: set[Path] = set()
+
+        def _next_destination(extension: str) -> Path:
+            nonlocal saved_count
+            if saved_count == 0:
+                candidate = destination_without_extension.with_suffix(extension)
+            else:
+                candidate = destination_without_extension.with_name(
+                    f"{destination_without_extension.name}_{saved_count + 1}"
+                ).with_suffix(extension)
+
+            while candidate in used_destinations or candidate.exists():
+                saved_count += 1
+                candidate = destination_without_extension.with_name(
+                    f"{destination_without_extension.name}_{saved_count + 1}"
+                ).with_suffix(extension)
+            used_destinations.add(candidate)
+            return candidate
 
         for attachment in message.attachments:
             content_type = (attachment.content_type or "").lower()
@@ -510,20 +530,32 @@ class SpelltableTournamentManager(Cog):
             extension = Path(attachment.filename).suffix.lower() or ".png"
             if extension not in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
                 extension = ".png"
-            await attachment.save(destination_without_extension.with_suffix(extension))
-            return True
+            destination = _next_destination(extension)
+            await attachment.save(destination)
+            saved_count += 1
 
-        image_url = message.embeds[0].image.url if message.embeds and message.embeds[0].image else None
-        if not image_url:
-            return False
+        image_urls: list[str] = []
+        for embed in message.embeds:
+            if embed.image and embed.image.url:
+                image_urls.append(embed.image.url)
+            if embed.thumbnail and embed.thumbnail.url:
+                image_urls.append(embed.thumbnail.url)
+            if embed.type == "image" and embed.url:
+                image_urls.append(embed.url)
 
-        extension = self._extract_extension_from_url(image_url)
-        destination = destination_without_extension.with_suffix(extension)
-        async with session.get(image_url) as response:
-            if response.status != 200:
-                return False
-            destination.write_bytes(await response.read())
-            return True
+        seen_urls: set[str] = set()
+        deduped_urls = [url for url in image_urls if not (url in seen_urls or seen_urls.add(url))]
+
+        for image_url in deduped_urls:
+            extension = self._extract_extension_from_url(image_url)
+            destination = _next_destination(extension)
+            async with session.get(image_url) as response:
+                if response.status != 200:
+                    continue
+                destination.write_bytes(await response.read())
+                saved_count += 1
+
+        return saved_count
 
     @slash_command(
         name="archive_spelltable_images",
@@ -576,24 +608,24 @@ class SpelltableTournamentManager(Cog):
                 for round_obj in tournament.swiss_tournament.rounds:
                     try:
                         pairings_message = await tournament.get_message(round_obj.message_id_pairings)
-                        pairings_saved = await self._download_message_image(
+                        pairings_saved_count = await self._download_message_image(
                             pairings_message,
                             export_dir / f"{round_obj.round_number}_pairings",
                             session,
                         )
-                        if pairings_saved:
-                            files_saved += 1
+                        if pairings_saved_count:
+                            files_saved += pairings_saved_count
                         else:
                             missing_images += 1
 
                         standings_message = await tournament.get_message(round_obj.message_id_standings)
-                        standings_saved = await self._download_message_image(
+                        standings_saved_count = await self._download_message_image(
                             standings_message,
                             export_dir / f"{round_obj.round_number}_standings",
                             session,
                         )
-                        if standings_saved:
-                            files_saved += 1
+                        if standings_saved_count:
+                            files_saved += standings_saved_count
                         else:
                             missing_images += 1
                     except Exception as e:

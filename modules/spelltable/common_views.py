@@ -508,14 +508,13 @@ async def update_pairings(tournament:SpelltableTournament, round:swiss_mtg.Round
             await pairings_message.edit(content=plain_text_pairings, attachments=[], file=pairings_file, view=view, embed=None)
         except discord.errors.Forbidden as e:
             author_id = pairings_message.author.id if pairings_message.author else "unknown"
-            log.error(
+            log.warning(
                 f"Cannot edit pairings message {pairings_message.jump_url} for tournament '{tournament.title}' "
                 f"(round {round.round_number}): bot lacks permission. "
                 f"Message was authored by user/bot ID {author_id}. "
                 f"This usually means the message was posted by a different bot or user. "
                 f"Original error: {e}"
             )
-            raise
     else:
         pairings_message = await post_pairings(round, tournament)
         log.info(f"Issued new pairings message {pairings_message.jump_url} for tournament {tournament.title}.")
@@ -631,7 +630,13 @@ async def _edit_standings_message(
         else _standings_content_for_round(standings_round.round_number, total_rounds)
     )
     standings_file = await _build_standings_file(tournament, standings_round)
-    await standings_message.edit(content=content, embeds=[], attachments=[], file=standings_file, view=view)
+    try:
+        await standings_message.edit(content=content, embeds=[], attachments=[], file=standings_file, view=view)
+    except discord.errors.Forbidden:
+        link_log.warning(
+            f"Cannot edit standings message {standings_message.jump_url} for tournament '{tournament.title}': "
+            f"bot does not have permission (message may be authored by another user)"
+        )
 
 
 class LinkStandingsMessageModal(discord.ui.Modal):
