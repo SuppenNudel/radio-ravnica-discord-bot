@@ -11,6 +11,9 @@ import logging
 
 from discord.ext import tasks
 from datetime import datetime, time
+from pathlib import Path
+import aiohttp
+from urllib.parse import urlparse
 
 from modules.db import (
     SessionLocal,
@@ -475,6 +478,177 @@ class SpelltableTournamentManager(Cog):
         finally:
             db.close()
 
+    @staticmethod
+    def _sanitize_path_component(name: str, fallback: str) -> str:
+        sanitized = re.sub(r'[<>:"/\\|?*\x00-\x1F]', "_", (name or "").strip()).rstrip(".")
+        return sanitized[:120] if sanitized else fallback
+
+    @staticmethod
+    def _extract_extension_from_url(url: str | None) -> str:
+        if not url:
+            return ".png"
+        parsed = urlparse(url)
+        suffix = Path(parsed.path).suffix.lower()
+        if suffix in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
+            return suffix
+        return ".png"
+
+    async def _download_message_image(
+        self,
+        message: discord.Message | None,
+        destination_without_extension: Path,
+        session: aiohttp.ClientSession,
+    ) -> int:
+        if not message:
+            return 0
+
+        saved_count = 0
+        used_destinations: set[Path] = set()
+
+        def _next_destination(extension: str) -> Path:
+            nonlocal saved_count
+            if saved_count == 0:
+                candidate = destination_without_extension.with_suffix(extension)
+            else:
+                candidate = destination_without_extension.with_name(
+                    f"{destination_without_extension.name}_{saved_count + 1}"
+                ).with_suffix(extension)
+
+            while candidate in used_destinations or candidate.exists():
+                saved_count += 1
+                candidate = destination_without_extension.with_name(
+                    f"{destination_without_extension.name}_{saved_count + 1}"
+                ).with_suffix(extension)
+            used_destinations.add(candidate)
+            return candidate
+
+        for attachment in message.attachments:
+            content_type = (attachment.content_type or "").lower()
+            is_image = content_type.startswith("image/") or attachment.filename.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".gif"))
+            if not is_image:
+                continue
+            extension = Path(attachment.filename).suffix.lower() or ".png"
+            if extension not in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
+                extension = ".png"
+            destination = _next_destination(extension)
+            await attachment.save(destination)
+            saved_count += 1
+
+        image_urls: list[str] = []
+        for embed in message.embeds:
+            if embed.image and embed.image.url:
+                image_urls.append(embed.image.url)
+            if embed.thumbnail and embed.thumbnail.url:
+                image_urls.append(embed.thumbnail.url)
+            if embed.type == "image" and embed.url:
+                image_urls.append(embed.url)
+
+        seen_urls: set[str] = set()
+        deduped_urls = [url for url in image_urls if not (url in seen_urls or seen_urls.add(url))]
+
+        for image_url in deduped_urls:
+            extension = self._extract_extension_from_url(image_url)
+            destination = _next_destination(extension)
+            async with session.get(image_url) as response:
+                if response.status != 200:
+                    continue
+                destination.write_bytes(await response.read())
+                saved_count += 1
+
+        return saved_count
+
+    @slash_command(
+        name="archive_spelltable_images",
+        description="Lädt Pairings- und Standings-Bilder aller Spelltable-Turniere herunter.",
+        guild_ids=[env.GUILD_ID],
+        default_member_permissions=discord.Permissions(administrator=True),
+    )
+    async def archive_spelltable_images(self, ctx: ApplicationContext):
+        await ctx.defer(ephemeral=True)
+
+        if ctx.guild is None or not isinstance(ctx.author, discord.Member):
+            await ctx.followup.send("Dieser Befehl kann nur auf dem Server verwendet werden.", ephemeral=True)
+            return
+
+        if env.SPELLTABLE_MEDIA_EXPORT_USER_ID is None:
+            await ctx.followup.send(
+                "`SPELLTABLE_MEDIA_EXPORT_USER_ID` ist nicht gesetzt. Bitte in den ENV-Variablen konfigurieren.",
+                ephemeral=True,
+            )
+            return
+
+        if ctx.author.id != env.SPELLTABLE_MEDIA_EXPORT_USER_ID:
+            await ctx.followup.send("Du darfst diesen Befehl nicht verwenden.", ephemeral=True)
+            return
+
+        bot_root = Path(__file__).resolve().parents[2]
+        base_export_dir = bot_root / "data" / "old_tournaments"
+
+        tournaments_processed = 0
+        files_saved = 0
+        missing_images = 0
+        errors: list[str] = []
+
+        async with aiohttp.ClientSession() as session:
+            for tournament in list(active_tournaments.values()):
+                if not tournament.swiss_tournament:
+                    continue
+
+                tournaments_processed += 1
+                tournament_message = await tournament.message
+                if not tournament_message:
+                    continue
+
+                format_name = tournament_message.channel.parent.name if tournament_message.channel.parent else "unknown_format"
+                format_dir = self._sanitize_path_component(format_name, "unknown_format")
+                tournament_dir = self._sanitize_path_component(tournament.title, "unknown_tournament")
+                export_dir = base_export_dir / format_dir / tournament_dir
+                export_dir.mkdir(parents=True, exist_ok=True)
+
+                for round_obj in tournament.swiss_tournament.rounds:
+                    try:
+                        pairings_message = await tournament.get_message(round_obj.message_id_pairings)
+                        pairings_saved_count = await self._download_message_image(
+                            pairings_message,
+                            export_dir / f"{round_obj.round_number}_pairings",
+                            session,
+                        )
+                        if pairings_saved_count:
+                            files_saved += pairings_saved_count
+                        else:
+                            missing_images += 1
+
+                        standings_message = await tournament.get_message(round_obj.message_id_standings)
+                        standings_saved_count = await self._download_message_image(
+                            standings_message,
+                            export_dir / f"{round_obj.round_number}_standings",
+                            session,
+                        )
+                        if standings_saved_count:
+                            files_saved += standings_saved_count
+                        else:
+                            missing_images += 1
+                    except Exception as e:
+                        errors.append(f"{tournament.title} / Runde {round_obj.round_number}: {e}")
+
+        embed = discord.Embed(
+            title="Spelltable-Bilder archiviert",
+            color=discord.Color.green() if not errors else discord.Color.orange(),
+            timestamp=datetime.utcnow(),
+        )
+        embed.add_field(name="Turniere geprüft", value=str(tournaments_processed), inline=True)
+        embed.add_field(name="Dateien gespeichert", value=str(files_saved), inline=True)
+        embed.add_field(name="Ohne Bild", value=str(missing_images), inline=True)
+        embed.add_field(name="Zielpfad", value=str(base_export_dir), inline=False)
+
+        if errors:
+            preview = "\n".join(errors[:10])
+            if len(errors) > 10:
+                preview += "\n..."
+            embed.add_field(name="Fehler", value=preview, inline=False)
+
+        await ctx.followup.send(embed=embed, ephemeral=True)
+
     @Cog.listener()
     async def on_ready(self):
         loaded_tournaments = await load_tournaments(self.bot)
@@ -681,6 +855,17 @@ class SpelltableTournamentManager(Cog):
 
         if ctx.guild is None or not isinstance(ctx.author, discord.Member):
             await ctx.followup.send("Dieser Befehl kann nur auf dem Server verwendet werden.", ephemeral=True)
+            return
+
+        if env.SPELLTABLE_MEDIA_EXPORT_USER_ID is None:
+            await ctx.followup.send(
+                "`SPELLTABLE_MEDIA_EXPORT_USER_ID` ist nicht gesetzt. Bitte in den ENV-Variablen konfigurieren.",
+                ephemeral=True,
+            )
+            return
+
+        if ctx.author.id != env.SPELLTABLE_MEDIA_EXPORT_USER_ID:
+            await ctx.followup.send("Du darfst diesen Befehl nicht verwenden.", ephemeral=True)
             return
 
         stats = await self._sync_tournament_user_mappings(ctx.guild)
