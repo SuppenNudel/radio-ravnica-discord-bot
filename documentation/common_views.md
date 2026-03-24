@@ -18,7 +18,7 @@ This module provides reusable Discord UI views, modals, and helper functions for
 - [`ConfirmDropModal`](../modules/spelltable/common_views.py#L154): Modal for confirming a player drop.
 - [`ConfirmKickView`](../modules/spelltable/common_views.py#L221): View for confirming a player kick.
 - [`CancelTournamentModal`](../modules/spelltable/common_views.py#L252): Modal for cancelling a tournament.
-- [`KickPlayerModal`](../modules/spelltable/common_views.py#L273): Modal for kicking a player.
+- [`KickPlayerSelectionView`](../modules/spelltable/common_views.py): Dropdown view for selecting a participant to kick, followed by confirmation.
 - [`ReportMatchView`](../modules/spelltable/common_views.py#L324): View for reporting matches and player actions.
 - [`StartNextRoundView`](../modules/spelltable/common_views.py#L483): View for starting the next round.
 - [`update_pairings`](../modules/spelltable/common_views.py#L128), [`update_standings`](../modules/spelltable/common_views.py#L186), [`post_pairings`](../modules/spelltable/common_views.py#L401), [`next_round`](../modules/spelltable/common_views.py#L426): Helper functions for managing tournament state and Discord messages.

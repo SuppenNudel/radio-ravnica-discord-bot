@@ -858,35 +858,40 @@ async def update_standings(tournament:SpelltableTournament, interaction: discord
     await tournament.save_tournament()
 
 class ConfirmKickView(discord.ui.View):
-    def __init__(self, tournament:SpelltableTournament, user_to_kick:discord.Member):
+    def __init__(self, tournament:SpelltableTournament, user_id_to_kick:int, user_label:str|None=None):
         super().__init__(timeout=None)
         self.tournament = tournament
-        self.user_to_kick = user_to_kick
+        self.user_id_to_kick = user_id_to_kick
+        self.user_label = user_label or f"User({user_id_to_kick})"
+
+    @property
+    def user_mention(self) -> str:
+        return f"<@{self.user_id_to_kick}>"
 
     @discord.ui.button(label="Rauswerfen", style=discord.ButtonStyle.danger, emoji="🚷")
     async def kick_button(self, button: discord.ui.Button, interaction: discord.Interaction):
         await interaction.response.defer()
         if self.tournament.swiss_tournament:
             # tournament ongoing
-            player_to_drop = self.tournament.swiss_tournament.player_by_id(self.user_to_kick.id)
+            player_to_drop = self.tournament.swiss_tournament.player_by_id(self.user_id_to_kick)
             if player_to_drop:
                 player_to_drop.dropped = True
                 await update_standings(self.tournament, interaction)
                 await update_pairings(self.tournament, self.tournament.swiss_tournament.current_round())
             else:
-                log.error(f"Player with id {self.user_to_kick.id} in Swiss Tournament not found")
+                log.error(f"Player with id {self.user_id_to_kick} in Swiss Tournament not found")
         else:
             # tournament registration is still going on
-            await self.tournament.user_state(self.user_to_kick.id, ParticipationState.DECLINE)
+            await self.tournament.user_state(self.user_id_to_kick, ParticipationState.DECLINE)
         orig_response = await interaction.original_response()
         if self.tournament.swiss_tournament:
             message_id_pairings = self.tournament.swiss_tournament.current_round().message_id_pairings
             pairings_message:discord.Message = await self.tournament.get_message(message_id_pairings)
-            link_log.info(f"User {self.user_to_kick.mention} was kicked from tournament {pairings_message.jump_url}")
+            link_log.info(f"User {self.user_mention} ({self.user_label}) was kicked from tournament {pairings_message.jump_url}")
         else:
             tourney_message = await self.tournament.message
-            link_log.info(f"User {self.user_to_kick.mention} was kicked from tournament {tourney_message.jump_url}")
-        await orig_response.edit(content=f"{self.user_to_kick.mention} wurde aus dem Turnier entfernt", view=None)
+            link_log.info(f"User {self.user_mention} ({self.user_label}) was kicked from tournament {tourney_message.jump_url}")
+        await orig_response.edit(content=f"{self.user_mention} wurde aus dem Turnier entfernt", view=None)
 
 class CancelTournamentModal(discord.ui.Modal):
     def __init__(self, tournament:SpelltableTournament):
@@ -953,56 +958,63 @@ async def remove_tournament_views(tournament: SpelltableTournament):
         except (discord.errors.DiscordServerError, discord.errors.HTTPException) as e:
             log.warning(f"Failed to remove view from message {message.id} in tournament `{tournament.title}`: {e}")
 
-class KickPlayerModal(discord.ui.Modal):
-    def __init__(self, tournament:SpelltableTournament):
-        super().__init__(title="Spieler rauswerfen")
+class KickPlayerSelect(discord.ui.Select):
+    def __init__(self, tournament: SpelltableTournament, participant_lookup: dict[int, str], options: list[discord.SelectOption], placeholder: str):
+        super().__init__(placeholder=placeholder, min_values=1, max_values=1, options=options)
         self.tournament = tournament
-
-        self.kick_input = discord.ui.InputText(
-            label="Name oder User ID",
-            placeholder="z.B. NudelForce oder 356120044754698252",
-            required=True
-        )
-        self.add_item(self.kick_input)
+        self.participant_lookup = participant_lookup
 
     async def callback(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-        user_id = None
-        user_name = None
-        user_to_kick = None
-        try:
-            user_id:int = int(self.kick_input.value)
-        except:
-            user_name:str = self.kick_input.value
-        if self.tournament.swiss_tournament:
-            participant_ids = [player.player_id for player in self.tournament.swiss_tournament.get_active_players()]
-        else:
-            participant_ids = self.tournament.get_users_by_state(ParticipationState.PARTICIPATE)
-        if user_id:
-            if user_id in participant_ids:
-                user_to_kick:discord.Member = await self.tournament.get_member(user_id)
-            else:
-                await interaction.respond(f"Kein User mit der ID `{user_id}` ist für das Turnier angemeldet.", ephemeral=True)
-                return
-        elif user_name:
-            for participant_id in participant_ids:
-                member = await self.tournament.get_member(participant_id)
-                if user_name.lower() in member.display_name.lower():
-                    user_to_kick = member
-                    break
-        else:
-            await interaction.respond(f"Unerwarteter Fehler.", ephemeral=True)
-        if user_to_kick:
-            # lasse bestätigen
-            await interaction.respond(f"Diesen Spieler rauswerfen? {user_to_kick.mention}", view=ConfirmKickView(self.tournament, user_to_kick), ephemeral=True)
-        else:
-            if user_id:
-                await interaction.respond(f"User mit der ID `{user_id}` nicht gefunden.", ephemeral=True)
-            elif user_name:
-                await interaction.respond(f"Teilnehmer mit dem Namen `{user_name}` nicht gefunden.", ephemeral=True)
-            else:
-                await interaction.respond(f"Unerwarteter Fehler.", ephemeral=True)
-        await self.tournament.save_tournament()
+        selected_user_id = int(self.values[0])
+        selected_user_label = self.participant_lookup.get(selected_user_id, f"User({selected_user_id})")
+        confirm_view = ConfirmKickView(self.tournament, selected_user_id, selected_user_label)
+        await interaction.response.send_message(
+            f"Diesen Spieler rauswerfen? <@{selected_user_id}> ({selected_user_label})",
+            view=confirm_view,
+            ephemeral=True,
+        )
+
+
+class KickPlayerSelectionView(discord.ui.View):
+    def __init__(self, tournament: SpelltableTournament, participant_lookup: dict[int, str]):
+        super().__init__(timeout=180)
+        self.tournament = tournament
+        self.participant_lookup = participant_lookup
+
+        participant_items = list(participant_lookup.items())
+        for index in range(0, len(participant_items), 25):
+            chunk = participant_items[index:index+25]
+            options = [
+                discord.SelectOption(label=label[:100], value=str(user_id))
+                for user_id, label in chunk
+            ]
+            placeholder = f"Teilnehmer {index+1}-{index+len(chunk)} auswählen"
+            self.add_item(KickPlayerSelect(tournament, participant_lookup, options, placeholder))
+
+
+async def open_kick_player_selection(tournament: SpelltableTournament, interaction: discord.Interaction):
+    if tournament.swiss_tournament:
+        participant_ids = [player.player_id for player in tournament.swiss_tournament.get_active_players()]
+    else:
+        participant_ids = tournament.get_users_by_state(ParticipationState.PARTICIPATE)
+
+    if not participant_ids:
+        await interaction.response.send_message("Es gibt aktuell keine aktiven Teilnehmer zum Rauswerfen.", ephemeral=True)
+        return
+
+    participant_lookup: dict[int, str] = {}
+    for participant_id in participant_ids:
+        member = await tournament.get_member(participant_id)
+        participant_lookup[participant_id] = member.display_name if member else f"User({participant_id})"
+
+    sorted_lookup = dict(sorted(participant_lookup.items(), key=lambda item: item[1].lower()))
+    selection_view = KickPlayerSelectionView(tournament, sorted_lookup)
+
+    await interaction.response.send_message(
+        "Wähle den Spieler aus, den du rauswerfen möchtest:",
+        view=selection_view,
+        ephemeral=True,
+    )
 
 class ReportMatchView(discord.ui.View):
     def __init__(self):
@@ -1133,7 +1145,7 @@ class ReportMatchView(discord.ui.View):
         if interaction.user.id != self.tournament.organizer_id and not any(role.name == "Moderator" for role in interaction.user.roles):
             await interaction.respond("Nur der Turnier-Organisator oder ein Moderator darf dies tun.!", ephemeral=True)
             return
-        await interaction.response.send_modal(KickPlayerModal(self.tournament))
+        await open_kick_player_selection(self.tournament, interaction)
 
     @discord.ui.button(label="Turnier abbrechen", style=discord.ButtonStyle.danger, emoji="🛑")
     async def cancel_button(self, button: discord.ui.Button, interaction: discord.Interaction):

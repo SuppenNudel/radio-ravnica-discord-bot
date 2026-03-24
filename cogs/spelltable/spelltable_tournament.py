@@ -26,7 +26,7 @@ from modules.db import (
     DiscordUser,
 )
 from modules.spelltable.tournament_model import SpelltableTournament, load_tournaments, active_tournaments, update_tournament_message
-from modules.spelltable.common_views import SubmitDeckView, KickPlayerModal, ParticipationState, StartNextRoundView, FinishTournamentView, next_round, update_hall_of_fame_batch
+from modules.spelltable.common_views import SubmitDeckView, ParticipationState, StartNextRoundView, FinishTournamentView, next_round, update_hall_of_fame_batch
 from modules.spelltable import common_views
 
 link_log = logging.getLogger("link_logger")
@@ -114,7 +114,7 @@ class ParticipationView(discord.ui.View):
         if interaction.user.id != self.tournament.organizer_id and not any(role.name == "Moderator" for role in interaction.user.roles):
             await interaction.respond("Du bist nicht der Turnier-Organisator!", ephemeral=True)
             return
-        await interaction.response.send_modal(KickPlayerModal(self.tournament))
+        await common_views.open_kick_player_selection(self.tournament, interaction)
 
     @discord.ui.button(label="Starte Turnier", style=discord.ButtonStyle.primary, emoji="▶️")
     async def start_button(self, button: discord.ui.Button, interaction: discord.Interaction):
