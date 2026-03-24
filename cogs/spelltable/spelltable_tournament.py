@@ -26,7 +26,7 @@ from modules.db import (
     DiscordUser,
 )
 from modules.spelltable.tournament_model import SpelltableTournament, load_tournaments, active_tournaments, update_tournament_message
-from modules.spelltable.common_views import SubmitDeckView, KickPlayerModal, ParticipationState, StartNextRoundView, FinishTournamentView, next_round, update_hall_of_fame
+from modules.spelltable.common_views import SubmitDeckView, KickPlayerModal, ParticipationState, StartNextRoundView, FinishTournamentView, next_round, update_hall_of_fame_batch
 from modules.spelltable import common_views
 
 link_log = logging.getLogger("link_logger")
@@ -340,6 +340,48 @@ class SpelltableTournamentManager(Cog):
         self.bot = bot
         self.schedule_midnight_update.start()
 
+    async def _refresh_historical_pairings_messages(
+        self,
+        tournament: SpelltableTournament,
+        current_round_number: int | None,
+        include_current_round: bool = False,
+    ):
+        if not tournament.swiss_tournament:
+            return
+
+        for round_obj in tournament.swiss_tournament.rounds:
+            if not round_obj.message_id_pairings:
+                continue
+
+            if (
+                not include_current_round
+                and current_round_number is not None
+                and round_obj.round_number == current_round_number
+            ):
+                continue
+
+            pairings_message = await tournament.get_message(round_obj.message_id_pairings)
+            if not pairings_message:
+                continue
+
+            if isinstance(pairings_message.channel, discord.Thread) and pairings_message.channel.archived:
+                await pairings_message.channel.edit(archived=False)
+
+            try:
+                pairings_image = await tournament.pairings_to_image(round_obj)
+                pairings_file = discord.File(pairings_image, filename=pairings_image)
+                await pairings_message.edit(attachments=[], file=pairings_file, view=None)
+            except discord.errors.Forbidden as e:
+                log.warning(
+                    f"Cannot reconcile historical pairings message {pairings_message.jump_url} for tournament '{tournament.title}' "
+                    f"(round {round_obj.round_number}): missing permissions. Error: {e}"
+                )
+            except Exception as e:
+                log.warning(
+                    f"Failed to reconcile historical pairings message {pairings_message.jump_url} for tournament '{tournament.title}' "
+                    f"(round {round_obj.round_number}): {e}"
+                )
+
     async def _resolve_discord_user(self, guild: discord.Guild, user_id: int) -> discord.abc.User | None:
         member = guild.get_member(user_id)
         if member is None:
@@ -447,8 +489,12 @@ class SpelltableTournamentManager(Cog):
                 else:
                     created_row = False
 
-                username = getattr(discord_user, "name", None)
-                display_name = getattr(discord_user, "display_name", None) or getattr(discord_user, "global_name", None)
+                if self._is_deleted_discord_user(discord_user):
+                    username = f"deleted_user:{user_id}"
+                    display_name = "Deleted Discord Account"
+                else:
+                    username = getattr(discord_user, "name", None)
+                    display_name = getattr(discord_user, "display_name", None) or getattr(discord_user, "global_name", None)
 
                 row_changed = False
                 if username and user_row.username != username:
@@ -479,6 +525,22 @@ class SpelltableTournamentManager(Cog):
             db.close()
 
     @staticmethod
+    def _is_deleted_discord_user(discord_user: discord.abc.User) -> bool:
+        name = (getattr(discord_user, "name", None) or "").strip().lower()
+        display_name = (
+            getattr(discord_user, "display_name", None)
+            or getattr(discord_user, "global_name", None)
+            or ""
+        ).strip().lower()
+
+        return (
+            name == "deleted user"
+            or name.startswith("deleted user ")
+            or display_name == "deleted user"
+            or display_name.startswith("deleted user ")
+        )
+
+    @staticmethod
     def _sanitize_path_component(name: str, fallback: str) -> str:
         sanitized = re.sub(r'[<>:"/\\|?*\x00-\x1F]', "_", (name or "").strip()).rstrip(".")
         return sanitized[:120] if sanitized else fallback
@@ -498,41 +560,55 @@ class SpelltableTournamentManager(Cog):
         message: discord.Message | None,
         destination_without_extension: Path,
         session: aiohttp.ClientSession,
-    ) -> int:
+    ) -> tuple[int, int]:
         if not message:
-            return 0
+            log.debug(f"archive_spelltable_images: no message for destination '{destination_without_extension}'")
+            return 0, 0
 
+        known_extensions = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
         saved_count = 0
-        used_destinations: set[Path] = set()
+        existing_count = 0
+        image_index = 0
 
-        def _next_destination(extension: str) -> Path:
-            nonlocal saved_count
-            if saved_count == 0:
-                candidate = destination_without_extension.with_suffix(extension)
-            else:
-                candidate = destination_without_extension.with_name(
-                    f"{destination_without_extension.name}_{saved_count + 1}"
-                ).with_suffix(extension)
+        def _stem_for_index(index: int) -> str:
+            if index == 1:
+                return destination_without_extension.name
+            return f"{destination_without_extension.name}_{index}"
 
-            while candidate in used_destinations or candidate.exists():
-                saved_count += 1
-                candidate = destination_without_extension.with_name(
-                    f"{destination_without_extension.name}_{saved_count + 1}"
-                ).with_suffix(extension)
-            used_destinations.add(candidate)
-            return candidate
+        def _existing_destination_for_index(index: int) -> Path | None:
+            stem = _stem_for_index(index)
+            for existing_file in destination_without_extension.parent.glob(f"{stem}.*"):
+                if not existing_file.is_file():
+                    continue
+                if existing_file.suffix.lower() in known_extensions:
+                    return existing_file
+            return None
+
+        def _destination_for_index(index: int, extension: str) -> Path:
+            stem = _stem_for_index(index)
+            return destination_without_extension.parent / f"{stem}{extension}"
 
         for attachment in message.attachments:
             content_type = (attachment.content_type or "").lower()
             is_image = content_type.startswith("image/") or attachment.filename.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".gif"))
             if not is_image:
                 continue
+            image_index += 1
+            if _existing_destination_for_index(image_index):
+                existing_count += 1
+                log.debug(
+                    f"archive_spelltable_images: skip existing attachment image #{image_index} for '{destination_without_extension}'"
+                )
+                continue
             extension = Path(attachment.filename).suffix.lower() or ".png"
-            if extension not in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
+            if extension not in known_extensions:
                 extension = ".png"
-            destination = _next_destination(extension)
-            await attachment.save(destination)
+            destination = _destination_for_index(image_index, extension)
+            destination.write_bytes(await attachment.read())
             saved_count += 1
+            log.debug(
+                f"archive_spelltable_images: saved attachment image #{image_index} -> '{destination}'"
+            )
 
         image_urls: list[str] = []
         for embed in message.embeds:
@@ -547,15 +623,35 @@ class SpelltableTournamentManager(Cog):
         deduped_urls = [url for url in image_urls if not (url in seen_urls or seen_urls.add(url))]
 
         for image_url in deduped_urls:
+            image_index += 1
+            if _existing_destination_for_index(image_index):
+                existing_count += 1
+                log.debug(
+                    f"archive_spelltable_images: skip existing embed image #{image_index} for '{destination_without_extension}' ({image_url})"
+                )
+                continue
             extension = self._extract_extension_from_url(image_url)
-            destination = _next_destination(extension)
+            destination = _destination_for_index(image_index, extension)
             async with session.get(image_url) as response:
                 if response.status != 200:
+                    log.debug(
+                        f"archive_spelltable_images: failed embed image #{image_index} ({image_url}) with status {response.status}"
+                    )
                     continue
                 destination.write_bytes(await response.read())
                 saved_count += 1
+                log.debug(
+                    f"archive_spelltable_images: saved embed image #{image_index} -> '{destination}' ({image_url})"
+                )
 
-        return saved_count
+        if image_index == 0:
+            log.debug(f"archive_spelltable_images: no images found for '{destination_without_extension}'")
+        else:
+            log.debug(
+                f"archive_spelltable_images: finished '{destination_without_extension}' (saved={saved_count}, existing={existing_count}, discovered={image_index})"
+            )
+
+        return saved_count, existing_count
 
     @slash_command(
         name="archive_spelltable_images",
@@ -565,6 +661,8 @@ class SpelltableTournamentManager(Cog):
     )
     async def archive_spelltable_images(self, ctx: ApplicationContext):
         await ctx.defer(ephemeral=True)
+
+        log.info(f"archive_spelltable_images: invoked by user_id={getattr(ctx.author, 'id', 'unknown')}")
 
         if ctx.guild is None or not isinstance(ctx.author, discord.Member):
             await ctx.followup.send("Dieser Befehl kann nur auf dem Server verwendet werden.", ephemeral=True)
@@ -586,11 +684,15 @@ class SpelltableTournamentManager(Cog):
 
         tournaments_processed = 0
         files_saved = 0
+        files_skipped_existing = 0
         missing_images = 0
         errors: list[str] = []
+        loaded_tournaments = await load_tournaments(self.bot)
+
+        log.debug(f"archive_spelltable_images: loaded tournaments={len(loaded_tournaments)}")
 
         async with aiohttp.ClientSession() as session:
-            for tournament in list(active_tournaments.values()):
+            for tournament in list(loaded_tournaments.values()):
                 if not tournament.swiss_tournament:
                     continue
 
@@ -599,37 +701,74 @@ class SpelltableTournamentManager(Cog):
                 if not tournament_message:
                     continue
 
-                format_name = tournament_message.channel.parent.name if tournament_message.channel.parent else "unknown_format"
+                channel = tournament_message.channel
+                if isinstance(channel, discord.Thread) and channel.parent:
+                    format_name = channel.parent.name
+                elif isinstance(channel, discord.TextChannel):
+                    format_name = channel.name
+                else:
+                    format_name = "unknown_format"
                 format_dir = self._sanitize_path_component(format_name, "unknown_format")
                 tournament_dir = self._sanitize_path_component(tournament.title, "unknown_tournament")
                 export_dir = base_export_dir / format_dir / tournament_dir
                 export_dir.mkdir(parents=True, exist_ok=True)
 
+                log.debug(
+                    f"archive_spelltable_images: processing tournament='{tournament.title}', rounds={len(tournament.swiss_tournament.rounds)}, export_dir='{export_dir}'"
+                )
+
                 for round_obj in tournament.swiss_tournament.rounds:
                     try:
+                        log.debug(
+                            f"archive_spelltable_images: processing tournament='{tournament.title}' round={round_obj.round_number}"
+                        )
+
                         pairings_message = await tournament.get_message(round_obj.message_id_pairings)
-                        pairings_saved_count = await self._download_message_image(
+                        pairings_saved_count, pairings_existing_count = await self._download_message_image(
                             pairings_message,
                             export_dir / f"{round_obj.round_number}_pairings",
                             session,
                         )
-                        if pairings_saved_count:
-                            files_saved += pairings_saved_count
-                        else:
+                        files_saved += pairings_saved_count
+                        files_skipped_existing += pairings_existing_count
+                        if pairings_saved_count == 0 and pairings_existing_count == 0:
                             missing_images += 1
+                            log.debug(
+                                f"archive_spelltable_images: missing pairings image for tournament='{tournament.title}' round={round_obj.round_number}"
+                            )
 
                         standings_message = await tournament.get_message(round_obj.message_id_standings)
-                        standings_saved_count = await self._download_message_image(
+                        standings_saved_count, standings_existing_count = await self._download_message_image(
                             standings_message,
                             export_dir / f"{round_obj.round_number}_standings",
                             session,
                         )
-                        if standings_saved_count:
-                            files_saved += standings_saved_count
-                        else:
+                        files_saved += standings_saved_count
+                        files_skipped_existing += standings_existing_count
+                        if standings_saved_count == 0 and standings_existing_count == 0:
                             missing_images += 1
+                            log.debug(
+                                f"archive_spelltable_images: missing standings image for tournament='{tournament.title}' round={round_obj.round_number}"
+                            )
+
+                        log.debug(
+                            "archive_spelltable_images: round finished "
+                            f"tournament='{tournament.title}' round={round_obj.round_number} "
+                            f"pairings(saved={pairings_saved_count}, existing={pairings_existing_count}) "
+                            f"standings(saved={standings_saved_count}, existing={standings_existing_count})"
+                        )
+
                     except Exception as e:
                         errors.append(f"{tournament.title} / Runde {round_obj.round_number}: {e}")
+                        log.exception(
+                            f"archive_spelltable_images: error in tournament='{tournament.title}' round={round_obj.round_number}"
+                        )
+
+        log.info(
+            "archive_spelltable_images: finished "
+            f"tournaments_processed={tournaments_processed}, files_saved={files_saved}, "
+            f"files_skipped_existing={files_skipped_existing}, missing_images={missing_images}, errors={len(errors)}"
+        )
 
         embed = discord.Embed(
             title="Spelltable-Bilder archiviert",
@@ -638,6 +777,7 @@ class SpelltableTournamentManager(Cog):
         )
         embed.add_field(name="Turniere geprüft", value=str(tournaments_processed), inline=True)
         embed.add_field(name="Dateien gespeichert", value=str(files_saved), inline=True)
+        embed.add_field(name="Schon vorhanden", value=str(files_skipped_existing), inline=True)
         embed.add_field(name="Ohne Bild", value=str(missing_images), inline=True)
         embed.add_field(name="Zielpfad", value=str(base_export_dir), inline=False)
 
@@ -652,6 +792,7 @@ class SpelltableTournamentManager(Cog):
     @Cog.listener()
     async def on_ready(self):
         loaded_tournaments = await load_tournaments(self.bot)
+        concluded_tournaments_for_hof: list[SpelltableTournament] = []
 
         global active_tournaments
         for message_path, tournament in loaded_tournaments.items():
@@ -662,6 +803,8 @@ class SpelltableTournamentManager(Cog):
                 except Exception:
                     log.exception(f"Failed to clear views for cancelled tournament `{tournament.title}` during startup")
                 continue
+
+            tournament.suppress_overview_update = True
             try:
                 active_tournaments[message_path] = tournament
                 tournament_message = await tournament.message
@@ -684,6 +827,12 @@ class SpelltableTournamentManager(Cog):
                 swiss_tournament = tournament.swiss_tournament
                 tournament_concluded = swiss_tournament.winner is not None
                 current_round = swiss_tournament.current_round()
+
+                await self._refresh_historical_pairings_messages(
+                    tournament,
+                    current_round.round_number if current_round else None,
+                    include_current_round=tournament_concluded,
+                )
 
                 if tournament_concluded:
                     # Tournament is concluded
@@ -710,7 +859,7 @@ class SpelltableTournamentManager(Cog):
                         else:
                             link_log.error(f"Could not find standings message for concluded tournament: {tournament_message.jump_url}")
 
-                    await update_hall_of_fame(tournament)
+                    concluded_tournaments_for_hof.append(tournament)
                     continue
 
                 if current_round.message_id_standings:
@@ -733,7 +882,10 @@ class SpelltableTournamentManager(Cog):
                 link_log.info(f"Turnier geladen: {tournament.title}")
             except discord.errors.NotFound:
                 log.warning(f"Turnier konnte nicht geladen werden (message_path={message_path}): Channel oder Nachricht wurde vermutlich gelöscht.")
+            finally:
+                tournament.suppress_overview_update = False
         
+        await update_hall_of_fame_batch(concluded_tournaments_for_hof)
         await update_tournament_message(self.bot)
 
         log.info(self.__class__.__name__ + " is ready")

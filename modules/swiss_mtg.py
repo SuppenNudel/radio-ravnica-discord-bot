@@ -21,6 +21,10 @@ def pad_ansi_text(text, width):
     visible_len = visible_length(text)
     return text + " " * (width - visible_len)
 
+
+def normalize_percentage(value: float) -> float:
+    return round(float(value), 10)
+
 class Deck(Serializable):
     def __init__(self, link:str|None=None, archetype:str|None=None):
         self.link = link
@@ -113,14 +117,14 @@ class Player(Serializable):
         match_points = self.calculate_match_points()
         possbile_match_points = 3 * len(self.get_finished_matches())
         mwp = match_points / possbile_match_points
-        return max(mwp, 0.33)
+        return normalize_percentage(max(mwp, 0.33))
 
     def calculate_game_win_percentage(self):
         possible_game_points = 0
         for match in self.get_finished_matches():
             possible_game_points += sum(match.wins.values()) * 3
         gwp = self.calculate_game_points() / possible_game_points if possible_game_points else 0.33
-        return max(gwp, 0.33)
+        return normalize_percentage(max(gwp, 0.33))
     
     def calculate_opponent_match_win_percentage(self):
         opponent_mwp = 0
@@ -133,9 +137,9 @@ class Player(Serializable):
             omwp = opponent.calculate_match_win_percentage()
             opponent_mwp += omwp
         if non_bye_matches == 0:
-            return 0.33
+            return normalize_percentage(0.33)
         omp = opponent_mwp / non_bye_matches
-        return max(omp, 0.33)
+        return normalize_percentage(max(omp, 0.33))
     
     def calculate_opponent_game_win_percentage(self):
         opponent_gwp = 0
@@ -147,9 +151,9 @@ class Player(Serializable):
                 raise ValueError("Opponent can not be None.")
             opponent_gwp += opponent.calculate_game_win_percentage()
         if non_bye_matches == 0:
-            return 0.33
+            return normalize_percentage(0.33)
         ogwp = opponent_gwp / non_bye_matches
-        return max(ogwp, 0.33)
+        return normalize_percentage(max(ogwp, 0.33))
 
 class Match(Serializable):
     def __init__(self, player1:Player, player2:Player|None, round_number:int):

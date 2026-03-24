@@ -119,8 +119,12 @@ def generate_image(data, filename, font_path="arial.ttf"):
         column_texts = [str(data["headers"][col])]
         for row in data["rows"]:
             value = row[col]
-            text = value[0] if isinstance(value, tuple) else str(value)
-            column_texts.append(text)
+            if isinstance(value, tuple):
+                # Support both old (text, strike) and new (text, strike, highlight) formats
+                text = value[0]
+            else:
+                text = value
+            column_texts.append(str(text))
 
         # Calculate max text width for this column
         text_widths = [_text_width(text, font, fallback_font) for text in column_texts]
@@ -136,10 +140,19 @@ def generate_image(data, filename, font_path="arial.ttf"):
     draw = ImageDraw.Draw(img)
 
     # Function to draw a cell
-    def draw_cell(x, y, text, width, is_header=False, align="center", strike_through=False):
+    def draw_cell(x, y, text, width, is_header=False, align="center", strike_through=False, highlight=False):
         rect_x1, rect_y1 = x, y
         rect_x2, rect_y2 = x + width, y + cell_height
-        draw.rectangle([rect_x1, rect_y1, rect_x2, rect_y2], outline="black", fill="lightgray" if is_header else "white")
+        
+        # Determine cell background color
+        if is_header:
+            fill_color = "lightgray"
+        elif highlight:
+            fill_color = "lightgreen"
+        else:
+            fill_color = "white"
+        
+        draw.rectangle([rect_x1, rect_y1, rect_x2, rect_y2], outline="black", fill=fill_color)
 
         text_y = y + cell_height // 2
         text_width = _text_width(text, font, fallback_font)
@@ -169,8 +182,26 @@ def generate_image(data, filename, font_path="arial.ttf"):
         x_offset = padding
         for col, value in enumerate(row):
             align = "left" if data["headers"][col].lower() in ["name", "spieler", "player", "spieler 1", "gegner", "spieler 2", "match ergebnis (s-n-u)"] else "center"
-            text, strike_through = value if isinstance(value, tuple) else (value, False)
-            draw_cell(x_offset, y_offset, str(text), cell_widths[col], align=align, strike_through=strike_through)
+            
+            # Handle different tuple formats
+            if isinstance(value, tuple):
+                if len(value) == 3:
+                    # (text, strike_through, highlight)
+                    text, strike_through, highlight = value
+                elif len(value) == 2:
+                    # (text, strike_through) - old format
+                    text, strike_through = value
+                    highlight = False
+                else:
+                    text = value
+                    strike_through = False
+                    highlight = False
+            else:
+                text = value
+                strike_through = False
+                highlight = False
+            
+            draw_cell(x_offset, y_offset, str(text), cell_widths[col], align=align, strike_through=strike_through, highlight=highlight)
             x_offset += cell_widths[col]
         y_offset += cell_height
 

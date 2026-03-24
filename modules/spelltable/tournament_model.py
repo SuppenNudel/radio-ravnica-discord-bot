@@ -111,6 +111,7 @@ async def load_tournaments(bot) -> dict[str, "SpelltableTournament"]:
     db = SessionLocal()
     users_dirty = False
     known_users: dict[int, DiscordUser] = {}
+    known_guilds: dict[int, discord.Guild] = {}
     try:
         for user_row in db.query(DiscordUser).all():
             known_users[user_row.user_id] = user_row
@@ -118,7 +119,12 @@ async def load_tournaments(bot) -> dict[str, "SpelltableTournament"]:
         tournament_rows = db.query(TournamentRecord).all()
         for t_row in tournament_rows:
             try:
-                guild = await bot.fetch_guild(t_row.guild_id)
+                guild = known_guilds.get(t_row.guild_id)
+                if guild is None:
+                    guild = bot.get_guild(t_row.guild_id)
+                    if guild is None:
+                        guild = await bot.fetch_guild(t_row.guild_id)
+                    known_guilds[t_row.guild_id] = guild
                 tournament = SpelltableTournament(guild, t_row.name, t_row.organizer_id, bot)
                 tournament.description = t_row.description
                 tournament.time = t_row.start_time
@@ -163,7 +169,9 @@ async def load_tournaments(bot) -> dict[str, "SpelltableTournament"]:
                     tracked_user_ids.update(player.player_id for player in tournament.swiss_tournament.players)
 
                 for user_id in tracked_user_ids:
-                    member = await tournament.get_member(user_id)
+                    member = guild.get_member(user_id)
+                    if member is None:
+                        member = bot.get_user(user_id)
                     user_row = known_users.get(user_id)
                     if user_row is None:
                         user_row = DiscordUser(user_id=user_id)
@@ -342,6 +350,7 @@ class SpelltableTournament(Serializable):
         self.days_per_match = 7
         self.bot:discord.Bot = bot
         self.cancelled = None
+        self.suppress_overview_update = False
 
         if env.DEBUG:
             for user_id in test_participants:
@@ -351,28 +360,42 @@ class SpelltableTournament(Serializable):
         self._message:discord.Message|None = None
 
         self.members:dict[int, discord.Member] = {}
+        self.missing_member_ids:set[int] = set()
 
-    async def get_member(self, user_id) -> discord.Member:
+    async def get_member(self, user_id) -> discord.Member|discord.User|None:
         if user_id in self.members:
             return self.members[user_id]
+        if user_id in self.missing_member_ids:
+            return None
         try:
             user = await discord.utils.get_or_fetch(self.guild, "member", user_id)
             self.members[user_id] = user
+            self.missing_member_ids.discard(user_id)
             return user
         except:
             if env.DEBUG:
                 try:
                     user = await discord.utils.get_or_fetch(self.bot, "user", user_id)
+                    self.members[user_id] = user
+                    self.missing_member_ids.discard(user_id)
                     return user
                 except discord.errors.NotFound: 
+                    self.missing_member_ids.add(user_id)
+                    link_log.error(
+                        f"User lookup failed (DEBUG): user_id={user_id} not found on Discord for tournament '{self.title}' in guild {self.guild.id}."
+                    )
                     return None
             link_log.debug(f"User with ID {user_id} (<@{user_id}>) not found in guild {self.guild.id} for tournament {self.title}.")
             try:
                 user = await discord.utils.get_or_fetch(self.bot, "user", user_id)
                 self.members[user_id] = user
+                self.missing_member_ids.discard(user_id)
                 return user
             except discord.errors.NotFound:
-                link_log.debug(f"User ID {user_id} does not exist on Discord (Unknown User).")
+                self.missing_member_ids.add(user_id)
+                link_log.error(
+                    f"User lookup failed: user_id={user_id} not found on Discord for tournament '{self.title}' in guild {self.guild.id}."
+                )
                 return None
 
     @property
@@ -792,7 +815,8 @@ class SpelltableTournament(Serializable):
         finally:
             db.close()
 
-        await update_tournament_message(self.bot, trigger_guild=self.guild)
+        if not self.suppress_overview_update:
+            await update_tournament_message(self.bot, trigger_guild=self.guild)
 
 
     async def standings_to_image(self, round=None, include_metagame=False) -> str:
@@ -865,8 +889,9 @@ class SpelltableTournament(Serializable):
             archetype = player.deck.archetype if player.deck and player.deck.archetype else "?"
             link = player.deck.link if player.deck else None
             player_user = await self.get_member(player.player_id)
+            player_text = player_user.mention if player_user else f"User({player.player_id})"
             url_text = f"[{archetype}]({link})" if link else archetype
-            metagame_message_text += f"{rank+1}. {player_user.mention} - {url_text}\n"
+            metagame_message_text += f"{rank+1}. {player_text} - {url_text}\n"
 
         return metagame_message_text
     
@@ -884,8 +909,9 @@ class SpelltableTournament(Serializable):
             archetype = player.deck.archetype if player.deck and player.deck.archetype else "?"
             link = player.deck.link if player.deck else None
             player_user = await self.get_member(player.player_id)
+            player_text = player_user.mention if player_user else f"User({player.player_id})"
             url_text = f"[{archetype}]({link})" if link else archetype
-            line = f"{rank}. {player_user.mention} - {url_text}\n"
+            line = f"{rank}. {player_text} - {url_text}\n"
             
             # Discord embed description limit is 4096 chars
             if len(deck_list) + len(line) > 4000:
@@ -953,7 +979,7 @@ class SpelltableTournament(Serializable):
                     p_mp = player.calculate_match_points(round.round_number-1)
                     member = await self.get_member(player.player_id)
                     player_display_name = member.display_name if member else f"User({player.player_id})"
-                    rows.append([(f"{player_display_name} ({p_mp})", player.dropped), "BYE", "2 - 0"])
+                    rows.append([(f"{player_display_name} ({p_mp})", player.dropped, True), "BYE", "2 - 0"])
                 continue
 
             # Normal match
@@ -965,8 +991,12 @@ class SpelltableTournament(Serializable):
                 win_p1, win_p2, draws = match.wins.values()
                 score_p1 = f"{win_p1} - {win_p2}" + (f" - {draws}" if draws else "")
                 score_p2 = f"{win_p2} - {win_p1}" + (f" - {draws}" if draws else "")
+                # Determine winners
+                p1_won = win_p1 > win_p2
+                p2_won = win_p2 > win_p1
             else:
                 score_p1 = score_p2 = "Ausstehend"
+                p1_won = p2_won = False
 
             # Fetch display names
             member_p1 = await self.get_member(p1.player_id)
@@ -974,11 +1004,11 @@ class SpelltableTournament(Serializable):
             p1_display_name = member_p1.display_name if member_p1 else f"User({p1.player_id})"
             p2_display_name = member_p2.display_name if member_p2 else f"User({p2.player_id})"
 
-            # Add both player perspectives
+            # Add both player perspectives with winner highlighting
             p1_mp = p1.calculate_match_points(round.round_number-1)
             p2_mp = p2.calculate_match_points(round.round_number-1)
-            rows.append([(f"{p1_display_name} ({p1_mp})", p1.dropped), (f"{p2_display_name} ({p2_mp})", p2.dropped), score_p1])
-            rows.append([(f"{p2_display_name} ({p2_mp})", p2.dropped), (f"{p1_display_name} ({p1_mp})", p1.dropped), score_p2])
+            rows.append([(f"{p1_display_name} ({p1_mp})", p1.dropped, p1_won), (f"{p2_display_name} ({p2_mp})", p2.dropped), score_p1])
+            rows.append([(f"{p2_display_name} ({p2_mp})", p2.dropped, p2_won), (f"{p1_display_name} ({p1_mp})", p1.dropped), score_p2])
 
         # Sort rows by player name (first element of the tuple in column 0)
         rows.sort(key=lambda row: row[0][0].lower())

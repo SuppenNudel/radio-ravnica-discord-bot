@@ -606,6 +606,63 @@ async def update_hall_of_fame(tournament: SpelltableTournament):
         log.error(f"Failed to update hall of fame for tournament {tournament.title}: {e}")
 
 
+async def update_hall_of_fame_batch(tournaments: list[SpelltableTournament]):
+    """Update Hall of Fame for multiple tournaments and persist once."""
+    if not tournaments:
+        return
+
+    hof = get_hall_of_fame()
+    updates_added = 0
+
+    for tournament in tournaments:
+        try:
+            message = await tournament.message
+            if not message:
+                continue
+
+            tournament_id = f"{message.guild.id}/{message.channel.id}/{message.id}"
+
+            swiss_mtg.sort_players_by_standings(tournament.swiss_tournament.players)
+
+            results = []
+            placement = 1
+            for player in tournament.swiss_tournament.players:
+                if not player.dropped:
+                    match_record = player.get_match_results()
+                    try:
+                        member = await tournament.get_member(player.player_id)
+                        username = member.display_name if member else str(player.player_id)
+                    except Exception:
+                        username = str(player.player_id)
+                    results.append({
+                        "user_id": player.player_id,
+                        "username": username,
+                        "placement": placement,
+                        "match_record": match_record
+                    })
+                    placement += 1
+
+            had_record = hof.get_tournament_results(tournament_id) is not None
+            hof.add_tournament_result(
+                tournament_id=tournament_id,
+                tournament_title=tournament.title,
+                guild_id=message.guild.id,
+                completed_date=datetime.now().isoformat(),
+                results=results,
+                save=False,
+            )
+            if not had_record:
+                updates_added += 1
+        except Exception as e:
+            log.error(f"Failed to queue hall of fame update for tournament {tournament.title}: {e}")
+
+    if updates_added:
+        hof.save_to_file()
+        log.debug(f"Hall of Fame batch updated ({updates_added} tournaments)")
+    else:
+        log.debug("Hall of Fame batch update skipped (no new tournaments)")
+
+
 def _standings_content_for_round(round_number: int, total_rounds: int) -> str:
     return f"🏆 Platzierungen nach der {round_number}. Runde von {total_rounds}"
 

@@ -191,7 +191,7 @@ class HallOfFame:
     
     def add_tournament_result(self, tournament_id: str, tournament_title: str,
                              guild_id: int, completed_date: str,
-                             results: List[Dict]):
+                             results: List[Dict], *, save: bool = True):
         """
         Add a tournament result to the hall of fame.
         
@@ -246,7 +246,8 @@ class HallOfFame:
                         participant.add_match("draw")
         
         self.tournaments.append(tournament)
-        self.save_to_file()
+        if save:
+            self.save_to_file()
     
     def get_top_participants(self, limit: int = 10, 
                             sort_by: str = "match_wins") -> List[ParticipantStats]:
