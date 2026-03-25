@@ -81,7 +81,7 @@ class Youtube(commands.Cog):
                 content = await loop.run_in_executor(None, fetch_content)
                 if content is None:
                     log.debug(f"No 'non-badge' {content_type} in the last {limit} videos")
-                return content
+                return content, False
             except Exception as e:
                 is_transient = any(keyword in str(e) for keyword in (
                     "NameResolutionError", "Failed to resolve", "Max retries exceeded",
@@ -94,13 +94,18 @@ class Youtube(commands.Cog):
                     await asyncio.sleep(wait)
                 else:
                     log.error(f"Error fetching YouTube content for {channel.name}: {e}")
-                    return None
+                    return None, True
 
     @tasks.loop(minutes=5)
     async def check_channels(self):
         for yt_channel in self.channels:
             for content_type, content_cache in yt_channel.content.items():
-                latest_content = await self.get_latest_content(yt_channel, content_type)
+                latest_content, fetch_failed = await self.get_latest_content(yt_channel, content_type)
+                if fetch_failed:
+                    log.warning(
+                        f"Skipping remaining YouTube content types for {yt_channel.name} in this cycle after a fetch failure on {content_type.value}."
+                    )
+                    break
                 if not latest_content:
                     continue
                 # log.debug(f"https://www.youtube.com/watch?v={latest_content['videoId']} is the latest {content_type}")
