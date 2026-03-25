@@ -8,6 +8,7 @@ import re
 from modules import swiss_mtg
 from modules import env
 import logging
+import asyncio
 
 from discord.ext import tasks
 from datetime import datetime, time
@@ -349,24 +350,21 @@ class SpelltableTournamentManager(Cog):
         if not tournament.swiss_tournament:
             return
 
-        for round_obj in tournament.swiss_tournament.rounds:
-            if not round_obj.message_id_pairings:
-                continue
+        rounds_to_refresh = [
+            round_obj for round_obj in tournament.swiss_tournament.rounds
+            if round_obj.message_id_pairings and (
+                include_current_round
+                or current_round_number is None
+                or round_obj.round_number != current_round_number
+            )
+        ]
 
-            if (
-                not include_current_round
-                and current_round_number is not None
-                and round_obj.round_number == current_round_number
-            ):
-                continue
-
+        async def _refresh_one(round_obj):
             pairings_message = await tournament.get_message(round_obj.message_id_pairings)
             if not pairings_message:
-                continue
-
+                return
             if isinstance(pairings_message.channel, discord.Thread) and pairings_message.channel.archived:
                 await pairings_message.channel.edit(archived=False)
-
             try:
                 pairings_image = await tournament.pairings_to_image(round_obj)
                 pairings_file = discord.File(pairings_image, filename=pairings_image)
@@ -381,6 +379,8 @@ class SpelltableTournamentManager(Cog):
                     f"Failed to reconcile historical pairings message {pairings_message.jump_url} for tournament '{tournament.title}' "
                     f"(round {round_obj.round_number}): {e}"
                 )
+
+        await asyncio.gather(*[_refresh_one(r) for r in rounds_to_refresh], return_exceptions=True)
 
     async def _resolve_discord_user(self, guild: discord.Guild, user_id: int) -> discord.abc.User | None:
         member = guild.get_member(user_id)
@@ -792,17 +792,17 @@ class SpelltableTournamentManager(Cog):
     @Cog.listener()
     async def on_ready(self):
         loaded_tournaments = await load_tournaments(self.bot)
-        concluded_tournaments_for_hof: list[SpelltableTournament] = []
 
         global active_tournaments
-        for message_path, tournament in loaded_tournaments.items():
-            # Skip loading cancelled tournaments
+
+        async def _load_one(message_path: str, tournament: SpelltableTournament) -> SpelltableTournament | None:
+            """Loads one tournament concurrently; returns the tournament if concluded, else None."""
             if tournament.cancelled:
                 try:
                     await common_views.remove_tournament_views(tournament)
                 except Exception:
                     log.exception(f"Failed to clear views for cancelled tournament `{tournament.title}` during startup")
-                continue
+                return None
 
             tournament.suppress_overview_update = True
             try:
@@ -810,10 +810,10 @@ class SpelltableTournamentManager(Cog):
                 tournament_message = await tournament.message
                 if not tournament_message:
                     log.warning(f"Turnier Nachricht nicht gefunden: {message_path}")
-                    continue
+                    return None
 
                 # Unarchive thread if needed before any edits
-                if tournament_message and isinstance(tournament_message.channel, discord.Thread) and tournament_message.channel.archived:
+                if isinstance(tournament_message.channel, discord.Thread) and tournament_message.channel.archived:
                     await tournament_message.channel.edit(archived=False)
 
                 if not tournament.swiss_tournament:
@@ -821,7 +821,7 @@ class SpelltableTournamentManager(Cog):
                     # sign-up is still open
                     view = await ParticipationView.create(tournament)
                     await tournament_message.edit(view=view)
-                    continue
+                    return None
 
                 # tournament has been started
                 swiss_tournament = tournament.swiss_tournament
@@ -836,14 +836,14 @@ class SpelltableTournamentManager(Cog):
 
                 if tournament_concluded:
                     # Tournament is concluded
-                    
+
                     # unarchive thread if needed
-                    if tournament_message and isinstance(tournament_message.channel, discord.Thread) and tournament_message.channel.archived:
+                    if isinstance(tournament_message.channel, discord.Thread) and tournament_message.channel.archived:
                         await tournament_message.channel.edit(archived=False)
 
                     # Update standings with latest deck submissions
                     await tournament.update_metagame()
-                    
+
                     # activate deck submission button
                     if current_round.message_id_standings:
                         message = await tournament.get_message(current_round.message_id_standings)
@@ -859,8 +859,7 @@ class SpelltableTournamentManager(Cog):
                         else:
                             link_log.error(f"Could not find standings message for concluded tournament: {tournament_message.jump_url}")
 
-                    concluded_tournaments_for_hof.append(tournament)
-                    continue
+                    return tournament  # concluded
 
                 if current_round.message_id_standings:
                     # standings have been posted
@@ -870,21 +869,32 @@ class SpelltableTournamentManager(Cog):
                     if message:
                         await common_views.update_standings(tournament, None)
                 if current_round.message_id_pairings:
-                    # pairings have been posted
+                    # pairings have been posted — unarchive thread if needed before update
                     message = await tournament.get_message(current_round.message_id_pairings)
                     if message and isinstance(message.channel, discord.Thread) and message.channel.archived:
                         await message.channel.edit(archived=False)
-                    await common_views.update_pairings(tournament, current_round)
-                else:
-                    # pairings have not been posted yet
-                    await common_views.update_pairings(tournament, current_round)                
+                await common_views.update_pairings(tournament, current_round)
 
                 link_log.info(f"Turnier geladen: {tournament.title}")
+                return None
             except discord.errors.NotFound:
                 log.warning(f"Turnier konnte nicht geladen werden (message_path={message_path}): Channel oder Nachricht wurde vermutlich gelöscht.")
+                return None
             finally:
                 tournament.suppress_overview_update = False
-        
+
+        results = await asyncio.gather(
+            *[_load_one(k, v) for k, v in loaded_tournaments.items()],
+            return_exceptions=True,
+        )
+
+        concluded_tournaments_for_hof: list[SpelltableTournament] = []
+        for result in results:
+            if isinstance(result, Exception):
+                log.exception(f"Unexpected error loading tournament during startup: {result}")
+            elif isinstance(result, SpelltableTournament):
+                concluded_tournaments_for_hof.append(result)
+
         await update_hall_of_fame_batch(concluded_tournaments_for_hof)
         await update_tournament_message(self.bot)
 

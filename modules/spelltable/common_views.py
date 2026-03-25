@@ -1188,11 +1188,16 @@ async def post_pairings(round:swiss_mtg.Round, tournament:SpelltableTournament, 
             if not previous_round:
                 previous_round = tournament.swiss_tournament.rounds[round.round_number - 2]
             message_to_reply_to = await tournament.get_message(previous_round.message_id_pairings)
-        new_pairings_message:discord.Message = await message_to_reply_to.reply(content=plain_text_pairings, file=pairings_file, view=view)
+        if message_to_reply_to:
+            new_pairings_message:discord.Message = await message_to_reply_to.reply(content=plain_text_pairings, file=pairings_file, view=view)
+        else:
+            log.warning(f"No message to reply to for round {round.round_number} in tournament '{tournament.title}', sending to channel directly.")
+            channel = await tournament.bot.fetch_channel(tournament.channel_id)
+            new_pairings_message:discord.Message = await channel.send(content=plain_text_pairings, file=pairings_file, view=view)
     
     # Try to pin/unpin messages, but continue if permissions are missing
     try:
-        if previous_round:
+        if previous_round and previous_round.message_id_pairings:
             previous_pairings_message = await new_pairings_message.channel.fetch_message(previous_round.message_id_pairings)
             try:
                 await previous_pairings_message.unpin()

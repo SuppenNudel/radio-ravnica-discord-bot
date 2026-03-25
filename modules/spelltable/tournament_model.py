@@ -373,7 +373,7 @@ class SpelltableTournament(Serializable):
 
         if user_id <= 0:
             self.missing_member_ids.add(user_id)
-            link_log.warning(
+            link_log.debug(
                 f"Skipping user lookup with non-positive user_id={user_id} for tournament '{self.title}' in guild {self.guild.id}."
             )
             return None
@@ -640,7 +640,24 @@ class SpelltableTournament(Serializable):
         if round is None:
             round = self.swiss_tournament.current_round()
 
-        matchups:dict[str, str] = {}
+        # Collect all unique player IDs, then fetch all members in parallel
+        player_ids: set[int] = set()
+        for match in round.matches:
+            if match.is_bye():
+                player = match.player1 or match.player2
+                if player:
+                    player_ids.add(player.player_id)
+            else:
+                p1, p2 = match.player1, match.player2
+                if p1 and p2:
+                    player_ids.add(p1.player_id)
+                    player_ids.add(p2.player_id)
+
+        id_list = list(player_ids)
+        fetched = await asyncio.gather(*[self.get_member(uid) for uid in id_list])
+        members: dict[int, discord.Member | discord.User | None] = dict(zip(id_list, fetched))
+
+        matchups: dict[str, str] = {}
         for match in round.matches:
             # Handle BYE
             if match.is_bye():
@@ -649,27 +666,30 @@ class SpelltableTournament(Serializable):
                     mention = f"<@{player.player_id}>"
                     if player.dropped:
                         mention = f"~~{mention}~~"
-                    player_member = await self.get_member(player.player_id)
-                    matchups[player_member.display_name] = f"{mention} hat ein BYE"
+                    player_member = members.get(player.player_id)
+                    name = player_member.display_name if player_member else f"User({player.player_id})"
+                    matchups[name] = f"{mention} hat ein BYE"
                 continue
 
             # Normal match
             p1, p2 = match.player1, match.player2
             if not (p1 and p2):
                 continue
-            
+
             mention_p1 = f"<@{p1.player_id}>"
             if p1.dropped:
                 mention_p1 = f"~~{mention_p1}~~"
-            
+
             mention_p2 = f"<@{p2.player_id}>"
             if p2.dropped:
                 mention_p2 = f"~~{mention_p2}~~"
-            
-            player1_member = await self.get_member(p1.player_id)
-            player2_member = await self.get_member(p2.player_id)
-            matchups[player1_member.display_name] = f"{mention_p1} vs {mention_p2}"
-            matchups[player2_member.display_name] = f"{mention_p2} vs {mention_p1}"
+
+            p1_member = members.get(p1.player_id)
+            p2_member = members.get(p2.player_id)
+            p1_name = p1_member.display_name if p1_member else f"User({p1.player_id})"
+            p2_name = p2_member.display_name if p2_member else f"User({p2.player_id})"
+            matchups[p1_name] = f"{mention_p1} vs {mention_p2}"
+            matchups[p2_name] = f"{mention_p2} vs {mention_p1}"
 
         if not matchups:
             return "Keine Paarungen verfügbar. Ein Neustart des Bots, sollte den Fehler beheben. <@356120044754698252>" # pings NudelForce
