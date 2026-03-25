@@ -85,7 +85,8 @@ class Youtube(commands.Cog):
             except Exception as e:
                 is_transient = any(keyword in str(e) for keyword in (
                     "NameResolutionError", "Failed to resolve", "Max retries exceeded",
-                    "ConnectionError", "Timeout", "RemoteDisconnected"
+                    "ConnectionError", "Timeout", "RemoteDisconnected",
+                    "Expecting value", "JSONDecodeError", "json.decoder"
                 ))
                 if is_transient and attempt < MAX_RETRIES:
                     wait = 2 ** attempt
