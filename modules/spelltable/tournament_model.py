@@ -363,6 +363,21 @@ class SpelltableTournament(Serializable):
         self.missing_member_ids:set[int] = set()
 
     async def get_member(self, user_id) -> discord.Member|discord.User|None:
+        try:
+            user_id = int(user_id)
+        except (TypeError, ValueError):
+            link_log.warning(
+                f"Skipping user lookup with invalid user_id={user_id!r} for tournament '{self.title}' in guild {self.guild.id}."
+            )
+            return None
+
+        if user_id <= 0:
+            self.missing_member_ids.add(user_id)
+            link_log.warning(
+                f"Skipping user lookup with non-positive user_id={user_id} for tournament '{self.title}' in guild {self.guild.id}."
+            )
+            return None
+
         if user_id in self.members:
             return self.members[user_id]
         if user_id in self.missing_member_ids:
@@ -372,14 +387,14 @@ class SpelltableTournament(Serializable):
             self.members[user_id] = user
             self.missing_member_ids.discard(user_id)
             return user
-        except:
+        except (discord.errors.NotFound, discord.errors.HTTPException, ValueError, TypeError):
             if env.DEBUG:
                 try:
                     user = await discord.utils.get_or_fetch(self.bot, "user", user_id)
                     self.members[user_id] = user
                     self.missing_member_ids.discard(user_id)
                     return user
-                except discord.errors.NotFound: 
+                except (discord.errors.NotFound, discord.errors.HTTPException, ValueError, TypeError): 
                     self.missing_member_ids.add(user_id)
                     link_log.error(
                         f"User lookup failed (DEBUG): user_id={user_id} not found on Discord for tournament '{self.title}' in guild {self.guild.id}."
@@ -391,7 +406,7 @@ class SpelltableTournament(Serializable):
                 self.members[user_id] = user
                 self.missing_member_ids.discard(user_id)
                 return user
-            except discord.errors.NotFound:
+            except (discord.errors.NotFound, discord.errors.HTTPException, ValueError, TypeError):
                 self.missing_member_ids.add(user_id)
                 link_log.error(
                     f"User lookup failed: user_id={user_id} not found on Discord for tournament '{self.title}' in guild {self.guild.id}."
