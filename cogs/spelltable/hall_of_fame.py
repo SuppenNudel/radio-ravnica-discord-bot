@@ -153,6 +153,23 @@ class HallOfFameCog(Cog):
                   f"Top 8: **{stats['tournament_top8s']}**",
             inline=True
         )
+
+        # Ongoing tournaments the user is currently registered for
+        ongoing_texts = []
+        for tournament in active_tournaments.values():
+            if tournament.cancelled:
+                continue
+            user_state = tournament.users.get(ctx.author.id)
+            if user_state == ParticipationState.PARTICIPATE:
+                msg_url = f"https://discord.com/channels/{tournament.guild.id}/{tournament.channel_id}/{tournament.message_id}"
+                ongoing_texts.append(f"⚔️ [{tournament.title}]({msg_url})")
+
+        if ongoing_texts:
+            embed.add_field(
+                name="🎮 Aktive Turniere",
+                value="\n".join(ongoing_texts),
+                inline=False
+            )
         
         # Recent tournament placements (concluded only — must have results)
         concluded_placements = [p for p in stats['tournament_placements'] if p.get('standings_url') or p.get('match_record')]
@@ -179,23 +196,6 @@ class HallOfFameCog(Cog):
             embed.add_field(
                 name="📋 Letzte Turniere",
                 value=placements_text,
-                inline=False
-            )
-
-        # Ongoing tournaments the user is currently registered for
-        ongoing_texts = []
-        for tournament in active_tournaments.values():
-            if tournament.cancelled:
-                continue
-            user_state = tournament.users.get(ctx.author.id)
-            if user_state == ParticipationState.PARTICIPATE:
-                msg_url = f"https://discord.com/channels/{tournament.guild.id}/{tournament.channel_id}/{tournament.message_id}"
-                ongoing_texts.append(f"⚔️ [{tournament.title}]({msg_url})")
-
-        if ongoing_texts:
-            embed.add_field(
-                name="🎮 Aktive Turniere",
-                value="\n".join(ongoing_texts),
                 inline=False
             )
         

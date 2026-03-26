@@ -16,8 +16,10 @@
     "ignored_cogs": []
   },
   "hall-of-fame": {
-    "cogs_path": "cogs/hall_of_fame.py",
-    "ignored_cogs": []
+    "cogs_path": "cogs/spelltable",
+    "ignored_cogs": [
+      "format_overlap_check"
+    ]
   },
   "full": {
     "cogs_path": "cogs",
