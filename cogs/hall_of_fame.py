@@ -157,21 +157,24 @@ class HallOfFameCog(Cog):
         # Recent tournament placements (concluded only — must have results)
         concluded_placements = [p for p in stats['tournament_placements'] if p.get('standings_url') or p.get('match_record')]
         if concluded_placements:
-            placements_text = ""
-            shown = 0
+            lines = []
             for placement in concluded_placements[:5]:
                 medal = self._get_medal(placement['placement'])
                 title = placement['tournament']
                 url = placement.get('standings_url', '')
                 tournament_link = f"[{title}]({url})" if url else f"**{title}**"
-                line = f"{medal} {tournament_link} - Platz {placement['placement']} ({placement['match_record']})\n"
-                if len(placements_text) + len(line) > 1024:
+                lines.append(f"{medal} {tournament_link} - Platz {placement['placement']} ({placement['match_record']})")
+
+            placements_text = ""
+            shown = 0
+            for line in lines:
+                suffix = f"\n*... und {len(lines) - shown - 1} weitere*" if shown < len(lines) - 1 else ""
+                candidate = placements_text + line + "\n"
+                if len(candidate) + len(suffix) > 1024:
+                    placements_text += f"*... und {len(lines) - shown} weitere*"
                     break
-                placements_text += line
+                placements_text = candidate
                 shown += 1
-            remaining = len(concluded_placements) - shown
-            if remaining > 0:
-                placements_text += f"*... und {remaining} weitere*"
 
             embed.add_field(
                 name="📋 Letzte Turniere",
