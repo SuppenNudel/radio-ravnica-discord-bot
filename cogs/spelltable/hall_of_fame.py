@@ -165,9 +165,21 @@ class HallOfFameCog(Cog):
                 ongoing_texts.append(f"⚔️ [{tournament.title}]({msg_url})")
 
         if ongoing_texts:
+            # Truncate ongoing tournaments to stay within 1024 character limit
+            ongoing_value = ""
+            shown = 0
+            for text in ongoing_texts:
+                suffix = f"\n*... und {len(ongoing_texts) - shown - 1} weitere*" if shown < len(ongoing_texts) - 1 else ""
+                candidate = ongoing_value + text + "\n"
+                if len(candidate) + len(suffix) > 1024:
+                    ongoing_value += f"*... und {len(ongoing_texts) - shown} weitere*"
+                    break
+                ongoing_value = candidate
+                shown += 1
+            
             embed.add_field(
                 name="🎮 Aktive Turniere",
-                value="\n".join(ongoing_texts),
+                value=ongoing_value.rstrip("\n"),
                 inline=False
             )
         
