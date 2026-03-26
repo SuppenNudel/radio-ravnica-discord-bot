@@ -23,6 +23,6 @@
   },
   "full": {
     "cogs_path": "cogs",
-    "ignored_cogs": [ "format_overlap_check" ]
+    "ignored_cogs": [ "format_overlap_check", "youtube" ]
   }
 }

@@ -487,6 +487,14 @@ class SpelltableTournamentManager(Cog):
             )
 
             for user_id in sorted(referenced_user_ids):
+                normalized_user_id = str(user_id).strip() if user_id is not None else ""
+                if not normalized_user_id:
+                    link_log.warning(
+                        "Skipping user cache row with missing user_id during refresh: "
+                        f"guild_id={guild.id if guild else None}, raw_user_id={user_id!r}"
+                    )
+                    continue
+
                 user_row = existing_user_rows.get(user_id)
                 discord_user = await self._resolve_discord_user(guild, user_id)
                 if discord_user is None:
@@ -495,7 +503,7 @@ class SpelltableTournamentManager(Cog):
                     continue
 
                 if user_row is None:
-                    user_row = DiscordUser(user_id=user_id)
+                    user_row = DiscordUser(user_id=normalized_user_id)
                     db.add(user_row)
                     existing_user_rows[user_id] = user_row
                     created_count += 1

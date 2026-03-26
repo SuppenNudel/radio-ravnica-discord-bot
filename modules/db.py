@@ -1,11 +1,14 @@
 """
 SQLAlchemy database models for tournament persistence.
 """
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, Boolean, ForeignKey, Text
+import sqlite3
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, Boolean, ForeignKey, Text, text, UniqueConstraint
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime
 from pathlib import Path
+
+DISCORD_ID_TYPE = String(32)
 
 # Use SQLite database in data/
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -29,15 +32,15 @@ class Tournament(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, index=True)
-    organizer_id = Column(Integer, index=True)
+    organizer_id = Column(DISCORD_ID_TYPE, index=True)
     description = Column(Text, nullable=True)
     start_time = Column(DateTime, nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     
     # Discord identifiers
-    guild_id = Column(Integer, index=True)
-    channel_id = Column(Integer, index=True)
-    message_id = Column(Integer, index=True, unique=True)
+    guild_id = Column(DISCORD_ID_TYPE, index=True)
+    channel_id = Column(DISCORD_ID_TYPE, index=True)
+    message_id = Column(DISCORD_ID_TYPE, index=True, unique=True)
     
     # Tournament configuration
     max_participants = Column(Integer, nullable=True)
@@ -61,9 +64,13 @@ class Participant(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     tournament_id = Column(Integer, ForeignKey("tournaments.id"), index=True)
-    user_id = Column(Integer, index=True)
+    user_id = Column(DISCORD_ID_TYPE, index=True)
     state = Column(String)  # 'participate', 'tentative', 'decline', 'waitlist'
     joined_at = Column(DateTime, default=datetime.utcnow)
+    
+    __table_args__ = (
+        UniqueConstraint('tournament_id', 'user_id', name='uq_participant_tournament_user'),
+    )
     
     # Relationship
     tournament = relationship("Tournament", back_populates="participants")
@@ -78,7 +85,7 @@ class SwissTournamentRecord(Base):
 
     tournament_id = Column(Integer, ForeignKey("tournaments.id"), primary_key=True)
     rounds_count = Column(Integer, nullable=False)
-    winner_player_id = Column(Integer, nullable=True)
+    winner_player_id = Column(DISCORD_ID_TYPE, nullable=True)
 
     tournament = relationship("Tournament", back_populates="swiss_tournament")
     players = relationship("SwissPlayer", back_populates="swiss_tournament", cascade="all, delete-orphan")
@@ -94,7 +101,7 @@ class SwissPlayer(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     swiss_tournament_id = Column(Integer, ForeignKey("swiss_tournaments.tournament_id"), index=True)
-    player_id = Column(Integer, index=True)
+    player_id = Column(DISCORD_ID_TYPE, index=True)
     dropped = Column(Boolean, default=False)
     deck_link = Column(Text, nullable=True)
     deck_archetype = Column(String, nullable=True)
@@ -112,8 +119,8 @@ class SwissRound(Base):
     id = Column(Integer, primary_key=True, index=True)
     swiss_tournament_id = Column(Integer, ForeignKey("swiss_tournaments.tournament_id"), index=True)
     round_number = Column(Integer, nullable=False)
-    message_id_pairings = Column(Integer, nullable=True)
-    message_id_standings = Column(Integer, nullable=True)
+    message_id_pairings = Column(DISCORD_ID_TYPE, nullable=True)
+    message_id_standings = Column(DISCORD_ID_TYPE, nullable=True)
 
     swiss_tournament = relationship("SwissTournamentRecord", back_populates="rounds")
     matches = relationship("SwissMatch", back_populates="swiss_round", cascade="all, delete-orphan")
@@ -128,8 +135,8 @@ class SwissMatch(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     swiss_round_id = Column(Integer, ForeignKey("swiss_rounds.id"), index=True)
-    player1_id = Column(Integer, nullable=False)
-    player2_id = Column(Integer, nullable=True)
+    player1_id = Column(DISCORD_ID_TYPE, nullable=False)
+    player2_id = Column(DISCORD_ID_TYPE, nullable=True)
     player1_wins = Column(Integer, nullable=False, default=0)
     player2_wins = Column(Integer, nullable=False, default=0)
     draws = Column(Integer, nullable=False, default=0)
@@ -144,7 +151,7 @@ class DiscordUser(Base):
     """Discord user display name cache"""
     __tablename__ = "users"
 
-    user_id = Column(Integer, primary_key=True, autoincrement=False)
+    user_id = Column(DISCORD_ID_TYPE, primary_key=True)
     display_name = Column(String, nullable=True)
     username = Column(String, nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -153,9 +160,221 @@ class DiscordUser(Base):
         return f"<DiscordUser(user_id={self.user_id}, display_name='{self.display_name}')>"
 
 
+def _sqlite_column_types(table_name: str) -> dict[str, str]:
+    with sqlite3.connect(DB_PATH) as conn:
+        rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    return {row[1]: row[2].upper() for row in rows}
+
+
+def _migrate_discord_id_columns():
+    expected_text_columns = {
+        "tournaments": ["organizer_id", "guild_id", "channel_id", "message_id"],
+        "participants": ["user_id"],
+        "swiss_tournaments": ["winner_player_id"],
+        "swiss_players": ["player_id"],
+        "swiss_rounds": ["message_id_pairings", "message_id_standings"],
+        "swiss_matches": ["player1_id", "player2_id"],
+        "users": ["user_id"],
+    }
+
+    tables_to_migrate = []
+    for table_name, columns in expected_text_columns.items():
+        column_types = _sqlite_column_types(table_name)
+        if any(column_types.get(column_name) == "INTEGER" for column_name in columns):
+            tables_to_migrate.append(table_name)
+
+    if not tables_to_migrate:
+        return
+
+    with engine.begin() as connection:
+        connection.execute(text("PRAGMA foreign_keys=OFF"))
+
+        if "tournaments" in tables_to_migrate:
+            connection.execute(text("ALTER TABLE tournaments RENAME TO tournaments_old"))
+            connection.execute(text("""
+                CREATE TABLE tournaments (
+                    id INTEGER NOT NULL,
+                    name VARCHAR,
+                    organizer_id VARCHAR(32),
+                    description TEXT,
+                    start_time DATETIME,
+                    created_at DATETIME,
+                    guild_id VARCHAR(32),
+                    channel_id VARCHAR(32),
+                    message_id VARCHAR(32),
+                    max_participants INTEGER,
+                    max_rounds INTEGER,
+                    days_per_match INTEGER,
+                    cancelled BOOLEAN,
+                    PRIMARY KEY (id),
+                    UNIQUE (message_id)
+                )
+            """))
+            connection.execute(text("""
+                INSERT INTO tournaments (
+                    id, name, organizer_id, description, start_time, created_at,
+                    guild_id, channel_id, message_id, max_participants, max_rounds,
+                    days_per_match, cancelled
+                )
+                SELECT
+                    id, name, CAST(organizer_id AS TEXT), description, start_time, created_at,
+                    CAST(guild_id AS TEXT), CAST(channel_id AS TEXT), CAST(message_id AS TEXT),
+                    max_participants, max_rounds, days_per_match, cancelled
+                FROM tournaments_old
+            """))
+            connection.execute(text("DROP TABLE tournaments_old"))
+
+        if "participants" in tables_to_migrate:
+            connection.execute(text("ALTER TABLE participants RENAME TO participants_old"))
+            connection.execute(text("""
+                CREATE TABLE participants (
+                    id INTEGER NOT NULL,
+                    tournament_id INTEGER,
+                    user_id VARCHAR(32),
+                    state VARCHAR,
+                    joined_at DATETIME,
+                    PRIMARY KEY (id),
+                    FOREIGN KEY(tournament_id) REFERENCES tournaments (id),
+                    UNIQUE (tournament_id, user_id)
+                )
+            """))
+            connection.execute(text("""
+                INSERT INTO participants (id, tournament_id, user_id, state, joined_at)
+                SELECT id, tournament_id, CAST(user_id AS TEXT), state, joined_at
+                FROM participants_old
+            """))
+            connection.execute(text("DROP TABLE participants_old"))
+
+        if "swiss_tournaments" in tables_to_migrate:
+            connection.execute(text("ALTER TABLE swiss_tournaments RENAME TO swiss_tournaments_old"))
+            connection.execute(text("""
+                CREATE TABLE swiss_tournaments (
+                    tournament_id INTEGER NOT NULL,
+                    rounds_count INTEGER NOT NULL,
+                    winner_player_id VARCHAR(32),
+                    PRIMARY KEY (tournament_id),
+                    FOREIGN KEY(tournament_id) REFERENCES tournaments (id)
+                )
+            """))
+            connection.execute(text("""
+                INSERT INTO swiss_tournaments (tournament_id, rounds_count, winner_player_id)
+                SELECT tournament_id, rounds_count, CAST(winner_player_id AS TEXT)
+                FROM swiss_tournaments_old
+            """))
+            connection.execute(text("DROP TABLE swiss_tournaments_old"))
+
+        if "swiss_players" in tables_to_migrate:
+            connection.execute(text("ALTER TABLE swiss_players RENAME TO swiss_players_old"))
+            connection.execute(text("""
+                CREATE TABLE swiss_players (
+                    id INTEGER NOT NULL,
+                    swiss_tournament_id INTEGER,
+                    player_id VARCHAR(32),
+                    dropped BOOLEAN,
+                    deck_link TEXT,
+                    deck_archetype VARCHAR,
+                    PRIMARY KEY (id),
+                    FOREIGN KEY(swiss_tournament_id) REFERENCES swiss_tournaments (tournament_id)
+                )
+            """))
+            connection.execute(text("""
+                INSERT INTO swiss_players (id, swiss_tournament_id, player_id, dropped, deck_link, deck_archetype)
+                SELECT id, swiss_tournament_id, CAST(player_id AS TEXT), dropped, deck_link, deck_archetype
+                FROM swiss_players_old
+            """))
+            connection.execute(text("DROP TABLE swiss_players_old"))
+
+        if "swiss_rounds" in tables_to_migrate:
+            connection.execute(text("ALTER TABLE swiss_rounds RENAME TO swiss_rounds_old"))
+            connection.execute(text("""
+                CREATE TABLE swiss_rounds (
+                    id INTEGER NOT NULL,
+                    swiss_tournament_id INTEGER,
+                    round_number INTEGER NOT NULL,
+                    message_id_pairings VARCHAR(32),
+                    message_id_standings VARCHAR(32),
+                    PRIMARY KEY (id),
+                    FOREIGN KEY(swiss_tournament_id) REFERENCES swiss_tournaments (tournament_id)
+                )
+            """))
+            connection.execute(text("""
+                INSERT INTO swiss_rounds (
+                    id, swiss_tournament_id, round_number, message_id_pairings, message_id_standings
+                )
+                SELECT
+                    id, swiss_tournament_id, round_number,
+                    CAST(message_id_pairings AS TEXT), CAST(message_id_standings AS TEXT)
+                FROM swiss_rounds_old
+            """))
+            connection.execute(text("DROP TABLE swiss_rounds_old"))
+
+        if "swiss_matches" in tables_to_migrate:
+            connection.execute(text("ALTER TABLE swiss_matches RENAME TO swiss_matches_old"))
+            connection.execute(text("""
+                CREATE TABLE swiss_matches (
+                    id INTEGER NOT NULL,
+                    swiss_round_id INTEGER,
+                    player1_id VARCHAR(32) NOT NULL,
+                    player2_id VARCHAR(32),
+                    player1_wins INTEGER NOT NULL,
+                    player2_wins INTEGER NOT NULL,
+                    draws INTEGER NOT NULL,
+                    PRIMARY KEY (id),
+                    FOREIGN KEY(swiss_round_id) REFERENCES swiss_rounds (id)
+                )
+            """))
+            connection.execute(text("""
+                INSERT INTO swiss_matches (
+                    id, swiss_round_id, player1_id, player2_id, player1_wins, player2_wins, draws
+                )
+                SELECT
+                    id, swiss_round_id, CAST(player1_id AS TEXT), CAST(player2_id AS TEXT),
+                    player1_wins, player2_wins, draws
+                FROM swiss_matches_old
+            """))
+            connection.execute(text("DROP TABLE swiss_matches_old"))
+
+        if "users" in tables_to_migrate:
+            connection.execute(text("ALTER TABLE users RENAME TO users_old"))
+            connection.execute(text("""
+                CREATE TABLE users (
+                    user_id VARCHAR(32) NOT NULL,
+                    display_name VARCHAR,
+                    username VARCHAR,
+                    updated_at DATETIME,
+                    PRIMARY KEY (user_id)
+                )
+            """))
+            connection.execute(text("""
+                INSERT INTO users (user_id, display_name, username, updated_at)
+                SELECT CAST(user_id AS TEXT), display_name, username, updated_at
+                FROM users_old
+            """))
+            connection.execute(text("DROP TABLE users_old"))
+
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_tournaments_name ON tournaments (name)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_tournaments_organizer_id ON tournaments (organizer_id)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_tournaments_start_time ON tournaments (start_time)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_tournaments_guild_id ON tournaments (guild_id)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_tournaments_channel_id ON tournaments (channel_id)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_tournaments_message_id ON tournaments (message_id)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_participants_id ON participants (id)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_participants_tournament_id ON participants (tournament_id)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_participants_user_id ON participants (user_id)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_swiss_players_id ON swiss_players (id)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_swiss_players_swiss_tournament_id ON swiss_players (swiss_tournament_id)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_swiss_players_player_id ON swiss_players (player_id)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_swiss_rounds_id ON swiss_rounds (id)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_swiss_rounds_swiss_tournament_id ON swiss_rounds (swiss_tournament_id)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_swiss_matches_id ON swiss_matches (id)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_swiss_matches_swiss_round_id ON swiss_matches (swiss_round_id)"))
+        connection.execute(text("PRAGMA foreign_keys=ON"))
+
+
 def init_db():
     """Create all tables in the database"""
     Base.metadata.create_all(bind=engine)
+    _migrate_discord_id_columns()
     print("✅ Database tables created")
 
 

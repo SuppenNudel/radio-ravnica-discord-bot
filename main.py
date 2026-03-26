@@ -20,6 +20,7 @@ import logging
 from ezcord import log, Bot
 import platform
 from modules import env
+from modules.db import init_db
 
 LOG_WEBHOOK = env.LOG_WEBHOOK
 IS_DEBUG = env.DEBUG
@@ -107,6 +108,7 @@ async def on_ready():
 
 if __name__ == "__main__":
     os.makedirs("tmp", exist_ok=True)
+    init_db()
     profile = env.get_active_cog_profile()
     bot.load_cogs(profile["cogs_path"], ignored_cogs=profile["ignored_cogs"], subdirectories=True)
     bot.run(os.getenv("TOKEN"))

@@ -40,6 +40,13 @@ if env.DEBUG:
 
 active_tournaments:dict[str, "SpelltableTournament"] = {}
 
+
+def _normalize_discord_id(value) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    return normalized if normalized else None
+
 async def save_tournaments():
     for tournament in active_tournaments.values():
         await tournament.save_tournament()
@@ -64,7 +71,7 @@ def _build_swiss_json(db, swiss_t_row: SwissTournamentRecord) -> dict:
         deck_dict = None
         if p_row.deck_link or p_row.deck_archetype:
             deck_dict = {"link": p_row.deck_link, "archetype": p_row.deck_archetype}
-        player_dict: dict = {"player_id": p_row.player_id, "deck": deck_dict}
+        player_dict: dict = {"player_id": int(p_row.player_id), "deck": deck_dict}
         if p_row.dropped:
             player_dict["dropped"] = True
         players.append(player_dict)
@@ -97,7 +104,7 @@ def _build_swiss_json(db, swiss_t_row: SwissTournamentRecord) -> dict:
             "message_standings": r_row.message_id_standings,
         })
 
-    winner = {"player_id": swiss_t_row.winner_player_id} if swiss_t_row.winner_player_id else None
+    winner = {"player_id": int(swiss_t_row.winner_player_id)} if swiss_t_row.winner_player_id else None
     return {
         "rounds_count": swiss_t_row.rounds_count,
         "players": players,
@@ -119,12 +126,19 @@ async def load_tournaments(bot) -> dict[str, "SpelltableTournament"]:
         tournament_rows = db.query(TournamentRecord).all()
         for t_row in tournament_rows:
             try:
-                guild = known_guilds.get(t_row.guild_id)
+                normalized_guild_id = _normalize_discord_id(t_row.guild_id)
+                if normalized_guild_id is None:
+                    raise ValueError(
+                        f"missing guild_id in tournaments row (tournament_id={t_row.id}, name={t_row.name!r})"
+                    )
+                guild_id_int = int(normalized_guild_id)
+
+                guild = known_guilds.get(guild_id_int)
                 if guild is None:
-                    guild = bot.get_guild(t_row.guild_id)
+                    guild = bot.get_guild(guild_id_int)
                     if guild is None:
-                        guild = await bot.fetch_guild(t_row.guild_id)
-                    known_guilds[t_row.guild_id] = guild
+                        guild = await bot.fetch_guild(guild_id_int)
+                    known_guilds[guild_id_int] = guild
                 tournament = SpelltableTournament(guild, t_row.name, t_row.organizer_id, bot)
                 tournament.description = t_row.description
                 tournament.time = t_row.start_time
@@ -169,14 +183,22 @@ async def load_tournaments(bot) -> dict[str, "SpelltableTournament"]:
                     tracked_user_ids.update(player.player_id for player in tournament.swiss_tournament.players)
 
                 for user_id in tracked_user_ids:
-                    member = guild.get_member(user_id)
+                    normalized_user_id = _normalize_discord_id(user_id)
+                    if normalized_user_id is None:
+                        link_log.warning(
+                            "Skipping user sync with missing user_id during load_tournaments: "
+                            f"tournament_id={t_row.id}, tournament_name={t_row.name!r}, raw_user_id={user_id!r}"
+                        )
+                        continue
+
+                    member = guild.get_member(int(normalized_user_id))
                     if member is None:
-                        member = bot.get_user(user_id)
-                    user_row = known_users.get(user_id)
+                        member = bot.get_user(int(normalized_user_id))
+                    user_row = known_users.get(normalized_user_id)
                     if user_row is None:
-                        user_row = DiscordUser(user_id=user_id)
+                        user_row = DiscordUser(user_id=normalized_user_id)
                         db.add(user_row)
-                        known_users[user_id] = user_row
+                        known_users[normalized_user_id] = user_row
                         users_dirty = True
                         row_changed = True
                     else:
@@ -211,7 +233,13 @@ async def load_tournaments(bot) -> dict[str, "SpelltableTournament"]:
                     except Exception as dm_error:
                         log.debug(f"Konnte Benachrichtigung nicht senden: {dm_error}")
                 else:
-                    log.error(f"Failed to load tournament id={t_row.id} ({t_row.name}): {e}")
+                    log.error(
+                        "Failed to load tournament "
+                        f"id={t_row.id} name={t_row.name!r} "
+                        f"guild_id={t_row.guild_id!r} channel_id={t_row.channel_id!r} "
+                        f"message_id={t_row.message_id!r} organizer_id={t_row.organizer_id!r} "
+                        f"exc_type={type(e).__name__} exc={e!r}"
+                    )
 
         if users_dirty:
             db.commit()
@@ -224,7 +252,7 @@ async def generate_tournament_message(tournaments: list["SpelltableTournament"])
     # Sort tournaments by start date, placing those with `time=None` first
     tournaments = sorted(
         tournaments,
-        key=lambda tournament: tournament.time if tournament.time is not None else datetime.min.replace(tzinfo=timezone)
+        key=lambda tournament: tournament.time if tournament.time is not None else datetime.min
     )
 
     # Separate ongoing and upcoming
@@ -723,31 +751,52 @@ class SpelltableTournament(Serializable):
             # Replace participants (delete + re-insert preserves in-memory order)
             db.query(Participant).filter(Participant.tournament_id == t_row.id).delete(synchronize_session=False)
             registered_user_ids = set(self.users.keys()) | set(self.waitlist)
+            added_users = set()  # Track added users to prevent duplicates
             for user_id, state in self.users.items():
-                db.add(Participant(tournament_id=t_row.id, user_id=user_id, state=str(state)))
+                if user_id not in added_users:
+                    db.add(Participant(tournament_id=t_row.id, user_id=user_id, state=str(state)))
+                    added_users.add(user_id)
             for user_id in self.waitlist:
-                db.add(Participant(tournament_id=t_row.id, user_id=user_id, state="waitlist"))
+                if user_id not in added_users:
+                    db.add(Participant(tournament_id=t_row.id, user_id=user_id, state="waitlist"))
+                    added_users.add(user_id)
 
             if self.swiss_tournament:
                 # Ensure all registered users exist in users table once tournament has started
                 for user_id in registered_user_ids:
+                    normalized_user_id = _normalize_discord_id(user_id)
+                    if normalized_user_id is None:
+                        link_log.warning(
+                            "Skipping users-table ensure with missing user_id during save_tournament: "
+                            f"tournament_title={self.title!r}, raw_user_id={user_id!r}"
+                        )
+                        continue
+
                     existing_user = (
                         db.query(DiscordUser)
-                        .filter(DiscordUser.user_id == user_id)
+                        .filter(DiscordUser.user_id == normalized_user_id)
                         .first()
                     )
                     if existing_user is None:
-                        db.add(DiscordUser(user_id=user_id, updated_at=datetime.utcnow()))
+                        db.add(DiscordUser(user_id=normalized_user_id, updated_at=datetime.utcnow()))
 
                 # Upsert cached Discord display names
                 for user_id, member in self.members.items():
+                    normalized_user_id = _normalize_discord_id(user_id)
+                    if normalized_user_id is None:
+                        link_log.warning(
+                            "Skipping users-table upsert with missing member user_id during save_tournament: "
+                            f"tournament_title={self.title!r}, raw_user_id={user_id!r}, member={member!r}"
+                        )
+                        continue
+
                     existing_user = (
                         db.query(DiscordUser)
-                        .filter(DiscordUser.user_id == user_id)
+                        .filter(DiscordUser.user_id == normalized_user_id)
                         .first()
                     )
                     if existing_user is None:
-                        existing_user = DiscordUser(user_id=user_id)
+                        existing_user = DiscordUser(user_id=normalized_user_id)
                         db.add(existing_user)
                     existing_user.display_name = member.display_name
                     existing_user.username = member.name
@@ -1014,7 +1063,7 @@ class SpelltableTournament(Serializable):
                     p_mp = player.calculate_match_points(round.round_number-1)
                     member = await self.get_member(player.player_id)
                     player_display_name = member.display_name if member else f"User({player.player_id})"
-                    rows.append([(f"{player_display_name} ({p_mp})", player.dropped, True), "BYE", "2 - 0"])
+                    rows.append([(f"{player_display_name} ({p_mp})", player.dropped), "BYE", "2 - 0"])
                 continue
 
             # Normal match
@@ -1026,12 +1075,8 @@ class SpelltableTournament(Serializable):
                 win_p1, win_p2, draws = match.wins.values()
                 score_p1 = f"{win_p1} - {win_p2}" + (f" - {draws}" if draws else "")
                 score_p2 = f"{win_p2} - {win_p1}" + (f" - {draws}" if draws else "")
-                # Determine winners
-                p1_won = win_p1 > win_p2
-                p2_won = win_p2 > win_p1
             else:
                 score_p1 = score_p2 = "Ausstehend"
-                p1_won = p2_won = False
 
             # Fetch display names
             member_p1 = await self.get_member(p1.player_id)
@@ -1042,8 +1087,8 @@ class SpelltableTournament(Serializable):
             # Add both player perspectives with winner highlighting
             p1_mp = p1.calculate_match_points(round.round_number-1)
             p2_mp = p2.calculate_match_points(round.round_number-1)
-            rows.append([(f"{p1_display_name} ({p1_mp})", p1.dropped, p1_won), (f"{p2_display_name} ({p2_mp})", p2.dropped), score_p1])
-            rows.append([(f"{p2_display_name} ({p2_mp})", p2.dropped, p2_won), (f"{p1_display_name} ({p1_mp})", p1.dropped), score_p2])
+            rows.append([(f"{p1_display_name} ({p1_mp})", p1.dropped), (f"{p2_display_name} ({p2_mp})", p2.dropped), score_p1])
+            rows.append([(f"{p2_display_name} ({p2_mp})", p2.dropped), (f"{p1_display_name} ({p1_mp})", p1.dropped), score_p2])
 
         # Sort rows by player name (first element of the tuple in column 0)
         rows.sort(key=lambda row: row[0][0].lower())
