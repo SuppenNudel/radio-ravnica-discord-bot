@@ -7,6 +7,7 @@ from ezcord import Cog, log
 from discord.ext.commands import slash_command
 from discord import ApplicationContext, Bot, Option
 from modules.hall_of_fame import get_hall_of_fame, HallOfFame
+from modules.spelltable.tournament_model import active_tournaments, ParticipationState
 from modules import env
 
 class HallOfFameCog(Cog):
@@ -153,17 +154,37 @@ class HallOfFameCog(Cog):
             inline=True
         )
         
-        # Recent tournament placements
-        if stats['tournament_placements']:
+        # Recent tournament placements (concluded only — must have results)
+        concluded_placements = [p for p in stats['tournament_placements'] if p.get('standings_url') or p.get('match_record')]
+        if concluded_placements:
             placements_text = ""
-            for placement in sorted(stats['tournament_placements'], 
-                                   key=lambda x: x['date'], reverse=True)[:5]:
+            for placement in concluded_placements[:5]:
                 medal = self._get_medal(placement['placement'])
-                placements_text += f"{medal} **{placement['tournament']}** - Platz {placement['placement']} ({placement['match_record']})\n"
-            
+                title = placement['tournament']
+                url = placement.get('standings_url', '')
+                tournament_link = f"[{title}]({url})" if url else f"**{title}**"
+                placements_text += f"{medal} {tournament_link} - Platz {placement['placement']} ({placement['match_record']})\n"
+
             embed.add_field(
                 name="📋 Letzte Turniere",
                 value=placements_text,
+                inline=False
+            )
+
+        # Ongoing tournaments the user is currently registered for
+        ongoing_texts = []
+        for tournament in active_tournaments.values():
+            if tournament.cancelled:
+                continue
+            user_state = tournament.users.get(ctx.author.id)
+            if user_state == ParticipationState.PARTICIPATE:
+                msg_url = f"https://discord.com/channels/{tournament.guild.id}/{tournament.channel_id}/{tournament.message_id}"
+                ongoing_texts.append(f"⚔️ [{tournament.title}]({msg_url})")
+
+        if ongoing_texts:
+            embed.add_field(
+                name="🎮 Aktive Turniere",
+                value="\n".join(ongoing_texts),
                 inline=False
             )
         

@@ -359,6 +359,20 @@ class SpelltableTournamentManager(Cog):
             )
         ]
 
+        # Pre-populate the member cache for all players across all rounds before
+        # processing rounds concurrently. Without this, the same user can be looked
+        # up multiple times simultaneously (once per round they appear in) because
+        # the cache hasn't been updated yet when the second concurrent lookup starts.
+        all_player_ids: set[int] = set()
+        for round_obj in rounds_to_refresh:
+            for match in round_obj.matches:
+                if match.player1:
+                    all_player_ids.add(match.player1.player_id)
+                if match.player2:
+                    all_player_ids.add(match.player2.player_id)
+        if all_player_ids:
+            await asyncio.gather(*[tournament.get_member(uid) for uid in all_player_ids])
+
         async def _refresh_one(round_obj):
             pairings_message = await tournament.get_message(round_obj.message_id_pairings)
             if not pairings_message:
@@ -825,8 +839,20 @@ class SpelltableTournamentManager(Cog):
 
                 # tournament has been started
                 swiss_tournament = tournament.swiss_tournament
-                tournament_concluded = swiss_tournament.winner is not None
                 current_round = swiss_tournament.current_round()
+                current_round_concluded = bool(current_round and current_round.is_concluded())
+                is_last_round = bool(
+                    current_round
+                    and swiss_tournament.rounds_count
+                    and current_round.round_number >= swiss_tournament.rounds_count
+                )
+                tournament_concluded = swiss_tournament.winner is not None or (is_last_round and current_round_concluded)
+
+                if tournament_concluded and swiss_tournament.winner is None:
+                    link_log.warning(
+                        f"Treating tournament '{tournament.title}' as concluded during startup because the last round is already concluded, "
+                        f"but winner_player_id is not set."
+                    )
 
                 await self._refresh_historical_pairings_messages(
                     tournament,

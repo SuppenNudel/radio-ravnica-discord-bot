@@ -11,6 +11,40 @@ from ezcord import log
 
 HOF_FILE = "hall_of_fame.json"
 
+
+def _parse_record_component(value: str) -> int:
+    try:
+        return int(value.strip())
+    except (ValueError, AttributeError):
+        return 0
+
+
+def _record_tuple(match_record: str) -> tuple[int, int, int]:
+    if not isinstance(match_record, str):
+        return 0, 0, 0
+    parts = match_record.split("-")
+    if len(parts) < 3:
+        return 0, 0, 0
+    return (
+        _parse_record_component(parts[0]),
+        _parse_record_component(parts[1]),
+        _parse_record_component(parts[2]),
+    )
+
+
+def _safe_datetime_sort_key(value: str):
+    if not isinstance(value, str):
+        return datetime.min
+    normalized = value.strip()
+    if not normalized:
+        return datetime.min
+    if normalized.endswith("Z"):
+        normalized = normalized[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(normalized)
+    except ValueError:
+        return datetime.min
+
 class ParticipantStats:
     """Represents statistics for a tournament participant."""
     
@@ -95,11 +129,12 @@ class TournamentRecord:
     """Represents a single tournament entry in the hall of fame."""
     
     def __init__(self, tournament_id: str, tournament_title: str, 
-                 guild_id: int, completed_date: str):
+                 guild_id: int, start_date: str, standings_url: str = ""):
         self.tournament_id = tournament_id
         self.tournament_title = tournament_title
         self.guild_id = guild_id
-        self.completed_date = completed_date  # ISO format
+        self.start_date = start_date  # ISO format
+        self.standings_url = standings_url
         self.results: List[Dict] = []  # List of {user_id, placement, match_record}
     
     def add_result(self, user_id: int, username: str, placement: int, 
@@ -118,7 +153,8 @@ class TournamentRecord:
             "tournament_id": self.tournament_id,
             "tournament_title": self.tournament_title,
             "guild_id": self.guild_id,
-            "completed_date": self.completed_date,
+            "start_date": self.start_date,
+            "standings_url": self.standings_url,
             "results": self.results
         }
     
@@ -129,7 +165,8 @@ class TournamentRecord:
             data["tournament_id"],
             data["tournament_title"],
             data["guild_id"],
-            data["completed_date"]
+            data.get("start_date") or data.get("completed_date", ""),
+            data.get("standings_url", ""),
         )
         record.results = data.get("results", [])
         return record
@@ -190,8 +227,8 @@ class HallOfFame:
         return self.participants.get(user_id)
     
     def add_tournament_result(self, tournament_id: str, tournament_title: str,
-                             guild_id: int, completed_date: str,
-                             results: List[Dict], *, save: bool = True):
+                             guild_id: int, start_date: str,
+                             results: List[Dict], *, standings_url: str = "", save: bool = True):
         """
         Add a tournament result to the hall of fame.
         
@@ -199,7 +236,8 @@ class HallOfFame:
             tournament_id: Unique tournament identifier
             tournament_title: Display name of the tournament
             guild_id: Discord guild ID
-            completed_date: ISO format date string
+            start_date: ISO format date string
+            standings_url: Discord jump URL to the final standings message
             results: List of dicts with keys:
                 - user_id: Discord user ID
                 - username: Discord username
@@ -212,8 +250,8 @@ class HallOfFame:
             return
 
         # Create tournament record
-        tournament = TournamentRecord(tournament_id, tournament_title, 
-                                     guild_id, completed_date)
+        tournament = TournamentRecord(tournament_id, tournament_title,
+                                     guild_id, start_date, standings_url)
         
         # Update participant stats and tournament record
         for result in sorted(results, key=lambda x: x["placement"]):
@@ -235,15 +273,13 @@ class HallOfFame:
                     participant.add_match(match_result)
             else:
                 # Parse match record if matches not provided
-                matches_str = match_record.split("-")
-                if len(matches_str) >= 3:
-                    wins, losses, draws = int(matches_str[0]), int(matches_str[1]), int(matches_str[2])
-                    for _ in range(wins):
-                        participant.add_match("win")
-                    for _ in range(losses):
-                        participant.add_match("loss")
-                    for _ in range(draws):
-                        participant.add_match("draw")
+                wins, losses, draws = _record_tuple(match_record)
+                for _ in range(wins):
+                    participant.add_match("win")
+                for _ in range(losses):
+                    participant.add_match("loss")
+                for _ in range(draws):
+                    participant.add_match("draw")
         
         self.tournaments.append(tournament)
         if save:
@@ -299,8 +335,14 @@ class HallOfFame:
                         "tournament": tournament.tournament_title,
                         "placement": result["placement"],
                         "match_record": result["match_record"],
-                        "date": tournament.completed_date
+                        "date": tournament.start_date,
+                        "standings_url": tournament.standings_url,
                     })
+
+        tournament_placements.sort(
+            key=lambda placement: _safe_datetime_sort_key(placement.get("date", "")),
+            reverse=True,
+        )
         
         return {
             "user_id": user_id,

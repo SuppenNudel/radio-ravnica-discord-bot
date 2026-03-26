@@ -593,12 +593,17 @@ async def update_hall_of_fame(tournament: SpelltableTournament):
                 placement += 1
         
         # Add tournament to hall of fame
+        last_round = tournament.swiss_tournament.current_round() if tournament.swiss_tournament else None
+        standings_url = ""
+        if last_round and last_round.message_id_standings:
+            standings_url = f"https://discord.com/channels/{message.guild.id}/{message.channel.id}/{last_round.message_id_standings}"
         hof.add_tournament_result(
             tournament_id=tournament_id,
             tournament_title=tournament.title,
             guild_id=message.guild.id,
-            completed_date=datetime.now().isoformat(),
-            results=results
+            start_date=tournament.time.isoformat() if tournament.time else datetime.now().isoformat(),
+            results=results,
+            standings_url=standings_url,
         )
         
         log.debug("Hall of Fame aktualisiert")
@@ -642,13 +647,18 @@ async def update_hall_of_fame_batch(tournaments: list[SpelltableTournament]):
                     })
                     placement += 1
 
+            last_round = tournament.swiss_tournament.current_round() if tournament.swiss_tournament else None
+            standings_url = ""
+            if last_round and last_round.message_id_standings:
+                standings_url = f"https://discord.com/channels/{message.guild.id}/{message.channel.id}/{last_round.message_id_standings}"
             had_record = hof.get_tournament_results(tournament_id) is not None
             hof.add_tournament_result(
                 tournament_id=tournament_id,
                 tournament_title=tournament.title,
                 guild_id=message.guild.id,
-                completed_date=datetime.now().isoformat(),
+                start_date=tournament.time.isoformat() if tournament.time else datetime.now().isoformat(),
                 results=results,
+                standings_url=standings_url,
                 save=False,
             )
             if not had_record:
