@@ -168,10 +168,10 @@ class HallOfFameCog(Cog):
             placements_text = ""
             shown = 0
             for line in lines:
-                suffix = f"\n*... und {len(lines) - shown - 1} weitere*" if shown < len(lines) - 1 else ""
+                suffix = f"\n*... und {len(concluded_placements) - shown - 1} weitere*" if shown < len(concluded_placements) - 1 else ""
                 candidate = placements_text + line + "\n"
                 if len(candidate) + len(suffix) > 1024:
-                    placements_text += f"*... und {len(lines) - shown} weitere*"
+                    placements_text += f"*... und {len(concluded_placements) - shown} weitere*"
                     break
                 placements_text = candidate
                 shown += 1
