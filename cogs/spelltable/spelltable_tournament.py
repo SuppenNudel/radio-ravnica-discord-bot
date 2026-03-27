@@ -358,9 +358,9 @@ class EditTournamentView(discord.ui.View):
             await self.tournament.save_tournament_participants()
             if self.tournament.swiss_tournament:
                 await self.tournament.save_tournament_swiss()
-            # Rename thread if title changed
-            if existing_message.thread:
-                await existing_message.thread.edit(name=self.tournament.title)
+            # Rename thread if message is in a thread
+            if isinstance(existing_message.channel, discord.Thread):
+                await existing_message.channel.edit(name=self.tournament.title)
             await existing_message.edit(content=await self.tournament.get_participants_message(), embed=await self.tournament.to_embed(), view=participation_view)
             await interaction.edit_original_response(content="Turnier wurde bearbeitet", embed=None, view=None)
         else:
