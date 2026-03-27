@@ -11,15 +11,39 @@ from dateutil.relativedelta import relativedelta
 from modules.hall_of_fame import get_hall_of_fame, HallOfFame, FORMAT_CHOICES
 from modules.spelltable.tournament_model import active_tournaments, ParticipationState
 from modules import env
+from modules.db import SessionLocal, Tournament as TournamentRecord
+
+
+BASE_TIME_FILTER_CHOICES = ["Alle Zeit", "Letzte 12 Monate"]
+
+
+def _get_available_tournament_years() -> list[int]:
+    """Return distinct tournament years from DB (descending)."""
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(TournamentRecord.start_time)
+            .filter(TournamentRecord.start_time.isnot(None))
+            .all()
+        )
+        years = sorted({row[0].year for row in rows if row[0]}, reverse=True)
+        return years
+    except Exception:
+        return []
+    finally:
+        db.close()
+
+
+TIME_FILTER_CHOICES = BASE_TIME_FILTER_CHOICES + [str(y) for y in _get_available_tournament_years()]
 
 
 def _parse_time_filter(time_filter: str | None) -> tuple[datetime | None, datetime | None]:
     """Convert a time_filter choice string into (time_from, time_to) naive UTC datetimes."""
-    if time_filter == "Dieses Jahr":
-        now = datetime.utcnow()
-        return datetime(now.year, 1, 1), None
     if time_filter == "Letzte 12 Monate":
         return datetime.utcnow() - relativedelta(months=12), None
+    if time_filter and time_filter.isdigit() and len(time_filter) == 4:
+        year = int(time_filter)
+        return datetime(year, 1, 1), datetime(year + 1, 1, 1)
     return None, None
 
 
@@ -46,7 +70,7 @@ class HallOfFameCog(Cog):
         time_filter: Option(
             str,
             description="Zeitraum filtern",
-            choices=["Alle Zeit", "Dieses Jahr", "Letzte 12 Monate"],
+            choices=TIME_FILTER_CHOICES,
             default="Alle Zeit"
         ) = "Alle Zeit",
         format_filter: Option(
@@ -150,7 +174,7 @@ class HallOfFameCog(Cog):
         time_filter: Option(
                 str,
                 description="Zeitraum filtern",
-                choices=["Alle Zeit", "Dieses Jahr", "Letzte 12 Monate"],
+            choices=TIME_FILTER_CHOICES,
                 default="Alle Zeit"
             ) = "Alle Zeit",
             format_filter: Option(
@@ -310,7 +334,7 @@ class HallOfFameCog(Cog):
         time_filter: Option(
             str,
             description="Zeitraum filtern",
-            choices=["Alle Zeit", "Dieses Jahr", "Letzte 12 Monate"],
+            choices=TIME_FILTER_CHOICES,
             default="Alle Zeit"
         ) = "Alle Zeit",
         format_filter: Option(
