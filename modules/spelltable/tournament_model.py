@@ -31,6 +31,7 @@ class ParticipationState(StrEnum):
     PARTICIPATE = auto()
     TENTATIVE = auto()
     DECLINE = auto()
+    WAITLIST = auto()
 
 link_log = logging.getLogger("link_logger")
 
@@ -193,28 +194,22 @@ async def load_tournaments(bot) -> dict[str, "SpelltableTournament"]:
                 tournament.days_per_match = t_row.days_per_match if t_row.days_per_match is not None else 7
                 tournament.cancelled = t_row.cancelled
 
-                # Participants
+                # Participants and waitlist
                 participant_rows = (
                     db.query(Participant)
-                    .filter(Participant.tournament_id == t_row.id, Participant.state != "waitlist")
-                    .all()
-                )
-                for p_row in participant_rows:
-                    participant_id_int = _normalize_discord_id_int(p_row.user_id)
-                    if participant_id_int is not None:
-                        tournament.users[participant_id_int] = ParticipationState(p_row.state)
-
-                # Waitlist ordered by insertion order
-                waitlist_rows = (
-                    db.query(Participant)
-                    .filter(Participant.tournament_id == t_row.id, Participant.state == "waitlist")
+                    .filter(Participant.tournament_id == t_row.id)
                     .order_by(Participant.id.asc())
                     .all()
                 )
-                tournament.waitlist = [
-                    waitlist_id for waitlist_id in (_normalize_discord_id_int(w.user_id) for w in waitlist_rows)
-                    if waitlist_id is not None
-                ]
+                tournament.waitlist = []
+                for p_row in participant_rows:
+                    participant_id_int = _normalize_discord_id_int(p_row.user_id)
+                    if participant_id_int is None:
+                        continue
+                    participant_state = ParticipationState(p_row.state)
+                    tournament.users[participant_id_int] = participant_state
+                    if participant_state == ParticipationState.WAITLIST:
+                        tournament.waitlist.append(participant_id_int)
 
                 # Swiss tournament
                 swiss_t_row = (
@@ -627,7 +622,7 @@ class SpelltableTournament(Serializable):
 
             desired_states: dict[int, str] = {user_id: str(state) for user_id, state in users.items()}
             for user_id in waitlist:
-                desired_states.setdefault(user_id, "waitlist")
+                desired_states.setdefault(user_id, ParticipationState.WAITLIST.value)
 
             for user_id, desired_state in desired_states.items():
                 db.execute(
@@ -927,7 +922,7 @@ class SpelltableTournament(Serializable):
             for user_id, state in self.users.items():
                 desired_states[user_id] = str(state)
             for user_id in self.waitlist:
-                desired_states.setdefault(user_id, "waitlist")
+                desired_states.setdefault(user_id, ParticipationState.WAITLIST.value)
 
             if save_participants:
                 for user_id, desired_state in desired_states.items():

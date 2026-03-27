@@ -154,32 +154,62 @@ class HallOfFameCog(Cog):
             inline=True
         )
 
-        # Ongoing tournaments the user is currently registered for
+        # Upcoming tournaments the user has registered for (not yet started)
+        upcoming_texts = []
         ongoing_texts = []
         for tournament in active_tournaments.values():
             if tournament.cancelled:
                 continue
+            if tournament.swiss_tournament and tournament.swiss_tournament.winner:
+                continue
             user_state = tournament.users.get(ctx.author.id)
-            if user_state == ParticipationState.PARTICIPATE:
-                msg_url = f"https://discord.com/channels/{tournament.guild.id}/{tournament.channel_id}/{tournament.message_id}"
+            if user_state not in (ParticipationState.PARTICIPATE, ParticipationState.TENTATIVE, ParticipationState.WAITLIST):
+                continue
+            msg_url = f"https://discord.com/channels/{tournament.guild.id}/{tournament.channel_id}/{tournament.message_id}"
+            if not tournament.swiss_tournament:
+                # tournament hasn't started yet → upcoming
+                emoji = "<?>"  # Shouldn't happen, but just in case
+                if user_state == ParticipationState.PARTICIPATE:
+                    emoji = "✅"
+                elif user_state == ParticipationState.TENTATIVE:
+                    emoji = "❓"
+                elif user_state == ParticipationState.WAITLIST:
+                    emoji = "⌚"
+                start_text = (
+                    f"{discord.utils.format_dt(tournament.time, 'F')} ({discord.utils.format_dt(tournament.time, 'R')})"
+                    if tournament.time
+                    else "TBD"
+                )
+                upcoming_texts.append(
+                    f"{emoji} [{tournament.title}]({msg_url}) | {start_text}"
+                )
+            else:
+                # started but not concluded → ongoing
                 ongoing_texts.append(f"⚔️ [{tournament.title}]({msg_url})")
 
-        if ongoing_texts:
-            # Truncate ongoing tournaments to stay within 1024 character limit
-            ongoing_value = ""
-            shown = 0
-            for text in ongoing_texts:
-                suffix = f"\n*... und {len(ongoing_texts) - shown - 1} weitere*" if shown < len(ongoing_texts) - 1 else ""
-                candidate = ongoing_value + text + "\n"
+        def _truncated_field(texts: list[str]) -> str:
+            value = ""
+            for i, text in enumerate(texts):
+                candidate = value + text + "\n"
+                remaining = len(texts) - i - 1
+                suffix = f"*... und {remaining} weitere*" if remaining else ""
                 if len(candidate) + len(suffix) > 1024:
-                    ongoing_value += f"*... und {len(ongoing_texts) - shown} weitere*"
+                    value += f"*... und {len(texts) - i} weitere*"
                     break
-                ongoing_value = candidate
-                shown += 1
-            
+                value = candidate
+            return value.rstrip("\n")
+
+        if upcoming_texts:
+            embed.add_field(
+                name="🗓️ Bevorstehende Turniere",
+                value=_truncated_field(upcoming_texts),
+                inline=False
+            )
+
+        if ongoing_texts:
             embed.add_field(
                 name="🎮 Aktive Turniere",
-                value=ongoing_value.rstrip("\n"),
+                value=_truncated_field(ongoing_texts),
                 inline=False
             )
         

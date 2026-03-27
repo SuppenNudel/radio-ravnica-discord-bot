@@ -1267,6 +1267,7 @@ class StartNextRoundView(discord.ui.View):
     @discord.ui.button(label="Nächste Runde", style=discord.ButtonStyle.success, emoji="➡️")
     async def next_round_button(self, button: discord.ui.Button, interaction: discord.Interaction):
         async def do_the_thing():
+            progress_message = None
             # check if the user even is allowed to start the next round
             # only Organizer
             if interaction.user.id != self.tournament.organizer_id:
@@ -1286,69 +1287,77 @@ class StartNextRoundView(discord.ui.View):
                 except discord.NotFound:
                     link_log.warning("[next-round] Could not remove view from message: message not found")
 
-            await interaction.followup.send(
+            progress_message = await interaction.followup.send(
                 "Rundenberechnung läuft … bitte einen Moment warten.",
                 ephemeral=True,
+                wait=True,
             )
-            
-            # Get or create a lock for this tournament
-            tournament_id = await self.tournament.get_id()
-            if tournament_id not in _tournament_round_locks:
-                _tournament_round_locks[tournament_id] = asyncio.Lock()
-            
-            lock = _tournament_round_locks[tournament_id]
-            
-            # Try to acquire the lock without blocking
-            if lock.locked():
-                await interaction.followup.send(
-                    "Die nächste Runde wird bereits gestartet. Bitte warte einen Moment.",
-                    ephemeral=True
-                )
-                return
-            
-            async with lock:
-                # Double-check that the round hasn't already been started
-                current_round = self.tournament.swiss_tournament.current_round()
-                if current_round and current_round.round_number > self.previous_round.round_number:
+
+            try:
+                # Get or create a lock for this tournament
+                tournament_id = await self.tournament.get_id()
+                if tournament_id not in _tournament_round_locks:
+                    _tournament_round_locks[tournament_id] = asyncio.Lock()
+
+                lock = _tournament_round_locks[tournament_id]
+
+                # Try to acquire the lock without blocking
+                if lock.locked():
                     await interaction.followup.send(
-                        "Die nächste Runde wurde bereits gestartet.",
+                        "Die nächste Runde wird bereits gestartet. Bitte warte einen Moment.",
                         ephemeral=True
                     )
                     return
 
-                # Immediately remove the pairings view to prevent further button presses.
-                previous_pairings_message = await self.tournament.get_message(self.previous_round.message_id_pairings)
-                if previous_pairings_message:
-                    await previous_pairings_message.edit(view=None)
+                async with lock:
+                    # Double-check that the round hasn't already been started
+                    current_round = self.tournament.swiss_tournament.current_round()
+                    if current_round and current_round.round_number > self.previous_round.round_number:
+                        await interaction.followup.send(
+                            "Die nächste Runde wurde bereits gestartet.",
+                            ephemeral=True
+                        )
+                        return
 
-                # update the previous round's messages
-                previous_standings_message = await self.tournament.get_message(self.previous_round.message_id_standings)
+                    # Immediately remove the pairings view to prevent further button presses.
+                    previous_pairings_message = await self.tournament.get_message(self.previous_round.message_id_pairings)
+                    if previous_pairings_message:
+                        await previous_pairings_message.edit(view=None)
 
-                # Immediately remove the standings view to prevent repeated clicks.
-                if previous_standings_message:
-                    await _edit_standings_message(
-                        self.tournament,
-                        self.previous_round,
-                        previous_standings_message,
-                        view=None,
-                        keep_existing_content=True,
-                    )
+                    # update the previous round's messages
+                    previous_standings_message = await self.tournament.get_message(self.previous_round.message_id_standings)
 
-                pairings_image = await self.tournament.pairings_to_image(self.previous_round)
-                pairings_file = discord.File(pairings_image, filename=pairings_image)
-                if previous_pairings_message:
-                    await previous_pairings_message.edit(attachments=[], file=pairings_file, view=None)
-
-                try:
-                    await next_round(self.tournament, interaction)
-                except Exception as e:
+                    # Immediately remove the standings view to prevent repeated clicks.
                     if previous_standings_message:
                         await _edit_standings_message(
                             self.tournament,
                             self.previous_round,
                             previous_standings_message,
-                            view=await StartNextRoundView.create(self.previous_round, self.tournament),
+                            view=None,
                             keep_existing_content=True,
                         )
+
+                    pairings_image = await self.tournament.pairings_to_image(self.previous_round)
+                    pairings_file = discord.File(pairings_image, filename=pairings_image)
+                    if previous_pairings_message:
+                        await previous_pairings_message.edit(attachments=[], file=pairings_file, view=None)
+
+                    try:
+                        await next_round(self.tournament, interaction)
+                    except Exception:
+                        if previous_standings_message:
+                            await _edit_standings_message(
+                                self.tournament,
+                                self.previous_round,
+                                previous_standings_message,
+                                view=await StartNextRoundView.create(self.previous_round, self.tournament),
+                                keep_existing_content=True,
+                            )
+            finally:
+                try:
+                    if progress_message and hasattr(progress_message, "delete"):
+                        await progress_message.delete()
+                except Exception:
+                    pass
 
         await use_custom_try("Nächste Runde Erstellen", do_the_thing, self.tournament)

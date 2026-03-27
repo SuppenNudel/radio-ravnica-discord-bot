@@ -65,7 +65,7 @@ class Participant(Base):
     id = Column(Integer, primary_key=True, index=True)
     tournament_id = Column(Integer, ForeignKey("tournaments.id"), index=True)
     user_id = Column(DISCORD_ID_TYPE, index=True)
-    state = Column(String)  # 'participate', 'tentative', 'decline', 'waitlist'
+    state = Column(String)  # Stores ParticipationState values, including waitlist.
     joined_at = Column(DateTime, default=datetime.utcnow)
     
     __table_args__ = (
