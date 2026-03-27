@@ -240,7 +240,7 @@ class EditTournamentView(discord.ui.View):
 
         await interaction.response.send_modal(EnterTextModal(input, "description", self.tournament, self))
 
-    @discord.ui.button(label="Titel", style=discord.ButtonStyle.primary, emoji="📛")
+    @discord.ui.button(label="Titel", style=discord.ButtonStyle.primary, emoji="✏️")
     async def title_callback(self, button:discord.ui.Button, interaction:discord.Interaction):
         input = discord.ui.InputText(
             label="Turniername",
