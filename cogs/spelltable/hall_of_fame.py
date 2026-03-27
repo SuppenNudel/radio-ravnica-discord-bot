@@ -61,19 +61,19 @@ class HallOfFameCog(Cog):
     async def hall_of_fame(
         self,
         ctx: ApplicationContext,
-        sort_by: Option(
+        statistik: Option(
             str,
-            description="Sortierungskriterium für die Rangliste",
-            choices=["Tournament Winners", "Match Wins", "Match Winrate", "Tournament Participations", "Top 3 Finishes", "Top 8 Finishes"],
-            default="Tournament Winners"
-        ) = "Tournament Winners",
-        time_filter: Option(
+            description="Statistik für die Rangliste",
+            choices=["Turniersiege", "Matchsiege", "Match-Winrate", "Turnierteilnahmen", "Top-3-Platzierungen", "Top-8-Platzierungen"],
+            default="Turniersiege"
+        ) = "Turniersiege",
+        zeitraum: Option(
             str,
             description="Zeitraum filtern",
             choices=TIME_FILTER_CHOICES,
             default="Alle Zeit"
         ) = "Alle Zeit",
-        format_filter: Option(
+        format: Option(
             str,
             description="Nach Format filtern",
             choices=FORMAT_CHOICES,
@@ -83,20 +83,20 @@ class HallOfFameCog(Cog):
         """Display the hall of fame with various sorting options."""
         await ctx.defer(ephemeral=True)
         
-        time_from, time_to = _parse_time_filter(time_filter)
-        hof = get_hall_of_fame(time_from=time_from, time_to=time_to, format_filter=format_filter or None)
+        time_from, time_to = _parse_time_filter(zeitraum)
+        hof = get_hall_of_fame(time_from=time_from, time_to=time_to, format_filter=format or None)
         
         # Map display names to sort keys
         sort_map = {
-            "Tournament Winners": "winners",
-            "Match Wins": "match_wins",
-            "Match Winrate": "match_winrate",
-            "Tournament Participations": "tournaments",
-            "Top 3 Finishes": "top3s",
-            "Top 8 Finishes": "top8s"
+            "Turniersiege": "winners",
+            "Matchsiege": "match_wins",
+            "Match-Winrate": "match_winrate",
+            "Turnierteilnahmen": "tournaments",
+            "Top-3-Platzierungen": "top3s",
+            "Top-8-Platzierungen": "top8s"
         }
         
-        sort_key = sort_map.get(sort_by, "winners")
+        sort_key = sort_map.get(statistik, "winners")
         top_participants = hof.get_top_participants(limit=20, sort_by=sort_key)
         
         if not top_participants:
@@ -108,11 +108,11 @@ class HallOfFameCog(Cog):
             title="🏆 Hall of Fame - Turnier-Rangliste",
             color=discord.Color.gold()
         )
-        footer_parts = [f"Sortiert nach: {sort_by}"]
-        if time_filter and time_filter != "Alle Zeit":
-            footer_parts.append(f"Zeitraum: {time_filter}")
-        if format_filter:
-            footer_parts.append(f"Format: {format_filter}")
+        footer_parts = [f"Gezeigte Statistik: {statistik}"]
+        if zeitraum and zeitraum != "Alle Zeit":
+            footer_parts.append(f"Zeitraum: {zeitraum}")
+        if format:
+            footer_parts.append(f"Format: {format}")
         embed.set_footer(text=" | ".join(footer_parts))
         
         # Build ranking display
@@ -171,13 +171,13 @@ class HallOfFameCog(Cog):
     async def my_stats(
         self,
         ctx: ApplicationContext,
-        time_filter: Option(
+        zeitraum: Option(
                 str,
                 description="Zeitraum filtern",
             choices=TIME_FILTER_CHOICES,
                 default="Alle Zeit"
             ) = "Alle Zeit",
-            format_filter: Option(
+            format: Option(
                 str,
                 description="Nach Format filtern",
                 choices=FORMAT_CHOICES,
@@ -187,8 +187,8 @@ class HallOfFameCog(Cog):
         """Display personal tournament statistics."""
         await ctx.defer(ephemeral=True)
 
-        time_from, time_to = _parse_time_filter(time_filter)
-        hof = get_hall_of_fame(time_from=time_from, time_to=time_to, format_filter=format_filter or None)
+        time_from, time_to = _parse_time_filter(zeitraum)
+        hof = get_hall_of_fame(time_from=time_from, time_to=time_to, format_filter=format or None)
         stats = hof.get_user_stats(ctx.author.id)
         
         if not stats:
@@ -207,10 +207,10 @@ class HallOfFameCog(Cog):
         )
         embed.set_author(name=ctx.author.name, icon_url=ctx.author.avatar.url if ctx.author.avatar else None)
         footer_parts = []
-        if time_filter and time_filter != "Alle Zeit":
-            footer_parts.append(f"Zeitraum: {time_filter}")
-        if format_filter:
-            footer_parts.append(f"Format: {format_filter}")
+        if zeitraum and zeitraum != "Alle Zeit":
+            footer_parts.append(f"Zeitraum: {zeitraum}")
+        if format:
+            footer_parts.append(f"Format: {format}")
         if footer_parts:
             embed.set_footer(text=" | ".join(footer_parts))
         
@@ -325,19 +325,19 @@ class HallOfFameCog(Cog):
     async def top_players(
         self,
         ctx: ApplicationContext,
-        category: Option(
+        kategorie: Option(
             str,
             description="Kategorie für Ranking",
-            choices=["Turniersiege", "Matchsiege", "Winrate", "Turnierteilnahmen", "Top 3 Finishes"],
+            choices=["Turniersiege", "Matchsiege", "Winrate", "Turnierteilnahmen", "Top-3-Platzierungen"],
             default="Turniersiege"
         ) = "Turniersiege",
-        time_filter: Option(
+        zeitraum: Option(
             str,
             description="Zeitraum filtern",
             choices=TIME_FILTER_CHOICES,
             default="Alle Zeit"
         ) = "Alle Zeit",
-        format_filter: Option(
+        format: Option(
             str,
             description="Nach Format filtern",
             choices=FORMAT_CHOICES,
@@ -347,18 +347,18 @@ class HallOfFameCog(Cog):
         """Display top players in a specific category."""
         await ctx.defer(ephemeral=True)
         
-        time_from, time_to = _parse_time_filter(time_filter)
-        hof = get_hall_of_fame(time_from=time_from, time_to=time_to, format_filter=format_filter or None)
+        time_from, time_to = _parse_time_filter(zeitraum)
+        hof = get_hall_of_fame(time_from=time_from, time_to=time_to, format_filter=format or None)
         
         category_map = {
             "Turniersiege": "winners",
             "Matchsiege": "match_wins",
             "Winrate": "match_winrate",
             "Turnierteilnahmen": "tournaments",
-            "Top 3 Finishes": "top3s"
+            "Top-3-Platzierungen": "top3s"
         }
         
-        sort_key = category_map.get(category, "winners")
+        sort_key = category_map.get(kategorie, "winners")
         top_participants = hof.get_top_participants(limit=10, sort_by=sort_key)
         
         if not top_participants:
@@ -366,14 +366,14 @@ class HallOfFameCog(Cog):
             return
         
         embed = discord.Embed(
-            title=f"🏆 Top 10 - {category}",
+            title=f"🏆 Top 10 - {kategorie}",
             color=discord.Color.gold()
         )
-        footer_parts = [f"Kategorie: {category}"]
-        if time_filter and time_filter != "Alle Zeit":
-            footer_parts.append(f"Zeitraum: {time_filter}")
-        if format_filter:
-            footer_parts.append(f"Format: {format_filter}")
+        footer_parts = [f"Kategorie: {kategorie}"]
+        if zeitraum and zeitraum != "Alle Zeit":
+            footer_parts.append(f"Zeitraum: {zeitraum}")
+        if format:
+            footer_parts.append(f"Format: {format}")
         embed.set_footer(text=" | ".join(footer_parts))
         
         ranking_text = ""
