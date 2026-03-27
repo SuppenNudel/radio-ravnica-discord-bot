@@ -20,6 +20,13 @@ def _score_select_options(default_score: int) -> list[discord.SelectOption]:
     ]
 
 
+def _report_mode_options() -> list[discord.SelectOption]:
+    return [
+        discord.SelectOption(label="Gespielt", value="played", default=True),
+        discord.SelectOption(label="Keinen Termin gefunden", value="no_time_found"),
+    ]
+
+
 def _match_score_defaults(match: swiss_mtg.Match) -> tuple[int, int, int]:
     if not match.is_finished():
         return 0, 0, 0
@@ -27,6 +34,28 @@ def _match_score_defaults(match: swiss_mtg.Match) -> tuple[int, int, int]:
         int(match.wins.get(match.player1, 0) or 0),
         int(match.wins.get(match.player2, 0) or 0),
         int(match.wins.get("draws", 0) or 0),
+    )
+
+
+def _selected_match_result(
+    report_mode_select: discord.ui.StringSelect,
+    p1_score_select: discord.ui.StringSelect,
+    p2_score_select: discord.ui.StringSelect,
+    draw_score_select: discord.ui.StringSelect,
+) -> tuple[int, int, int]:
+    if not report_mode_select.values:
+        raise ValueError("Bitte wähle aus, ob gespielt wurde oder kein Termin gefunden wurde.")
+
+    if report_mode_select.values[0] == "no_time_found":
+        return 1, 1, 1
+
+    if not p1_score_select.values or not p2_score_select.values or not draw_score_select.values:
+        raise ValueError("Bitte wähle Siege und Unentschieden aus.")
+
+    return (
+        int(p1_score_select.values[0]),
+        int(p2_score_select.values[0]),
+        int(draw_score_select.values[0]),
     )
 
 
@@ -344,6 +373,19 @@ class ReportMatchAdminModal(discord.ui.DesignerModal):
 
         default_p1, default_p2, default_draws = _match_score_defaults(match)
 
+        self.report_mode_select = discord.ui.StringSelect(
+            placeholder="Bitte auswählen",
+            options=_report_mode_options(),
+            min_values=1,
+            max_values=1,
+            required=True
+        )
+        self.add_item(discord.ui.Label(
+            "Status",
+            self.report_mode_select,
+            description="Gespielt meldet das ausgewählte Ergebnis.\nKeinen Termin gefunden meldet automatisch 1-1-1."
+        ))
+
         self.p1_score_select = discord.ui.StringSelect(
             placeholder="Siege",
             options=_score_select_options(default_p1),
@@ -378,13 +420,12 @@ class ReportMatchAdminModal(discord.ui.DesignerModal):
 
     async def callback(self, interaction: discord.Interaction):
         try:
-            if not self.p1_score_select.values or not self.p2_score_select.values or not self.draw_score_select.values:
-                await interaction.respond("Bitte wähle Siege und Unentschieden aus.", ephemeral=True)
-                return
-
-            score1 = int(self.p1_score_select.values[0])
-            score2 = int(self.p2_score_select.values[0])
-            draw_score = int(self.draw_score_select.values[0])
+            score1, score2, draw_score = _selected_match_result(
+                self.report_mode_select,
+                self.p1_score_select,
+                self.p2_score_select,
+                self.draw_score_select,
+            )
             self.match.set_result(score1, score2, draw_score)
 
             await interaction.response.defer()
@@ -428,6 +469,19 @@ class ReportMatchModal(discord.ui.DesignerModal):
 
         default_p1, default_p2, default_draws = _match_score_defaults(match)
 
+        self.report_mode_select = discord.ui.StringSelect(
+            placeholder="Bitte auswählen",
+            options=_report_mode_options(),
+            min_values=1,
+            max_values=1,
+            required=True
+        )
+        self.add_item(discord.ui.Label(
+            "Status",
+            self.report_mode_select,
+            description="Gespielt meldet das ausgewählte Ergebnis. Keinen Termin gefunden meldet automatisch 1-1-1."
+        ))
+
         self.p1_score_select = discord.ui.StringSelect(
             placeholder="Siege",
             options=_score_select_options(default_p1),
@@ -465,13 +519,12 @@ class ReportMatchModal(discord.ui.DesignerModal):
 
     async def callback(self, interaction: discord.Interaction):
         try:
-            if not self.p1_score_select.values or not self.p2_score_select.values or not self.draw_score_select.values:
-                await interaction.respond("Bitte wähle Siege und Unentschieden aus.", ephemeral=True)
-                return
-
-            score1 = int(self.p1_score_select.values[0])
-            score2 = int(self.p2_score_select.values[0])
-            draw_score = int(self.draw_score_select.values[0])
+            score1, score2, draw_score = _selected_match_result(
+                self.report_mode_select,
+                self.p1_score_select,
+                self.p2_score_select,
+                self.draw_score_select,
+            )
 
             self.match.set_result(score1, score2, draw_score)
 
@@ -479,7 +532,12 @@ class ReportMatchModal(discord.ui.DesignerModal):
 
             p1_mention, p2_mention, p1_name, p2_name = await _resolve_match_participants(self.tournament, self.match)
 
-            message_to_opponend = f"{interaction.user.mention} lässt ausrichten:\n> {self.message_label.item.value}" if self.message_label.item.value else "GGs!"  # type: ignore
+            if self.message_label.item.value:
+                message_to_opponend = f"{interaction.user.mention} lässt ausrichten:\n> {self.message_label.item.value}"  # type: ignore
+            elif self.report_mode_select.values and self.report_mode_select.values[0] == "no_time_found":
+                message_to_opponend = "Keinen Termin gefunden"
+            else:
+                message_to_opponend = "GGs!"
             gg_message = await interaction.followup.send(f"{p1_mention} {score1} - {score2} {p2_mention}{f' ({draw_score} Unentschieden)' if draw_score else ''}\n{message_to_opponend}", wait=True)
 
             if env.DEBUG:

@@ -5,6 +5,7 @@ from dateutil.relativedelta import relativedelta
 from babel.dates import format_timedelta
 import pytz
 from ezcord import log
+from typing import Any, cast
 
 settings = {
     'RETURN_AS_TIMEZONE_AWARE': True,
@@ -17,8 +18,12 @@ settings = {
 timezone = pytz.timezone("Europe/Berlin")
 
 def parse_date(user_time_input) -> datetime | None:
-    parsed_date = dateparser.parse(user_time_input, settings=settings, languages=["de"])
+    parsed_date = dateparser.parse(user_time_input, settings=cast(Any, settings), languages=["de"])
     if parsed_date:
+        if parsed_date.tzinfo is None:
+            parsed_date = timezone.localize(parsed_date)
+        else:
+            parsed_date = parsed_date.astimezone(timezone)
         log.debug(f"Parsed by dateparser: '{user_time_input}' -> {parsed_date}")
     else:
         log.debug(f"Failed to parse: '{user_time_input}'")

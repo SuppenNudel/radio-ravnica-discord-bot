@@ -60,6 +60,14 @@ def _normalize_discord_id_int(value) -> int | None:
     except (TypeError, ValueError):
         return None
 
+
+def _normalize_tournament_datetime(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return timezone.localize(value)
+    return value.astimezone(timezone)
+
 async def save_tournaments():
     for tournament in active_tournaments.values():
         await tournament.save_tournament()
@@ -186,7 +194,7 @@ async def load_tournaments(bot) -> dict[str, "SpelltableTournament"]:
 
                 tournament = SpelltableTournament(guild, t_row.name, organizer_id_int, bot)
                 tournament.description = t_row.description
-                tournament.time = t_row.start_time
+                tournament.time = _normalize_tournament_datetime(t_row.start_time)
                 tournament.message_id = int(t_row.message_id)
                 tournament.channel_id = int(t_row.channel_id)
                 tournament.max_participants = t_row.max_participants
@@ -541,7 +549,7 @@ class SpelltableTournament(Serializable):
         tournament = cls(guild, data["name"], organizer_id, bot)
         tournament.description = data["description"]
         if "time" in data and data["time"]:
-            tournament.time = datetime.fromisoformat(data["time"])
+            tournament.time = _normalize_tournament_datetime(datetime.fromisoformat(data["time"]))
 
         tournament.max_rounds = data["max_rounds"]
 
