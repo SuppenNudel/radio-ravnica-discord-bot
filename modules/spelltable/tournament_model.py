@@ -594,6 +594,18 @@ class SpelltableTournament(Serializable):
             return promoted_user_id
         return None
 
+    def _promote_waitlist_to_capacity(
+        self,
+        users: dict[int, ParticipationState],
+        waitlist: list[int],
+    ) -> list[int]:
+        promoted_user_ids: list[int] = []
+        while True:
+            promoted_user_id = self._promote_waitlist_if_slot_available(users, waitlist)
+            if promoted_user_id is None:
+                return promoted_user_ids
+            promoted_user_ids.append(promoted_user_id)
+
     async def _notify_waitlist_promotion(self, user_id: int):
         try:
             new_participant = await self.get_member(user_id)
@@ -680,7 +692,7 @@ class SpelltableTournament(Serializable):
             if state != ParticipationState.DECLINE:
                 next_users[userid] = state
 
-        promoted_user_id = self._promote_waitlist_if_slot_available(next_users, next_waitlist)
+        promoted_user_ids = self._promote_waitlist_to_capacity(next_users, next_waitlist)
 
         # DB is source of truth: if this fails, self.users/self.waitlist remain unchanged.
         await self.save_participation_state(next_users, next_waitlist)
@@ -689,7 +701,7 @@ class SpelltableTournament(Serializable):
         self.users = next_users
         self.waitlist = next_waitlist
 
-        if promoted_user_id is not None:
+        for promoted_user_id in promoted_user_ids:
             await self._notify_waitlist_promotion(promoted_user_id)
 
         message = await self.message
@@ -891,6 +903,12 @@ class SpelltableTournament(Serializable):
         save_participants: bool = True,
         save_swiss: bool = True,
     ):
+        users_to_save = dict(self.users)
+        waitlist_to_save = list(self.waitlist)
+        promoted_user_ids: list[int] = []
+        if save_participants:
+            promoted_user_ids = self._promote_waitlist_to_capacity(users_to_save, waitlist_to_save)
+
         db = SessionLocal()
         try:
             # Find or create tournament record by unique message_id
@@ -919,9 +937,9 @@ class SpelltableTournament(Serializable):
 
             # Sync participants with SQLite atomic upsert (handles concurrent saves safely)
             desired_states: dict[int, str] = {}
-            for user_id, state in self.users.items():
+            for user_id, state in users_to_save.items():
                 desired_states[user_id] = str(state)
-            for user_id in self.waitlist:
+            for user_id in waitlist_to_save:
                 desired_states.setdefault(user_id, ParticipationState.WAITLIST.value)
 
             if save_participants:
@@ -1099,6 +1117,12 @@ class SpelltableTournament(Serializable):
             raise
         finally:
             db.close()
+
+        if save_participants:
+            self.users = users_to_save
+            self.waitlist = waitlist_to_save
+            for promoted_user_id in promoted_user_ids:
+                await self._notify_waitlist_promotion(promoted_user_id)
 
         if not self.suppress_overview_update:
             await update_tournament_message(self.bot, trigger_guild=self.guild)
