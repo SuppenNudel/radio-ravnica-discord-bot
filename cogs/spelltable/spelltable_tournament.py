@@ -140,8 +140,12 @@ class ParticipationView(discord.ui.View):
         
         players = []
         participants = self.tournament.get_users_by_state(ParticipationState.PARTICIPATE)
+        # Deduplicate participant IDs to prevent accidental duplicates in Swiss tournament
+        seen_participant_ids = set()
         for participant_id in participants:
-            players.append(swiss_mtg.Player(participant_id))
+            if participant_id not in seen_participant_ids:
+                players.append(swiss_mtg.Player(participant_id))
+                seen_participant_ids.add(participant_id)
 
         swiss_tournament = swiss_mtg.SwissTournament(players, max_rounds=self.tournament.max_rounds if self.tournament.max_rounds else None)
         self.tournament.swiss_tournament = swiss_tournament

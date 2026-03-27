@@ -18,10 +18,12 @@ from modules.db import (
     SwissMatch,
     DiscordUser,
 )
+from sqlalchemy import text
 import pytz
 from pathlib import Path
 import asyncio
 import aiohttp
+import discord
 
 timezone = pytz.timezone("Europe/Berlin")
 
@@ -85,18 +87,44 @@ def _build_swiss_json(db, swiss_t_row: SwissTournamentRecord) -> dict:
             .all()
         )
         matches = []
+        seen_pairings = set()  # Track (player1, player2) to detect duplicates
+        duplicate_count = 0
         for m_row in match_rows:
             if m_row.player2_id == m_row.player1_id:
                 raise ValueError(
                     f"Datenkorrektur erforderlich: Ungueltiges Self-Match in der Turnier-DB "
                     f"(match_id={m_row.id}, round_id={r_row.id}, player_id={m_row.player1_id})."
                 )
+            
+            # Create a canonical pairing key (sort player IDs to handle both directions)
+            p1 = str(m_row.player1_id)
+            p2 = str(m_row.player2_id) if m_row.player2_id else "null"
+            pairing_key = tuple(sorted([p1, p2]))
+            
+            if pairing_key in seen_pairings:
+                # Skip duplicate match
+                duplicate_count += 1
+                link_log.warning(
+                    f"Skipping duplicate match in tournament round: "
+                    f"swiss_tournament_id={swiss_t_row.tournament_id}, "
+                    f"round={r_row.round_number}, player1={m_row.player1_id}, player2={m_row.player2_id}"
+                )
+                continue
+            seen_pairings.add(pairing_key)
+            
             p2_key = "null" if m_row.player2_id is None else str(m_row.player2_id)
             matches.append({"wins": {
                 str(m_row.player1_id): m_row.player1_wins,
                 p2_key: m_row.player2_wins,
                 "draws": m_row.draws,
             }})
+        
+        if duplicate_count > 0:
+            link_log.warning(
+                f"Removed {duplicate_count} duplicate matches from "
+                f"tournament {swiss_t_row.tournament_id} round {r_row.round_number}"
+            )
+        
         rounds.append({
             "round_number": r_row.round_number,
             "matches": matches,
@@ -570,7 +598,11 @@ class SpelltableTournament(Serializable):
         message = await self.message
         if message:
             embed = await self.to_embed()
-            await message.edit(embed=embed)
+            view = discord.utils.get(self.bot.persistent_views, message_id=message.id)
+            if view:
+                await message.edit(embed=embed, view=view)
+            else:
+                await message.edit(embed=embed)
         else:
             raise Exception("Message not found")
         return message_str
@@ -613,14 +645,42 @@ class SpelltableTournament(Serializable):
         
         embed.add_field(name=f"Tage pro Runde", value=f"{self.days_per_match if self.days_per_match > 0 else 'Wird am Stück gespielt'}", inline=True)
 
-        waitlist = self.waitlist
-        tentative = self.get_users_by_state(ParticipationState.TENTATIVE)
+        def _norm_user_id(value):
+            normalized = _normalize_discord_id(value)
+            return int(normalized) if normalized is not None else None
+
+        waitlist = []
+        seen_waitlist = set()
+        for uid in self.waitlist:
+            normalized_uid = _norm_user_id(uid)
+            if normalized_uid is not None and normalized_uid not in seen_waitlist:
+                waitlist.append(normalized_uid)
+                seen_waitlist.add(normalized_uid)
+
+        tentative = []
+        seen_tentative = set()
+        for uid in self.get_users_by_state(ParticipationState.TENTATIVE):
+            normalized_uid = _norm_user_id(uid)
+            if normalized_uid is not None and normalized_uid not in seen_tentative:
+                tentative.append(normalized_uid)
+                seen_tentative.add(normalized_uid)
 
         embed.add_field(name="\u200b", value="\u200b", inline=False)
 
         # await self.guild.chunk()
 
-        participants = self.get_users_by_state(ParticipationState.PARTICIPATE)
+        participants = []
+        seen_participants = set()
+        for uid in self.get_users_by_state(ParticipationState.PARTICIPATE):
+            normalized_uid = _norm_user_id(uid)
+            if normalized_uid is not None and normalized_uid not in seen_participants:
+                participants.append(normalized_uid)
+                seen_participants.add(normalized_uid)
+
+        # Enforce mutual exclusivity in display priority: participate > waitlist > tentative
+        waitlist = [uid for uid in waitlist if uid not in seen_participants]
+        seen_waitlist = set(waitlist)
+        tentative = [uid for uid in tentative if uid not in seen_participants and uid not in seen_waitlist]
         participant_members:list[discord.User] = []
         for uid in participants:
             member = await self.get_member(uid)
@@ -748,18 +808,37 @@ class SpelltableTournament(Serializable):
             t_row.cancelled = bool(self.cancelled) if self.cancelled is not None else False
             db.flush()
 
-            # Replace participants (delete + re-insert preserves in-memory order)
-            db.query(Participant).filter(Participant.tournament_id == t_row.id).delete(synchronize_session=False)
-            registered_user_ids = set(self.users.keys()) | set(self.waitlist)
-            added_users = set()  # Track added users to prevent duplicates
+            # Sync participants with SQLite atomic upsert (handles concurrent saves safely)
+            desired_states: dict[int, str] = {}
             for user_id, state in self.users.items():
-                if user_id not in added_users:
-                    db.add(Participant(tournament_id=t_row.id, user_id=user_id, state=str(state)))
-                    added_users.add(user_id)
+                desired_states[user_id] = str(state)
             for user_id in self.waitlist:
-                if user_id not in added_users:
-                    db.add(Participant(tournament_id=t_row.id, user_id=user_id, state="waitlist"))
-                    added_users.add(user_id)
+                desired_states.setdefault(user_id, "waitlist")
+
+            for user_id, desired_state in desired_states.items():
+                db.execute(
+                    text(
+                        """
+                        INSERT INTO participants (tournament_id, user_id, state, joined_at)
+                        VALUES (:tournament_id, :user_id, :state, :joined_at)
+                        ON CONFLICT(tournament_id, user_id)
+                        DO UPDATE SET state = excluded.state
+                        """
+                    ),
+                    {
+                        "tournament_id": t_row.id,
+                        "user_id": str(user_id),
+                        "state": desired_state,
+                        "joined_at": datetime.utcnow(),
+                    },
+                )
+
+            db.query(Participant).filter(
+                Participant.tournament_id == t_row.id,
+                ~Participant.user_id.in_([str(uid) for uid in desired_states.keys()]),
+            ).delete(synchronize_session=False)
+
+            registered_user_ids = set(desired_states.keys())
 
             if self.swiss_tournament:
                 # Ensure all registered users exist in users table once tournament has started
@@ -824,16 +903,28 @@ class SpelltableTournament(Serializable):
                     .filter(SwissRound.swiss_tournament_id == swiss_t_row.tournament_id)
                     .all()
                 ]
+                deleted_matches = 0
+                deleted_rounds = 0
+                deleted_players = 0
+                
                 if round_ids:
-                    db.query(SwissMatch).filter(
+                    deleted_matches = db.query(SwissMatch).filter(
                         SwissMatch.swiss_round_id.in_(round_ids)
                     ).delete(synchronize_session=False)
-                db.query(SwissRound).filter(
+                
+                deleted_rounds = db.query(SwissRound).filter(
                     SwissRound.swiss_tournament_id == swiss_t_row.tournament_id
                 ).delete(synchronize_session=False)
-                db.query(SwissPlayer).filter(
+                
+                deleted_players = db.query(SwissPlayer).filter(
                     SwissPlayer.swiss_tournament_id == swiss_t_row.tournament_id
                 ).delete(synchronize_session=False)
+                
+                if deleted_matches > 0 or deleted_rounds > 0 or deleted_players > 0:
+                    link_log.debug(
+                        f"Cleared Swiss data for tournament {self.title}: "
+                        f"deleted {deleted_players} players, {deleted_rounds} rounds, {deleted_matches} matches"
+                    )
 
                 for player in self.swiss_tournament.players:
                     deck = player.deck

@@ -238,10 +238,15 @@ def _migrate_discord_id_columns():
                     UNIQUE (tournament_id, user_id)
                 )
             """))
+            # Deduplicate participants during migration: keep first id for each (tournament_id, user_id)
             connection.execute(text("""
                 INSERT INTO participants (id, tournament_id, user_id, state, joined_at)
                 SELECT id, tournament_id, CAST(user_id AS TEXT), state, joined_at
                 FROM participants_old
+                WHERE id IN (
+                    SELECT MIN(id) FROM participants_old
+                    GROUP BY tournament_id, CAST(user_id AS TEXT)
+                )
             """))
             connection.execute(text("DROP TABLE participants_old"))
 
@@ -374,7 +379,6 @@ def _migrate_discord_id_columns():
 def init_db():
     """Create all tables in the database"""
     Base.metadata.create_all(bind=engine)
-    _migrate_discord_id_columns()
     print("✅ Database tables created")
 
 
