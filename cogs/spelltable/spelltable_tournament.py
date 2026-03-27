@@ -306,7 +306,10 @@ class EditTournamentView(discord.ui.View):
         existing_message = await self.tournament.message
         if existing_message:
             # Edit existing message
-            await self.tournament.save_tournament()
+            await self.tournament.save_tournament_metadata()
+            await self.tournament.save_tournament_participants()
+            if self.tournament.swiss_tournament:
+                await self.tournament.save_tournament_swiss()
             await existing_message.edit(content=await self.tournament.get_participants_message(), embed=await self.tournament.to_embed(), view=participation_view)
             await interaction.edit_original_response(content="Turnier wurde bearbeitet", embed=None, view=None)
         else:
@@ -329,7 +332,10 @@ class EditTournamentView(discord.ui.View):
             self.tournament.message = message
             await message.edit(view=participation_view)
             active_tournaments[await self.tournament.get_id()] = self.tournament
-            await self.tournament.save_tournament()
+            await self.tournament.save_tournament_metadata()
+            await self.tournament.save_tournament_participants()
+            if self.tournament.swiss_tournament:
+                await self.tournament.save_tournament_swiss()
             await interaction.followup.send(
                 f"Prima! Das Turnier `{self.tournament.title}` wurde erstellt: {message.jump_url}", ephemeral=True
             )

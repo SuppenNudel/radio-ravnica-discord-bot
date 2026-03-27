@@ -160,7 +160,7 @@ class SubmitDeckModal(discord.ui.DesignerModal):
             return
         
         player.deck = swiss_mtg.Deck.deserialize({"link": decklist, "archetype": archetype})
-        await self.tournament.save_tournament()
+        await self.tournament.save_tournament_swiss()
         await self.tournament.update_metagame()
         await interaction.followup.send("Deine Deckliste wurde erfolgreich eingereicht!", ephemeral=True)
 
@@ -230,7 +230,7 @@ class FinishTournamentView(discord.ui.View):
 
             await interaction.followup.send(content, ephemeral=False)
             link_log.info(f"Turnier abgeschlossen: `{self.tournament.title}`, Gewinner: <@{winner.player_id}>")
-            await self.tournament.save_tournament()
+            await self.tournament.save_tournament_swiss()
             
             # Update hall of fame with tournament results
             await update_hall_of_fame(self.tournament)
@@ -526,7 +526,7 @@ async def update_pairings(tournament:SpelltableTournament, round:swiss_mtg.Round
     #     pairings_message = await channel.send(file=pairings_file, content="Neue Paarungen:")
     #     round.message_id_pairings = pairings_message.id
 
-    await tournament.save_tournament()
+    await tournament.save_tournament_swiss()
 
 
 class ConfirmDropModal(discord.ui.Modal):
@@ -758,7 +758,7 @@ class LinkStandingsMessageModal(discord.ui.Modal):
 
         current_round = self.tournament.swiss_tournament.current_round()
         current_round.message_id_standings = message_id
-        await self.tournament.save_tournament()
+        await self.tournament.save_tournament_swiss()
 
         if self.prompt_message:
             try:
@@ -800,7 +800,7 @@ class MissingStandingsView(discord.ui.View):
         tournament_message = await self.tournament.message
         new_message = await tournament_message.channel.send(content=standings_content, view=action_view, file=standings_file)
         current_round.message_id_standings = new_message.id
-        await self.tournament.save_tournament()
+        await self.tournament.save_tournament_swiss()
 
         to = await self.tournament.organizer
         can_do = "das Turnier abschließen" if type(action_view) == FinishTournamentView else "die nächste Runde starten"
@@ -865,7 +865,7 @@ async def update_standings(tournament:SpelltableTournament, interaction: discord
         )
         confirm_view.prompt_message = prompt_msg
 
-    await tournament.save_tournament()
+    await tournament.save_tournament_swiss()
 
 class ConfirmKickView(discord.ui.View):
     def __init__(self, tournament:SpelltableTournament, user_id_to_kick:int, user_label:str|None=None):
@@ -934,7 +934,7 @@ class CancelTournamentModal(discord.ui.Modal):
 
         await remove_tournament_views(self.tournament)
         
-        await self.tournament.save_tournament()
+        await self.tournament.save_tournament_metadata()
 
 
 async def remove_tournament_views(tournament: SpelltableTournament):
@@ -1138,7 +1138,7 @@ class ReportMatchView(discord.ui.View):
             except Exception:
                 link_log.exception("[admin-report] Failed to deliver fallback error to user")
 
-    @discord.ui.button(label="Turnier verlassen", style=discord.ButtonStyle.danger, emoji="🚪")
+    @discord.ui.button(label="Turnier verlassen", style=discord.ButtonStyle.danger, emoji="🚪", row=0)
     async def drop_button(self, button: discord.ui.Button, interaction: discord.Interaction):
         player = self.tournament.swiss_tournament.player_by_id(interaction.user.id)
         if not player:
@@ -1173,7 +1173,7 @@ async def _prepare_pairings_content(round: swiss_mtg.Round, tournament: Spelltab
     pairings = await tournament.get_pairings(round)
     total_rounds = tournament.swiss_tournament.rounds_count
     is_last_round = round.round_number >= total_rounds
-    pairings_header = f"🤺 Paarungen für Runde {round.round_number} von {total_rounds}{' (letzte Runde)' if is_last_round else ''}:"
+    pairings_header = f"## 🤺 Paarungen für Runde {round.round_number} von {total_rounds}{' (letzte Runde)' if is_last_round else ''}:"
     max_plain_text_length = 2000
     if len(pairings) > max_plain_text_length - len(pairings_header) - 2:
         truncated_pairings = pairings[:1900] + "\n\n_(gekürzt – vollständige Paarungen im Bild)_"
@@ -1262,7 +1262,7 @@ async def next_round(tournament:SpelltableTournament, interaction:discord.Intera
 
         if not isinstance(new_pairings_message, discord.Message):
             raise TypeError("Expected a discord.Message, but got None or an invalid type.")
-        await tournament.save_tournament()
+        await tournament.save_tournament_swiss()
 
         # message players direcly
         for match in round.matches:

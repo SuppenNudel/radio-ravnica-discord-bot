@@ -587,15 +587,77 @@ class SpelltableTournament(Serializable):
             "cancelled": self.cancelled if self.cancelled else False,
         }
     
-    async def check_waitlist(self, participants):
-        if self.waitlist and len(participants) < self.max_participants:
-            first_in_line_user_id = self.waitlist.pop(0)
-            self.users[first_in_line_user_id] = ParticipationState.PARTICIPATE
-            new_participant:discord.Member = await self.get_member(first_in_line_user_id)
+    def _promote_waitlist_if_slot_available(
+        self,
+        users: dict[int, ParticipationState],
+        waitlist: list[int],
+    ) -> int | None:
+        participants_count = len([uid for uid, state in users.items() if state == ParticipationState.PARTICIPATE])
+        if self.max_participants and waitlist and participants_count < self.max_participants:
+            promoted_user_id = waitlist.pop(0)
+            users[promoted_user_id] = ParticipationState.PARTICIPATE
+            return promoted_user_id
+        return None
+
+    async def _notify_waitlist_promotion(self, user_id: int):
+        try:
+            new_participant = await self.get_member(user_id)
             tournament_message = await self.message
-            if not tournament_message:
-                raise Exception("Tournament has no message, shouldn't happen")
-            await new_participant.send(f"Es wurde ein Platz frei im Turnier frei und du wurdest nachgerückt. {tournament_message.jump_url}")
+            if new_participant and tournament_message:
+                await new_participant.send(
+                    f"Es wurde ein Platz frei im Turnier frei und du wurdest nachgerückt. {tournament_message.jump_url}"
+                )
+        except Exception as e:
+            link_log.warning(
+                f"Failed to notify promoted waitlist user {user_id} for tournament '{self.title}': {e}"
+            )
+
+    async def save_participation_state(
+        self,
+        users: dict[int, ParticipationState],
+        waitlist: list[int],
+    ):
+        db = SessionLocal()
+        try:
+            t_row = db.query(TournamentRecord).filter(TournamentRecord.message_id == self.message_id).first()
+            if t_row is None:
+                raise ValueError(
+                    f"Cannot update participation: tournament row not found for message_id={self.message_id}"
+                )
+
+            desired_states: dict[int, str] = {user_id: str(state) for user_id, state in users.items()}
+            for user_id in waitlist:
+                desired_states.setdefault(user_id, "waitlist")
+
+            for user_id, desired_state in desired_states.items():
+                db.execute(
+                    text(
+                        """
+                        INSERT INTO participants (tournament_id, user_id, state, joined_at)
+                        VALUES (:tournament_id, :user_id, :state, :joined_at)
+                        ON CONFLICT(tournament_id, user_id)
+                        DO UPDATE SET state = excluded.state
+                        """
+                    ),
+                    {
+                        "tournament_id": t_row.id,
+                        "user_id": str(user_id),
+                        "state": desired_state,
+                        "joined_at": datetime.utcnow(),
+                    },
+                )
+
+            db.query(Participant).filter(
+                Participant.tournament_id == t_row.id,
+                ~Participant.user_id.in_([str(uid) for uid in desired_states.keys()]),
+            ).delete(synchronize_session=False)
+
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
 
     async def user_state(self, userid:int, state:ParticipationState):
         if not isinstance(userid, int):
@@ -604,22 +666,37 @@ class SpelltableTournament(Serializable):
             )
             return "Ungültige Benutzer-ID."
 
-        # remove user
-        self.waitlist = [waitlist_user_id for waitlist_user_id in self.waitlist if waitlist_user_id != userid]
-        self.users.pop(userid, None) # Remove user from the dictionary if they exist
+        # Build the new state in-memory copy first, then persist to DB.
+        # Only after successful DB commit do we update the live in-memory tournament state.
+        next_users = dict(self.users)
+        next_waitlist = list(self.waitlist)
+
+        # remove user from prospective state
+        next_waitlist = [waitlist_user_id for waitlist_user_id in next_waitlist if waitlist_user_id != userid]
+        next_users.pop(userid, None)
 
         # and set new
         message_str = None
-        participants = self.get_users_by_state(ParticipationState.PARTICIPATE)
+        participants = [uid for uid, user_state in next_users.items() if user_state == ParticipationState.PARTICIPATE]
         if state == ParticipationState.PARTICIPATE and self.max_participants and len(participants) >= self.max_participants:
-            self.waitlist.append(userid)
+            next_waitlist.append(userid)
             message_str = f"Das Turnier ist bereits voll. Du wurdest auf die Liste der Nachrücker gesetzt.\nWird ein Platz frei, wirst du automatisch nachgerückt und benachrichtigt."
         else:
             if state != ParticipationState.DECLINE:
-                self.users[userid] = state
+                next_users[userid] = state
 
-        await self.check_waitlist(participants)
-        await self.save_tournament()
+        promoted_user_id = self._promote_waitlist_if_slot_available(next_users, next_waitlist)
+
+        # DB is source of truth: if this fails, self.users/self.waitlist remain unchanged.
+        await self.save_participation_state(next_users, next_waitlist)
+
+        # DB commit succeeded -> update in-memory state.
+        self.users = next_users
+        self.waitlist = next_waitlist
+
+        if promoted_user_id is not None:
+            await self._notify_waitlist_promotion(promoted_user_id)
+
         message = await self.message
         if message:
             embed = await self.to_embed()
@@ -768,7 +845,7 @@ class SpelltableTournament(Serializable):
         fetched = await asyncio.gather(*[self.get_member(uid) for uid in id_list])
         members: dict[int, discord.Member | discord.User | None] = dict(zip(id_list, fetched))
 
-        matchups: dict[str, str] = {}
+        matchup_entries: list[tuple[tuple[int, int, str], str]] = []
         for match in round.matches:
             # Handle BYE
             if match.is_bye():
@@ -779,7 +856,8 @@ class SpelltableTournament(Serializable):
                         mention = f"~~{mention}~~"
                     player_member = members.get(player.player_id)
                     name = player_member.display_name if player_member else f"User({player.player_id})"
-                    matchups[name] = f"{mention} hat ein BYE"
+                    points = player.calculate_match_points(round.round_number - 1)
+                    matchup_entries.append(((-points, -points, name.lower()), f"{mention} hat ein BYE"))
                 continue
 
             # Normal match
@@ -799,36 +877,49 @@ class SpelltableTournament(Serializable):
             p2_member = members.get(p2.player_id)
             p1_name = p1_member.display_name if p1_member else f"User({p1.player_id})"
             p2_name = p2_member.display_name if p2_member else f"User({p2.player_id})"
-            matchups[p1_name] = f"{mention_p1} vs {mention_p2}"
-            matchups[p2_name] = f"{mention_p2} vs {mention_p1}"
+            p1_points = p1.calculate_match_points(round.round_number - 1)
+            p2_points = p2.calculate_match_points(round.round_number - 1)
+            high_points = max(p1_points, p2_points)
+            low_points = min(p1_points, p2_points)
+            matchup_entries.append(((-high_points, -low_points, p1_name.lower()), f"{mention_p1} vs {mention_p2}"))
 
-        if not matchups:
+        if not matchup_entries:
             return "Keine Paarungen verfügbar. Ein Neustart des Bots, sollte den Fehler beheben. <@356120044754698252>" # pings NudelForce
 
-        for_message = "\n".join(matchups[player_name] for player_name in sorted(matchups, key=str.lower))
+        for_message = "\n".join(line for _, line in sorted(matchup_entries, key=lambda item: item[0]))
 
         return for_message
     
-    async def save_tournament(self: "SpelltableTournament"):
+    async def save_tournament(
+        self: "SpelltableTournament",
+        save_metadata: bool = True,
+        save_participants: bool = True,
+        save_swiss: bool = True,
+    ):
         db = SessionLocal()
         try:
             # Find or create tournament record by unique message_id
             t_row = db.query(TournamentRecord).filter(TournamentRecord.message_id == self.message_id).first()
-            if t_row is None:
+            if t_row is None and save_metadata:
                 t_row = TournamentRecord()
                 db.add(t_row)
+            elif t_row is None:
+                raise ValueError(
+                    f"Cannot save tournament changes without existing tournament row (message_id={self.message_id})."
+                )
 
-            t_row.name = self.title
-            t_row.organizer_id = self.organizer_id
-            t_row.description = self.description
-            t_row.start_time = self.time
-            t_row.guild_id = self.guild.id
-            t_row.channel_id = self.channel_id
-            t_row.message_id = self.message_id
-            t_row.max_participants = self.max_participants
-            t_row.max_rounds = self.max_rounds
-            t_row.days_per_match = self.days_per_match
-            t_row.cancelled = bool(self.cancelled) if self.cancelled is not None else False
+            if save_metadata:
+                t_row.name = self.title
+                t_row.organizer_id = self.organizer_id
+                t_row.description = self.description
+                t_row.start_time = self.time
+                t_row.guild_id = self.guild.id
+                t_row.channel_id = self.channel_id
+                t_row.message_id = self.message_id
+                t_row.max_participants = self.max_participants
+                t_row.max_rounds = self.max_rounds
+                t_row.days_per_match = self.days_per_match
+                t_row.cancelled = bool(self.cancelled) if self.cancelled is not None else False
             db.flush()
 
             # Sync participants with SQLite atomic upsert (handles concurrent saves safely)
@@ -838,32 +929,33 @@ class SpelltableTournament(Serializable):
             for user_id in self.waitlist:
                 desired_states.setdefault(user_id, "waitlist")
 
-            for user_id, desired_state in desired_states.items():
-                db.execute(
-                    text(
-                        """
-                        INSERT INTO participants (tournament_id, user_id, state, joined_at)
-                        VALUES (:tournament_id, :user_id, :state, :joined_at)
-                        ON CONFLICT(tournament_id, user_id)
-                        DO UPDATE SET state = excluded.state
-                        """
-                    ),
-                    {
-                        "tournament_id": t_row.id,
-                        "user_id": str(user_id),
-                        "state": desired_state,
-                        "joined_at": datetime.utcnow(),
-                    },
-                )
+            if save_participants:
+                for user_id, desired_state in desired_states.items():
+                    db.execute(
+                        text(
+                            """
+                            INSERT INTO participants (tournament_id, user_id, state, joined_at)
+                            VALUES (:tournament_id, :user_id, :state, :joined_at)
+                            ON CONFLICT(tournament_id, user_id)
+                            DO UPDATE SET state = excluded.state
+                            """
+                        ),
+                        {
+                            "tournament_id": t_row.id,
+                            "user_id": str(user_id),
+                            "state": desired_state,
+                            "joined_at": datetime.utcnow(),
+                        },
+                    )
 
-            db.query(Participant).filter(
-                Participant.tournament_id == t_row.id,
-                ~Participant.user_id.in_([str(uid) for uid in desired_states.keys()]),
-            ).delete(synchronize_session=False)
+                db.query(Participant).filter(
+                    Participant.tournament_id == t_row.id,
+                    ~Participant.user_id.in_([str(uid) for uid in desired_states.keys()]),
+                ).delete(synchronize_session=False)
 
             registered_user_ids = set(desired_states.keys())
 
-            if self.swiss_tournament:
+            if save_swiss and self.swiss_tournament:
                 # Ensure all registered users exist in users table once tournament has started
                 for user_id in registered_user_ids:
                     normalized_user_id = _normalize_discord_id(user_id)
@@ -980,7 +1072,7 @@ class SpelltableTournament(Serializable):
                             player2_wins=int(match.wins.get(p2, 0) or 0),
                             draws=int(match.wins.get("draws", 0) or 0),
                         ))
-            else:
+            elif save_swiss:
                 # Remove Swiss data if tournament no longer has it
                 swiss_t_row = (
                     db.query(SwissTournamentRecord)
@@ -1015,6 +1107,15 @@ class SpelltableTournament(Serializable):
 
         if not self.suppress_overview_update:
             await update_tournament_message(self.bot, trigger_guild=self.guild)
+
+    async def save_tournament_metadata(self):
+        await self.save_tournament(save_metadata=True, save_participants=False, save_swiss=False)
+
+    async def save_tournament_participants(self):
+        await self.save_tournament(save_metadata=False, save_participants=True, save_swiss=False)
+
+    async def save_tournament_swiss(self):
+        await self.save_tournament(save_metadata=False, save_participants=False, save_swiss=True)
 
 
     async def standings_to_image(self, round=None, include_metagame=False) -> str:
@@ -1157,7 +1258,7 @@ class SpelltableTournament(Serializable):
             else:
                 standings_message = await message.channel.send(embeds=[embed], file=metagame_file, suppress=False)
                 self.swiss_tournament.current_round().message_id_standings = standings_message.id
-                await self.save_tournament()
+                await self.save_tournament_swiss()
         except Exception as e:
             # Log the error but don't crash the bot during on_ready
             logging.error(f"Error updating metagame: {e}", exc_info=True)
