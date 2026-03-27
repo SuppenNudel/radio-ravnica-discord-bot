@@ -161,7 +161,7 @@ class SubmitDeckModal(discord.ui.DesignerModal):
         
         player.deck = swiss_mtg.Deck.deserialize({"link": decklist, "archetype": archetype})
         await self.tournament.save_tournament_swiss()
-        await self.tournament.update_metagame()
+        await self.tournament.update_metagame(include_embed=False)
         await interaction.followup.send("Deine Deckliste wurde erfolgreich eingereicht!", ephemeral=True)
 
 class FinishTournamentView(discord.ui.View):
@@ -202,52 +202,63 @@ class FinishTournamentView(discord.ui.View):
                 except discord.NotFound:
                     link_log.warning("[finish-tournament] Could not remove view from message: message not found")
 
-            await interaction.followup.send(
+            progress_message = await interaction.followup.send(
                 "Turnierabschluss läuft … bitte einen Moment warten.",
                 ephemeral=True,
+                wait=True,
             )
+            try:
+                # Remove views from the last round pairings and standings messages
+                current_round = self.tournament.swiss_tournament.current_round()
+                pairings_message = await self.tournament.get_message(current_round.message_id_pairings)
+                standings_message = await self.tournament.get_message(current_round.message_id_standings)
 
-            # Remove views from the last round pairings and standings messages
-            current_round = self.tournament.swiss_tournament.current_round()
-            pairings_message = await self.tournament.get_message(current_round.message_id_pairings)
-            standings_message = await self.tournament.get_message(current_round.message_id_standings)
+                if pairings_message:
+                    await pairings_message.edit(view=None)
+                
+                # Set winner first so metagame update can proceed
+                self.tournament.swiss_tournament.winner = winner
+                
+                # Update final standings with deck submissions and add submit deck button
+                submit_deck_view = await SubmitDeckView.create(self.tournament)
+                total_rounds = self.tournament.swiss_tournament.rounds_count
+                await self.tournament.update_metagame(
+                    include_embed=False,
+                    content=f"## 🏆 Finale Platzierung nach {total_rounds} Runden",
+                    view=submit_deck_view,
+                )
 
-            if pairings_message:
-                await pairings_message.edit(view=None)
-            
-            # Set winner first so metagame update can proceed
-            self.tournament.swiss_tournament.winner = winner
-            
-            # Update final standings with deck submissions and add submit deck button
-            await self.tournament.update_metagame()
-            
-            # Fetch the updated message and keep it as plain message (no embed)
-            standings_message = await self.tournament.get_message(current_round.message_id_standings)
-            submit_deck_view = await SubmitDeckView.create(self.tournament)
-            if standings_message:
-                await standings_message.edit(embeds=[], view=submit_deck_view)
+                standings_message = await self.tournament.get_message(current_round.message_id_standings)
+
+                await swap_concluded_round_pins(pairings_message, standings_message, self.tournament.title)
 
 
-            await interaction.followup.send(content, ephemeral=False)
-            link_log.info(f"Turnier abgeschlossen: `{self.tournament.title}`, Gewinner: <@{winner.player_id}>")
-            await self.tournament.save_tournament_swiss()
-            
-            # Update hall of fame with tournament results
-            await update_hall_of_fame(self.tournament)
+                await interaction.followup.send(content, ephemeral=False)
+                link_log.info(f"Turnier abgeschlossen: `{self.tournament.title}`, Gewinner: <@{winner.player_id}>")
+                await self.tournament.save_tournament_swiss()
+                
+                # Update hall of fame with tournament results
+                await update_hall_of_fame(self.tournament)
 
-            # contact players about tournament end
-            for player in self.tournament.swiss_tournament.players:
-                try:
-                    user = await self.tournament.get_member(player.player_id)
-                    if type(user) != discord.Member:
-                        user = None
-                except discord.NotFound:
-                    user = None
-                if user:
+                # contact players about tournament end
+                for player in self.tournament.swiss_tournament.players:
                     try:
-                        await user.send(f"Das Turnier `{self.tournament.title}` ist abgeschlossen! Sieh dir das Endergebnis hier an: {standings_message.jump_url}")
-                    except discord.Forbidden:
-                        log.error(f"Konnte die Turnierende-Nachricht nicht an {user.mention} ({user.display_name}) senden")
+                        user = await self.tournament.get_member(player.player_id)
+                        if type(user) != discord.Member:
+                            user = None
+                    except discord.NotFound:
+                        user = None
+                    if user:
+                        try:
+                            await user.send(f"Das Turnier `{self.tournament.title}` ist abgeschlossen! Sieh dir das Endergebnis hier an: {standings_message.jump_url}")
+                        except discord.Forbidden:
+                            log.error(f"Konnte die Turnierende-Nachricht nicht an {user.mention} ({user.display_name}) senden")
+            finally:
+                try:
+                    if progress_message and hasattr(progress_message, "delete"):
+                        await progress_message.delete()
+                except Exception:
+                    pass
         else:
             await interaction.respond("Kein Gewinner gefunden. Das sollte nicht passieren.", ephemeral=True)
 
@@ -529,6 +540,40 @@ async def update_pairings(tournament:SpelltableTournament, round:swiss_mtg.Round
     await tournament.save_tournament_swiss()
 
 
+async def swap_concluded_round_pins(
+    pairings_message: discord.Message | None,
+    standings_message: discord.Message | None,
+    tournament_title: str,
+):
+    if pairings_message:
+        try:
+            await pairings_message.unpin()
+        except discord.NotFound:
+            pass
+        except discord.errors.Forbidden as e:
+            link_log.warning(
+                f"Missing permission to unpin pairings message {pairings_message.id} for concluded tournament '{tournament_title}': {e}"
+            )
+        except discord.errors.HTTPException as e:
+            link_log.debug(
+                f"Could not unpin pairings message {pairings_message.id} for concluded tournament '{tournament_title}': {e}"
+            )
+
+    if standings_message:
+        try:
+            await standings_message.pin()
+        except discord.NotFound:
+            pass
+        except discord.errors.Forbidden as e:
+            link_log.warning(
+                f"Missing permission to pin final standings message {standings_message.id} for concluded tournament '{tournament_title}': {e}"
+            )
+        except discord.errors.HTTPException as e:
+            link_log.debug(
+                f"Could not pin final standings message {standings_message.id} for concluded tournament '{tournament_title}': {e}"
+            )
+
+
 class ConfirmDropModal(discord.ui.Modal):
     def __init__(self, player:swiss_mtg.Player, tournament:SpelltableTournament):
         super().__init__(title="Bestätige deine Turnierausscheidung")
@@ -674,7 +719,7 @@ async def update_hall_of_fame_batch(tournaments: list[SpelltableTournament]):
 
 
 def _standings_content_for_round(round_number: int, total_rounds: int) -> str:
-    return f"🏆 Platzierungen nach der {round_number}. Runde von {total_rounds}"
+    return f"## 🏆 Platzierungen nach der {round_number}. Runde von {total_rounds}"
 
 
 async def _build_standings_file(tournament: SpelltableTournament, standings_round: swiss_mtg.Round | None = None) -> discord.File:

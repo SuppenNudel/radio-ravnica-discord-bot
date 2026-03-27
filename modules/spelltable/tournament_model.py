@@ -1221,7 +1221,13 @@ class SpelltableTournament(Serializable):
         embed.description = deck_list
         return embed
     
-    async def update_metagame(self):
+    async def update_metagame(
+        self,
+        *,
+        include_embed: bool = True,
+        content: str | None = None,
+        view: discord.ui.View | None = None,
+    ):
         if not (self.swiss_tournament and self.swiss_tournament.winner):
             return
         try:
@@ -1229,17 +1235,25 @@ class SpelltableTournament(Serializable):
             attachment_name = Path(metagame_standings_image).name
             metagame_file = discord.File(metagame_standings_image, filename=attachment_name)
             message = await self.message
-            embed = await self.create_metagame_embed()
+            embed = await self.create_metagame_embed() if include_embed else None
             
             standings_message = await self.get_message(self.swiss_tournament.current_round().message_id_standings)
+            target_content = standings_message.content if standings_message and content is None else (content or "")
             if standings_message:
-                # Two-step update so stale image attachments are guaranteed to be removed.
                 # Retry logic for transient connection errors
                 max_retries = 3
                 for attempt in range(max_retries):
                     try:
-                        await standings_message.edit(content="", embeds=[], attachments=[], suppress=False)
-                        await standings_message.edit(content="", embeds=[embed], attachments=[], file=metagame_file, suppress=False)
+                        edit_kwargs = {
+                            "content": target_content,
+                            "embeds": [embed] if embed else [],
+                            "attachments": [],
+                            "file": metagame_file,
+                            "suppress_embeds": False,
+                        }
+                        if view is not None:
+                            edit_kwargs["view"] = view
+                        await standings_message.edit(**edit_kwargs)
                         return
                     except discord.errors.Forbidden:
                         # Bot doesn't have permission to edit this message (likely authored by another user)
@@ -1256,7 +1270,15 @@ class SpelltableTournament(Serializable):
                             logging.error(f"Failed to update metagame after {max_retries} attempts: {e}")
                             raise
             else:
-                standings_message = await message.channel.send(embeds=[embed], file=metagame_file, suppress=False)
+                send_kwargs = {
+                    "content": "" if content is None else content,
+                    "embeds": [embed] if include_embed else [],
+                    "file": metagame_file,
+                    "suppress_embeds": False,
+                }
+                if view is not None:
+                    send_kwargs["view"] = view
+                standings_message = await message.channel.send(**send_kwargs)
                 self.swiss_tournament.current_round().message_id_standings = standings_message.id
                 await self.save_tournament_swiss()
         except Exception as e:

@@ -123,33 +123,40 @@ class ParticipationView(discord.ui.View):
             await interaction.respond("Du bist nicht der Turnier-Organisator!", ephemeral=True)
             return
         await interaction.response.defer(ephemeral=True)
-        await interaction.followup.send("Starte Turnier...", ephemeral=True)
-        
-        message = await self.tournament.message
-        if message:
-            await message.edit(view=None)
-        else:
-            await interaction.followup.send("Turnier Nachricht nicht gefunden", ephemeral=True)
-            return
-        
-        players = []
-        participants = self.tournament.get_users_by_state(ParticipationState.PARTICIPATE)
-        # Deduplicate participant IDs to prevent accidental duplicates in Swiss tournament
-        seen_participant_ids = set()
-        for participant_id in participants:
-            if participant_id not in seen_participant_ids:
-                players.append(swiss_mtg.Player(participant_id))
-                seen_participant_ids.add(participant_id)
+        progress_message = await interaction.followup.send("Starte Turnier...", ephemeral=True, wait=True)
 
-        swiss_tournament = swiss_mtg.SwissTournament(players, max_rounds=self.tournament.max_rounds if self.tournament.max_rounds else None)
-        self.tournament.swiss_tournament = swiss_tournament
+        try:
+            message = await self.tournament.message
+            if message:
+                await message.edit(view=None)
+            else:
+                await interaction.followup.send("Turnier Nachricht nicht gefunden", ephemeral=True)
+                return
+            
+            players = []
+            participants = self.tournament.get_users_by_state(ParticipationState.PARTICIPATE)
+            # Deduplicate participant IDs to prevent accidental duplicates in Swiss tournament
+            seen_participant_ids = set()
+            for participant_id in participants:
+                if participant_id not in seen_participant_ids:
+                    players.append(swiss_mtg.Player(participant_id))
+                    seen_participant_ids.add(participant_id)
 
-        # Populate member cache so users table gets human-readable names on first round save
-        registered_user_ids = set(self.tournament.users.keys()) | set(self.tournament.waitlist)
-        for user_id in registered_user_ids:
-            await self.tournament.get_member(user_id)
+            swiss_tournament = swiss_mtg.SwissTournament(players, max_rounds=self.tournament.max_rounds if self.tournament.max_rounds else None)
+            self.tournament.swiss_tournament = swiss_tournament
 
-        await next_round(self.tournament, interaction)
+            # Populate member cache so users table gets human-readable names on first round save
+            registered_user_ids = set(self.tournament.users.keys()) | set(self.tournament.waitlist)
+            for user_id in registered_user_ids:
+                await self.tournament.get_member(user_id)
+
+            await next_round(self.tournament, interaction)
+        finally:
+            try:
+                if progress_message and hasattr(progress_message, "delete"):
+                    await progress_message.delete()
+            except Exception:
+                pass
     
     
     @discord.ui.button(label="Turnier abbrechen", style=discord.ButtonStyle.danger, emoji="🛑", row=1)
@@ -883,22 +890,32 @@ class SpelltableTournamentManager(Cog):
                         await tournament_message.channel.edit(archived=False)
 
                     # Update standings with latest deck submissions
-                    await tournament.update_metagame()
+                    submit_deck_view = await SubmitDeckView.create(tournament)
+                    total_rounds = tournament.swiss_tournament.rounds_count
+                    await tournament.update_metagame(
+                        include_embed=False,
+                        content=f"## 🏆 Finale Platzierung nach {total_rounds} Runden",
+                        view=submit_deck_view,
+                    )
 
                     # activate deck submission button
+                    standings_message = None
                     if current_round.message_id_standings:
                         message = await tournament.get_message(current_round.message_id_standings)
+                        standings_message = message
                         if message:
                             if self.bot.user and message.author and message.author.id != self.bot.user.id:
                                 link_log.debug(
                                     f"Skipping standings message edit because message {message.jump_url} in tournament `{tournament.title}` "
                                     f"is authored by user {message.author.id}, not the bot."
                                 )
-                            else:
-                                submit_deck_view = await SubmitDeckView.create(tournament)
-                                await message.edit(embeds=[], view=submit_deck_view)
                         else:
                             link_log.error(f"Could not find standings message for concluded tournament: {tournament_message.jump_url}")
+
+                    pairings_message = None
+                    if current_round and current_round.message_id_pairings:
+                        pairings_message = await tournament.get_message(current_round.message_id_pairings)
+                    await common_views.swap_concluded_round_pins(pairings_message, standings_message, tournament.title)
 
                     return tournament  # concluded
 
