@@ -49,6 +49,9 @@ class Tournament(Base):
     
     # Status
     cancelled = Column(Boolean, default=False)
+
+    # Format (e.g. Pauper, Modern, Legacy)
+    format_name = Column(String, nullable=True)
     
     # Relationships
     participants = relationship("Participant", back_populates="tournament", cascade="all, delete-orphan")
@@ -376,9 +379,18 @@ def _migrate_discord_id_columns():
         connection.execute(text("PRAGMA foreign_keys=ON"))
 
 
+def _migrate_add_format_name_column():
+    """Add format_name column to tournaments table if it doesn't exist yet."""
+    col_types = _sqlite_column_types("tournaments")
+    if "format_name" not in col_types:
+        with engine.begin() as connection:
+            connection.execute(text("ALTER TABLE tournaments ADD COLUMN format_name VARCHAR"))
+
+
 def init_db():
     """Create all tables in the database"""
     Base.metadata.create_all(bind=engine)
+    _migrate_add_format_name_column()
     print("✅ Database tables created")
 
 

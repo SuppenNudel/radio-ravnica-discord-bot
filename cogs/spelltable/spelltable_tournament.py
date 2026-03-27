@@ -29,12 +29,31 @@ from modules.db import (
 from modules.spelltable.tournament_model import SpelltableTournament, load_tournaments, active_tournaments, update_tournament_message
 from modules.spelltable.common_views import SubmitDeckView, ParticipationState, StartNextRoundView, FinishTournamentView, next_round, update_hall_of_fame_batch
 from modules.spelltable import common_views
+from modules.hall_of_fame import FORMAT_CHOICES
 
 link_log = logging.getLogger("link_logger")
 
 IS_DEBUG = env.DEBUG
 
 EMOJI_PATTERN = re.compile("[\U0001F300-\U0001F6FF\U0001F900-\U0001F9FF\U0001FA70-\U0001FAFF\U0001F600-\U0001F64F]+", flags=re.UNICODE)
+
+def auto_detect_format_from_channel(channel: discord.TextChannel) -> str | None:
+    """
+    Try to auto-detect a tournament format based on the channel name or parent category name.
+    Checks both the channel name and parent category name for format keywords.
+    """
+    channel_name = channel.name.lower() if channel.name else ""
+    category_name = channel.category.name.lower() if channel.category and channel.category.name else ""
+    
+    # Combine both names for searching
+    search_text = f"{channel_name} {category_name}"
+    
+    # Check each format against the search text
+    for format_choice in FORMAT_CHOICES:
+        if format_choice.lower() in search_text:
+            return format_choice
+    
+    return None
 
 class ParticipationView(discord.ui.View):
     def __init__(self):
@@ -227,6 +246,18 @@ class EditTournamentView(discord.ui.View):
         instance = object.__new__(cls)
         await instance._init(tournament, channel)
         return instance
+    
+    @discord.ui.button(label="Titel", style=discord.ButtonStyle.primary, emoji="✏️")
+    async def title_callback(self, button:discord.ui.Button, interaction:discord.Interaction):
+        input = discord.ui.InputText(
+            label="Turniername",
+            placeholder="Name des Turniers",
+            required=True,
+            value=self.tournament.title,
+            style=discord.InputTextStyle.short,
+        )
+
+        await interaction.response.send_modal(EnterTextModal(input, "title", self.tournament, self))
 
     @discord.ui.button(label="Beschreibung", style=discord.ButtonStyle.primary, emoji="🗒️")
     async def description_callback(self, button:discord.ui.Button, interaction:discord.Interaction):
@@ -239,6 +270,7 @@ class EditTournamentView(discord.ui.View):
         )
 
         await interaction.response.send_modal(EnterTextModal(input, "description", self.tournament, self))
+
           
     @discord.ui.button(label="Startzeit/-datum", style=discord.ButtonStyle.primary, emoji="🕑")
     async def time_callback(self, button:discord.ui.Button, interaction:discord.Interaction):
@@ -302,6 +334,35 @@ class EditTournamentView(discord.ui.View):
 
         # await interaction.response.send_modal(EnterTextModal(input, "days_per_match", self.tournament, self))
 
+    @discord.ui.button(label="Format", style=discord.ButtonStyle.primary, emoji="🎴")
+    async def format_callback(self, button:discord.ui.Button, interaction:discord.Interaction):
+        from modules.hall_of_fame import FORMAT_CHOICES
+        current = self.tournament.format_name or None
+        options = [
+            discord.SelectOption(label=f, value=f, default=(f == current))
+            for f in FORMAT_CHOICES
+        ]
+        select = discord.ui.StringSelect(
+            placeholder="Format auswählen",
+            options=options,
+            min_values=0,
+            max_values=1,
+        )
+        tournament = self.tournament
+        edit_view = self
+
+        async def on_select(select_interaction: discord.Interaction):
+            tournament.format_name = select.values[0] if select.values else None
+            await select_interaction.response.edit_message(
+                embed=await tournament.to_embed(),
+                view=edit_view,
+            )
+
+        select.callback = on_select
+        ephemeral_view = discord.ui.View(timeout=60)
+        ephemeral_view.add_item(select)
+        await interaction.response.send_message(view=ephemeral_view, ephemeral=True)
+
     @discord.ui.button(label="Abschicken", style=discord.ButtonStyle.success, emoji="✅")
     async def submit_button(self, button: discord.ui.Button, interaction: discord.Interaction):
         await interaction.response.defer()
@@ -317,6 +378,9 @@ class EditTournamentView(discord.ui.View):
             await self.tournament.save_tournament_participants()
             if self.tournament.swiss_tournament:
                 await self.tournament.save_tournament_swiss()
+            # Rename thread if message is in a thread
+            if isinstance(existing_message.channel, discord.Thread):
+                await existing_message.channel.edit(name=self.tournament.title)
             await existing_message.edit(content=await self.tournament.get_participants_message(), embed=await self.tournament.to_embed(), view=participation_view)
             await interaction.edit_original_response(content="Turnier wurde bearbeitet", embed=None, view=None)
         else:
@@ -1167,6 +1231,10 @@ class SpelltableTournamentManager(Cog):
 
         tournament = SpelltableTournament(ctx.guild, titel, ctx.author.id, self.bot)
         tournament.organizer = ctx.author
+        # Auto-detect format from channel name
+        detected_format = auto_detect_format_from_channel(ctx.channel)
+        if detected_format:
+            tournament.format_name = detected_format
         view = await EditTournamentView.create(tournament, ctx.channel)
         await ctx.followup.send(
             embed=await tournament.to_embed(),

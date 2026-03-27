@@ -201,6 +201,7 @@ async def load_tournaments(bot) -> dict[str, "SpelltableTournament"]:
                 tournament.max_rounds = t_row.max_rounds
                 tournament.days_per_match = t_row.days_per_match if t_row.days_per_match is not None else 7
                 tournament.cancelled = t_row.cancelled
+                tournament.format_name = t_row.format_name
 
                 # Participants and waitlist
                 participant_rows = (
@@ -430,6 +431,7 @@ class SpelltableTournament(Serializable):
         self.days_per_match = 7
         self.bot:discord.Bot = bot
         self.cancelled = None
+        self.format_name: str | None = None
         self.suppress_overview_update = False
 
         if env.DEBUG:
@@ -814,6 +816,9 @@ class SpelltableTournament(Serializable):
         
         embed.add_field(name=f"Tage pro Runde", value=f"{self.days_per_match if self.days_per_match > 0 else 'Wird am Stück gespielt'}", inline=True)
 
+        if self.format_name:
+            embed.add_field(name="Format", value=self.format_name, inline=True)
+
         return embed
 
     async def get_message(self, message_id) -> discord.Message|None:
@@ -941,6 +946,7 @@ class SpelltableTournament(Serializable):
                 t_row.max_rounds = self.max_rounds
                 t_row.days_per_match = self.days_per_match
                 t_row.cancelled = bool(self.cancelled) if self.cancelled is not None else False
+                t_row.format_name = self.format_name
             db.flush()
 
             # Sync participants with SQLite atomic upsert (handles concurrent saves safely)

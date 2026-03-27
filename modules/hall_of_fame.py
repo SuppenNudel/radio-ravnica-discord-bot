@@ -8,6 +8,7 @@ results and participant statistics. JSON persistence is intentionally removed.
 from __future__ import annotations
 
 from datetime import datetime
+from enum import StrEnum
 from typing import Dict, List, Optional
 
 from ezcord import log
@@ -20,6 +21,20 @@ from modules.db import (
     SwissTournamentRecord,
 )
 from modules.spelltable.tournament_model import _build_swiss_json
+
+
+class TournamentFormat(StrEnum):
+    PAUPER = "Pauper"
+    LEGACY = "Legacy"
+    MODERN = "Modern"
+    PREMODERN = "Premodern"
+    PIONEER = "Pioneer"
+    LIMITED = "Limited"
+    STANDARD = "Standard"
+    ANDERE = "Andere"
+
+
+FORMAT_CHOICES = [f.value for f in TournamentFormat]
 
 
 def _parse_record_component(value: str) -> int:
@@ -111,12 +126,14 @@ class TournamentRecord:
         guild_id: int,
         start_date: str,
         standings_url: str = "",
+        format_name: str | None = None,
     ):
         self.tournament_id = tournament_id
         self.tournament_title = tournament_title
         self.guild_id = guild_id
         self.start_date = start_date
         self.standings_url = standings_url
+        self.format_name = format_name
         self.results: List[Dict] = []
 
     def add_result(self, user_id: int, username: str, placement: int, match_record: str):
@@ -133,10 +150,15 @@ class TournamentRecord:
 class HallOfFame:
     """Read-only hall of fame projection built directly from tournaments.db."""
 
-    def __init__(self):
+    def __init__(
+        self,
+        time_from: datetime | None = None,
+        time_to: datetime | None = None,
+        format_filter: str | None = None,
+    ):
         self.participants: Dict[int, ParticipantStats] = {}
         self.tournaments: List[TournamentRecord] = []
-        self._load_from_db()
+        self._load_from_db(time_from=time_from, time_to=time_to, format_filter=format_filter)
 
     def _display_name_for_user(self, user_id: int, users: dict[str, DiscordUser]) -> str:
         user_row = users.get(str(user_id))
@@ -144,21 +166,36 @@ class HallOfFame:
             return str(user_id)
         return user_row.display_name or user_row.username or str(user_id)
 
-    def _load_from_db(self):
+    def _load_from_db(
+        self,
+        time_from: datetime | None = None,
+        time_to: datetime | None = None,
+        format_filter: str | None = None,
+    ):
         db = SessionLocal()
         try:
             user_rows = db.query(DiscordUser).all()
             users_by_id = {str(row.user_id): row for row in user_rows}
 
-            concluded_rows = (
+            query = (
                 db.query(Tournament, SwissTournamentRecord)
                 .join(SwissTournamentRecord, SwissTournamentRecord.tournament_id == Tournament.id)
                 .filter(SwissTournamentRecord.winner_player_id.isnot(None))
-                .all()
             )
+            if time_from is not None:
+                query = query.filter(Tournament.start_time >= time_from)
+            if time_to is not None:
+                query = query.filter(Tournament.start_time <= time_to)
+            concluded_rows = query.all()
 
             for tournament_row, swiss_row in concluded_rows:
                 try:
+                    # Apply format filter early to avoid unnecessary DB work
+                    if format_filter:
+                        row_format = tournament_row.format_name or ""
+                        if format_filter != row_format:
+                            continue
+
                     swiss_json = _build_swiss_json(db, swiss_row)
                     swiss_tournament = swiss_mtg.SwissTournament.deserialize(swiss_json)
                     swiss_mtg.sort_players_by_standings(swiss_tournament.players)
@@ -192,6 +229,7 @@ class HallOfFame:
                     guild_id=guild_id,
                     start_date=start_date,
                     standings_url=standings_url,
+                    format_name=tournament_row.format_name,
                 )
 
                 placement = 1
@@ -348,6 +386,10 @@ class HallOfFame:
         return [t for t in self.tournaments if t.guild_id == guild_id]
 
 
-def get_hall_of_fame() -> HallOfFame:
+def get_hall_of_fame(
+    time_from: datetime | None = None,
+    time_to: datetime | None = None,
+    format_filter: str | None = None,
+) -> HallOfFame:
     """Return a fresh DB-backed snapshot so data is always up to date."""
-    return HallOfFame()
+    return HallOfFame(time_from=time_from, time_to=time_to, format_filter=format_filter)
