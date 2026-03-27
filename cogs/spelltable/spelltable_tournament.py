@@ -239,6 +239,18 @@ class EditTournamentView(discord.ui.View):
         )
 
         await interaction.response.send_modal(EnterTextModal(input, "description", self.tournament, self))
+
+    @discord.ui.button(label="Titel", style=discord.ButtonStyle.primary, emoji="📛")
+    async def title_callback(self, button:discord.ui.Button, interaction:discord.Interaction):
+        input = discord.ui.InputText(
+            label="Turniername",
+            placeholder="Name des Turniers",
+            required=True,
+            value=self.tournament.title,
+            style=discord.InputTextStyle.short,
+        )
+
+        await interaction.response.send_modal(EnterTextModal(input, "title", self.tournament, self))
           
     @discord.ui.button(label="Startzeit/-datum", style=discord.ButtonStyle.primary, emoji="🕑")
     async def time_callback(self, button:discord.ui.Button, interaction:discord.Interaction):
@@ -301,6 +313,35 @@ class EditTournamentView(discord.ui.View):
         # )
 
         # await interaction.response.send_modal(EnterTextModal(input, "days_per_match", self.tournament, self))
+
+    @discord.ui.button(label="Format", style=discord.ButtonStyle.primary, emoji="🎴")
+    async def format_callback(self, button:discord.ui.Button, interaction:discord.Interaction):
+        from modules.hall_of_fame import FORMAT_CHOICES
+        current = self.tournament.format_name or None
+        options = [
+            discord.SelectOption(label=f, value=f, default=(f == current))
+            for f in FORMAT_CHOICES
+        ]
+        select = discord.ui.StringSelect(
+            placeholder="Format auswählen",
+            options=options,
+            min_values=0,
+            max_values=1,
+        )
+        tournament = self.tournament
+        edit_view = self
+
+        async def on_select(select_interaction: discord.Interaction):
+            tournament.format_name = select.values[0] if select.values else None
+            await select_interaction.response.edit_message(
+                embed=await tournament.to_embed(),
+                view=edit_view,
+            )
+
+        select.callback = on_select
+        ephemeral_view = discord.ui.View(timeout=60)
+        ephemeral_view.add_item(select)
+        await interaction.response.send_message(view=ephemeral_view, ephemeral=True)
 
     @discord.ui.button(label="Abschicken", style=discord.ButtonStyle.success, emoji="✅")
     async def submit_button(self, button: discord.ui.Button, interaction: discord.Interaction):
