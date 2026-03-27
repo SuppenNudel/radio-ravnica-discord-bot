@@ -592,8 +592,6 @@ class SpelltableTournament(Serializable):
                 self.users[userid] = state
 
         await self.check_waitlist(participants)
-        tournament_message = await self.message
-        link_log.info(f"Benutzer <@{userid}> hat den Status auf {state.name} für das Turnier {tournament_message.jump_url} gesetzt")
         await self.save_tournament()
         message = await self.message
         if message:
@@ -603,6 +601,7 @@ class SpelltableTournament(Serializable):
                 await message.edit(embed=embed, view=view)
             else:
                 await message.edit(embed=embed)
+            link_log.info(f"Benutzer <@{userid}> hat den Status auf {state.name} für das Turnier {message.jump_url} gesetzt")
         else:
             raise Exception("Message not found")
         return message_str
