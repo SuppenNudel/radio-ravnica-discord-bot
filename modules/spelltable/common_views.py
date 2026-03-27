@@ -4,9 +4,7 @@ import asyncio
 from modules import swiss_mtg
 from modules.spelltable.tournament_model import SpelltableTournament, use_custom_try, ParticipationState
 from modules import env
-from modules.hall_of_fame import get_hall_of_fame
 from ezcord import log
-from datetime import datetime
 
 link_log = logging.getLogger("link_logger")
 
@@ -607,115 +605,15 @@ class ConfirmDropModal(discord.ui.Modal):
 
 
 async def update_hall_of_fame(tournament: SpelltableTournament):
-    """Update the hall of fame with tournament results."""
-    try:
-        hof = get_hall_of_fame()
-        
-        # Get the tournament ID
-        message = await tournament.message
-        tournament_id = f"{message.guild.id}/{message.channel.id}/{message.id}"
-        
-        # Sort players by standings
-        swiss_mtg.sort_players_by_standings(tournament.swiss_tournament.players)
-        
-        # Collect results
-        results = []
-        placement = 1
-        for player in tournament.swiss_tournament.players:
-            if not player.dropped:
-                match_record = player.get_match_results()
-                try:
-                    member = await tournament.get_member(player.player_id)
-                    username = member.display_name if member else str(player.player_id)
-                except Exception:
-                    username = str(player.player_id)
-                results.append({
-                    "user_id": player.player_id,
-                    "username": username,
-                    "placement": placement,
-                    "match_record": match_record
-                })
-                placement += 1
-        
-        # Add tournament to hall of fame
-        last_round = tournament.swiss_tournament.current_round() if tournament.swiss_tournament else None
-        standings_url = ""
-        if last_round and last_round.message_id_standings:
-            standings_url = f"https://discord.com/channels/{message.guild.id}/{message.channel.id}/{last_round.message_id_standings}"
-        hof.add_tournament_result(
-            tournament_id=tournament_id,
-            tournament_title=tournament.title,
-            guild_id=message.guild.id,
-            start_date=tournament.time.isoformat() if tournament.time else datetime.now().isoformat(),
-            results=results,
-            standings_url=standings_url,
-        )
-        
-        log.debug("Hall of Fame aktualisiert")
-    except Exception as e:
-        log.error(f"Failed to update hall of fame for tournament {tournament.title}: {e}")
+    """No-op: Hall of Fame is derived directly from tournaments.db."""
+    _ = tournament
+    log.debug("Hall of Fame update hook skipped (DB-backed live view)")
 
 
 async def update_hall_of_fame_batch(tournaments: list[SpelltableTournament]):
-    """Update Hall of Fame for multiple tournaments and persist once."""
-    if not tournaments:
-        return
-
-    hof = get_hall_of_fame()
-    updates_added = 0
-
-    for tournament in tournaments:
-        try:
-            message = await tournament.message
-            if not message:
-                continue
-
-            tournament_id = f"{message.guild.id}/{message.channel.id}/{message.id}"
-
-            swiss_mtg.sort_players_by_standings(tournament.swiss_tournament.players)
-
-            results = []
-            placement = 1
-            for player in tournament.swiss_tournament.players:
-                if not player.dropped:
-                    match_record = player.get_match_results()
-                    try:
-                        member = await tournament.get_member(player.player_id)
-                        username = member.display_name if member else str(player.player_id)
-                    except Exception:
-                        username = str(player.player_id)
-                    results.append({
-                        "user_id": player.player_id,
-                        "username": username,
-                        "placement": placement,
-                        "match_record": match_record
-                    })
-                    placement += 1
-
-            last_round = tournament.swiss_tournament.current_round() if tournament.swiss_tournament else None
-            standings_url = ""
-            if last_round and last_round.message_id_standings:
-                standings_url = f"https://discord.com/channels/{message.guild.id}/{message.channel.id}/{last_round.message_id_standings}"
-            had_record = hof.get_tournament_results(tournament_id) is not None
-            hof.add_tournament_result(
-                tournament_id=tournament_id,
-                tournament_title=tournament.title,
-                guild_id=message.guild.id,
-                start_date=tournament.time.isoformat() if tournament.time else datetime.now().isoformat(),
-                results=results,
-                standings_url=standings_url,
-                save=False,
-            )
-            if not had_record:
-                updates_added += 1
-        except Exception as e:
-            log.error(f"Failed to queue hall of fame update for tournament {tournament.title}: {e}")
-
-    if updates_added:
-        hof.save_to_file()
-        log.debug(f"Hall of Fame batch updated ({updates_added} tournaments)")
-    else:
-        log.debug("Hall of Fame batch update skipped (no new tournaments)")
+    """No-op: Hall of Fame is derived directly from tournaments.db."""
+    _ = tournaments
+    log.debug("Hall of Fame batch update hook skipped (DB-backed live view)")
 
 
 def _standings_content_for_round(round_number: int, total_rounds: int) -> str:
