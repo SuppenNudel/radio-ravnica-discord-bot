@@ -49,6 +49,16 @@ def _normalize_discord_id(value) -> str | None:
     normalized = str(value).strip()
     return normalized if normalized else None
 
+
+def _normalize_discord_id_int(value) -> int | None:
+    normalized = _normalize_discord_id(value)
+    if normalized is None:
+        return None
+    try:
+        return int(normalized)
+    except (TypeError, ValueError):
+        return None
+
 async def save_tournaments():
     for tournament in active_tournaments.values():
         await tournament.save_tournament()
@@ -145,7 +155,7 @@ async def load_tournaments(bot) -> dict[str, "SpelltableTournament"]:
     tournaments: dict[str, "SpelltableTournament"] = {}
     db = SessionLocal()
     users_dirty = False
-    known_users: dict[int, DiscordUser] = {}
+    known_users: dict[str, DiscordUser] = {}
     known_guilds: dict[int, discord.Guild] = {}
     try:
         for user_row in db.query(DiscordUser).all():
@@ -167,11 +177,17 @@ async def load_tournaments(bot) -> dict[str, "SpelltableTournament"]:
                     if guild is None:
                         guild = await bot.fetch_guild(guild_id_int)
                     known_guilds[guild_id_int] = guild
-                tournament = SpelltableTournament(guild, t_row.name, t_row.organizer_id, bot)
+                organizer_id_int = _normalize_discord_id_int(t_row.organizer_id)
+                if organizer_id_int is None:
+                    raise ValueError(
+                        f"missing organizer_id in tournaments row (tournament_id={t_row.id}, name={t_row.name!r})"
+                    )
+
+                tournament = SpelltableTournament(guild, t_row.name, organizer_id_int, bot)
                 tournament.description = t_row.description
                 tournament.time = t_row.start_time
-                tournament.message_id = t_row.message_id
-                tournament.channel_id = t_row.channel_id
+                tournament.message_id = int(t_row.message_id)
+                tournament.channel_id = int(t_row.channel_id)
                 tournament.max_participants = t_row.max_participants
                 tournament.max_rounds = t_row.max_rounds
                 tournament.days_per_match = t_row.days_per_match if t_row.days_per_match is not None else 7
@@ -184,7 +200,9 @@ async def load_tournaments(bot) -> dict[str, "SpelltableTournament"]:
                     .all()
                 )
                 for p_row in participant_rows:
-                    tournament.users[p_row.user_id] = ParticipationState(p_row.state)
+                    participant_id_int = _normalize_discord_id_int(p_row.user_id)
+                    if participant_id_int is not None:
+                        tournament.users[participant_id_int] = ParticipationState(p_row.state)
 
                 # Waitlist ordered by insertion order
                 waitlist_rows = (
@@ -193,7 +211,10 @@ async def load_tournaments(bot) -> dict[str, "SpelltableTournament"]:
                     .order_by(Participant.id.asc())
                     .all()
                 )
-                tournament.waitlist = [w.user_id for w in waitlist_rows]
+                tournament.waitlist = [
+                    waitlist_id for waitlist_id in (_normalize_discord_id_int(w.user_id) for w in waitlist_rows)
+                    if waitlist_id is not None
+                ]
 
                 # Swiss tournament
                 swiss_t_row = (
@@ -515,7 +536,7 @@ class SpelltableTournament(Serializable):
             raise Exception("Message not found")
     
     def get_users_by_state(self, state:ParticipationState):
-        return [user for user in self.users if self.users[user] == state]
+        return [user_id for user_id, participation_state in self.users.items() if participation_state == state]
 
     @classmethod
     async def deserialize(cls, data, bot): #, organizer, message):
@@ -533,7 +554,7 @@ class SpelltableTournament(Serializable):
         tournament.message_id = int(data["message_id"])
         tournament.channel_id = int(data["channel_id"])
         tournament.days_per_match = int(data["days_per_match"])
-        tournament.waitlist = data["waitlist"] if "waitlist" in data else []
+        tournament.waitlist = [int(user_id) for user_id in data["waitlist"]] if "waitlist" in data else []
 
         if "max_participants" in data and data["max_participants"]:
             tournament.max_participants = data["max_participants"]
@@ -577,8 +598,14 @@ class SpelltableTournament(Serializable):
             await new_participant.send(f"Es wurde ein Platz frei im Turnier frei und du wurdest nachgerückt. {tournament_message.jump_url}")
 
     async def user_state(self, userid:int, state:ParticipationState):
+        if not isinstance(userid, int):
+            link_log.warning(
+                f"Skipping user_state update with invalid userid={userid!r} in tournament '{self.title}'."
+            )
+            return "Ungültige Benutzer-ID."
+
         # remove user
-        self.waitlist.remove(userid) if userid in self.waitlist else None
+        self.waitlist = [waitlist_user_id for waitlist_user_id in self.waitlist if waitlist_user_id != userid]
         self.users.pop(userid, None) # Remove user from the dictionary if they exist
 
         # and set new
@@ -596,11 +623,12 @@ class SpelltableTournament(Serializable):
         message = await self.message
         if message:
             embed = await self.to_embed()
+            participants_content = await self.get_participants_message()
             view = discord.utils.get(self.bot.persistent_views, message_id=message.id)
             if view:
-                await message.edit(embed=embed, view=view)
+                await message.edit(content=participants_content, embed=embed, view=view)
             else:
-                await message.edit(embed=embed)
+                await message.edit(content=participants_content, embed=embed)
             link_log.info(f"Benutzer <@{userid}> hat den Status auf {state.name} für das Turnier {message.jump_url} gesetzt")
         else:
             raise Exception("Message not found")
@@ -624,6 +652,56 @@ class SpelltableTournament(Serializable):
         else:
             return start
 
+    async def get_participants_message(self) -> str:
+        """
+        Build the participants message content with mentions, organized by status.
+        """
+        participants = list(dict.fromkeys(self.get_users_by_state(ParticipationState.PARTICIPATE)))
+        seen_participants = set(participants)
+        waitlist = list(dict.fromkeys(self.waitlist))
+        tentative = list(dict.fromkeys(self.get_users_by_state(ParticipationState.TENTATIVE)))
+
+        # Enforce mutual exclusivity in display priority: participate > waitlist > tentative
+        waitlist = [uid for uid in waitlist if uid not in seen_participants]
+        tentative = [uid for uid in tentative if uid not in seen_participants and uid not in waitlist]
+
+        message_parts = []
+
+        # Fetch members and sort by display name for participants
+        if participants:
+            participant_members = []
+            for uid in participants:
+                member = await self.get_member(uid)
+                if member:
+                    participant_members.append(member)
+            participant_members.sort(key=lambda m: m.display_name.lower())
+            participant_lines = [f"{member.mention}" for member in participant_members]
+            message_parts.append(f"✅ **Teilnehmer ({len(participants)}{f'/{self.max_participants}' if self.max_participants else ''}):**\n" + "\n".join(participant_lines))
+
+        # Fetch members and sort by display name for waitlist
+        if waitlist and self.max_participants:
+            waitlist_members = []
+            for uid in waitlist:
+                member = await self.get_member(uid)
+                if member:
+                    waitlist_members.append(member)
+            waitlist_members.sort(key=lambda m: m.display_name.lower())
+            waitlist_lines = [f"{member.mention}" for member in waitlist_members]
+            message_parts.append(f"⌚ **Nachrücker ({len(waitlist)}):**\n" + "\n".join(waitlist_lines))
+
+        # Fetch members and sort by display name for tentative
+        if tentative:
+            tentative_members = []
+            for uid in tentative:
+                member = await self.get_member(uid)
+                if member:
+                    tentative_members.append(member)
+            tentative_members.sort(key=lambda m: m.display_name.lower())
+            tentative_lines = [f"{member.mention}" for member in tentative_members]
+            message_parts.append(f"❓ **Vielleicht ({len(tentative)}):**\n" + "\n".join(tentative_lines))
+
+        return "\n\n".join(message_parts)
+
     async def to_embed(self):
         embed = discord.Embed(
             title=self.title,
@@ -644,60 +722,6 @@ class SpelltableTournament(Serializable):
         
         embed.add_field(name=f"Tage pro Runde", value=f"{self.days_per_match if self.days_per_match > 0 else 'Wird am Stück gespielt'}", inline=True)
 
-        def _norm_user_id(value):
-            normalized = _normalize_discord_id(value)
-            return int(normalized) if normalized is not None else None
-
-        waitlist = []
-        seen_waitlist = set()
-        for uid in self.waitlist:
-            normalized_uid = _norm_user_id(uid)
-            if normalized_uid is not None and normalized_uid not in seen_waitlist:
-                waitlist.append(normalized_uid)
-                seen_waitlist.add(normalized_uid)
-
-        tentative = []
-        seen_tentative = set()
-        for uid in self.get_users_by_state(ParticipationState.TENTATIVE):
-            normalized_uid = _norm_user_id(uid)
-            if normalized_uid is not None and normalized_uid not in seen_tentative:
-                tentative.append(normalized_uid)
-                seen_tentative.add(normalized_uid)
-
-        embed.add_field(name="\u200b", value="\u200b", inline=False)
-
-        # await self.guild.chunk()
-
-        participants = []
-        seen_participants = set()
-        for uid in self.get_users_by_state(ParticipationState.PARTICIPATE):
-            normalized_uid = _norm_user_id(uid)
-            if normalized_uid is not None and normalized_uid not in seen_participants:
-                participants.append(normalized_uid)
-                seen_participants.add(normalized_uid)
-
-        # Enforce mutual exclusivity in display priority: participate > waitlist > tentative
-        waitlist = [uid for uid in waitlist if uid not in seen_participants]
-        seen_waitlist = set(waitlist)
-        tentative = [uid for uid in tentative if uid not in seen_participants and uid not in seen_waitlist]
-        participant_members:list[discord.User] = []
-        for uid in participants:
-            member = await self.get_member(uid)
-            if member:
-                participant_members.append(member)
-
-        participant_members.sort(key=lambda member: member.display_name.lower())
-        embed.add_field(name=f"✅ Teilnehmer ({len(participants)}{f'/{self.max_participants}' if self.max_participants else ''})", value="\n".join([f"{p.display_name}" for p in participant_members]), inline=True)
-        if self.max_participants:
-            waitlist_members = [await self.get_member(uid) for uid in waitlist]
-            # Filter out None values if some IDs weren't found
-            waitlist_members = [m for m in waitlist_members if m is not None]
-            embed.add_field(name=f"⌚ Nachrücker ({len(waitlist)})", value="\n".join([f"{p.display_name}" for p in waitlist_members]), inline=True)
-        
-        tentative_members = [await self.get_member(uid) for uid in tentative]
-        # Filter out None values if some IDs weren't found
-        tentative_members = [m for m in tentative_members if m is not None]
-        embed.add_field(name=f"❓ Vielleicht ({len(tentative)})", value="\n".join([f"{p.display_name}" for p in tentative_members]), inline=True)
         return embed
 
     async def get_message(self, message_id) -> discord.Message|None:

@@ -50,7 +50,7 @@ class ParticipationView(discord.ui.View):
         await instance._init(tournament)
         return instance
 
-    @discord.ui.button(label="Teilnehmen", style=discord.ButtonStyle.success, emoji="✅")
+    @discord.ui.button(label="Teilnehmen", style=discord.ButtonStyle.success, emoji="✅", row=0)
     async def join_button(self, button: discord.ui.Button, interaction: discord.Interaction):
         if not interaction.user:
             await interaction.respond("Der Interaction User ist None. Das sollte nicht passieren.", ephemeral=True)
@@ -60,13 +60,7 @@ class ParticipationView(discord.ui.View):
         if message:
             await interaction.followup.send(message, ephemeral=True)
 
-    # no use - either participate or tentative
-    # @discord.ui.button(label="Warteliste", style=discord.ButtonStyle.primary, emoji="⌚")
-    # async def waitlist_button(self, button: discord.ui.Button, interaction: discord.Interaction):
-    #     await interaction.response.defer(ephemeral=True)
-    #     await self.tournament.user_state(interaction.user.id, ParticipationState.WAITLIST)
-
-    @discord.ui.button(label="Vielleicht", style=discord.ButtonStyle.primary, emoji="❓")
+    @discord.ui.button(label="Vielleicht", style=discord.ButtonStyle.primary, emoji="❓", row=0)
     async def tentative_button(self, button: discord.ui.Button, interaction: discord.Interaction):
         if not interaction.user:
             await interaction.respond("Der Interaction User ist None. Das sollte nicht passieren.", ephemeral=True)
@@ -74,7 +68,7 @@ class ParticipationView(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
         await self.tournament.user_state(interaction.user.id, ParticipationState.TENTATIVE)
 
-    @discord.ui.button(label="Absagen", style=discord.ButtonStyle.danger, emoji="❌")
+    @discord.ui.button(label="Absagen", style=discord.ButtonStyle.danger, emoji="❌", row=0)
     async def leave_button(self, button: discord.ui.Button, interaction: discord.Interaction):
         if not interaction.user:
             await interaction.respond("Der Interaction User ist None. Das sollte nicht passieren.", ephemeral=True)
@@ -82,7 +76,7 @@ class ParticipationView(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
         await self.tournament.user_state(interaction.user.id, ParticipationState.DECLINE)
 
-    @discord.ui.button(label="Bearbeiten", style=discord.ButtonStyle.primary, emoji="✏️")
+    @discord.ui.button(label="Bearbeiten", style=discord.ButtonStyle.primary, emoji="✏️", row=1)
     async def edit_button(self, button: discord.ui.Button, interaction: discord.Interaction):
         if not interaction.user:
             await interaction.respond("Der Interaction User ist None. Das sollte nicht passieren.", ephemeral=True)
@@ -104,7 +98,7 @@ class ParticipationView(discord.ui.View):
         else:
             await interaction.respond("Turnier Nachricht nicht gefunden", ephemeral=True)
 
-    @discord.ui.button(label="Spieler rauswerfen", style=discord.ButtonStyle.danger, emoji="🚷")
+    @discord.ui.button(label="Spieler rauswerfen", style=discord.ButtonStyle.danger, emoji="🚷", row=1)
     async def kick_button(self, button:discord.ui.Button, interaction:discord.Interaction):
         if not interaction.user:
             await interaction.respond("Der Interaction User ist None. Das sollte nicht passieren.", ephemeral=True)
@@ -117,7 +111,7 @@ class ParticipationView(discord.ui.View):
             return
         await common_views.open_kick_player_selection(self.tournament, interaction)
 
-    @discord.ui.button(label="Starte Turnier", style=discord.ButtonStyle.primary, emoji="▶️")
+    @discord.ui.button(label="Starte Turnier", style=discord.ButtonStyle.primary, emoji="▶️", row=2)
     async def start_button(self, button: discord.ui.Button, interaction: discord.Interaction):
         if not interaction.user:
             await interaction.respond("Der Interaction User ist None. Das sollte nicht passieren.", ephemeral=True)
@@ -158,7 +152,7 @@ class ParticipationView(discord.ui.View):
         await next_round(self.tournament, interaction)
     
     
-    @discord.ui.button(label="Turnier abbrechen", style=discord.ButtonStyle.danger, emoji="🛑")
+    @discord.ui.button(label="Turnier abbrechen", style=discord.ButtonStyle.danger, emoji="🛑", row=1)
     async def cancel_button(self, button: discord.ui.Button, interaction: discord.Interaction):
         if not interaction.user:
             await interaction.respond("Der Interaction User ist None. Das sollte nicht passieren.", ephemeral=True)
@@ -313,7 +307,7 @@ class EditTournamentView(discord.ui.View):
         if existing_message:
             # Edit existing message
             await self.tournament.save_tournament()
-            await existing_message.edit(embed=await self.tournament.to_embed(), view=participation_view)
+            await existing_message.edit(content=await self.tournament.get_participants_message(), embed=await self.tournament.to_embed(), view=participation_view)
             await interaction.edit_original_response(content="Turnier wurde bearbeitet", embed=None, view=None)
         else:
             if not isinstance(interaction.channel, discord.TextChannel):
@@ -330,7 +324,8 @@ class EditTournamentView(discord.ui.View):
             await interaction.channel.send(
                 f"{organizer.mention} hat ein Turnier erstellt. Macht doch mit! :) {thread.mention}"
             )
-            message = await thread.send(embed=await self.tournament.to_embed(), view=participation_view)
+            participants_content = await self.tournament.get_participants_message()
+            message = await thread.send(content=participants_content, embed=await self.tournament.to_embed(), view=participation_view)
             self.tournament.message = message
             await message.edit(view=participation_view)
             active_tournaments[await self.tournament.get_id()] = self.tournament
@@ -846,7 +841,9 @@ class SpelltableTournamentManager(Cog):
                     # tournament has not been started yet
                     # sign-up is still open
                     view = await ParticipationView.create(tournament)
-                    await tournament_message.edit(view=view)
+                    participants_content = await tournament.get_participants_message()
+                    embed = await tournament.to_embed()
+                    await tournament_message.edit(content=participants_content, embed=embed, view=view)
                     return None
 
                 # tournament has been started
