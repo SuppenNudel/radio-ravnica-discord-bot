@@ -1034,8 +1034,14 @@ class SpelltableTournamentManager(Cog):
             finally:
                 tournament.suppress_overview_update = False
 
+        load_semaphore = asyncio.Semaphore(3)
+
+        async def _load_one_limited(message_path: str, tournament: SpelltableTournament):
+            async with load_semaphore:
+                return await _load_one(message_path, tournament)
+
         results = await asyncio.gather(
-            *[_load_one(k, v) for k, v in loaded_tournaments.items()],
+            *[_load_one_limited(k, v) for k, v in loaded_tournaments.items()],
             return_exceptions=True,
         )
 

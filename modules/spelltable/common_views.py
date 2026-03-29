@@ -601,33 +601,55 @@ async def swap_concluded_round_pins(
     standings_message: discord.Message | None,
     tournament_title: str,
 ):
+    def _http_exception_summary(e: discord.errors.HTTPException) -> str:
+        status = getattr(e, "status", "?")
+        code = getattr(e, "code", "?")
+        first_line = str(e).splitlines()[0] if str(e) else ""
+        return f"status={status}, code={code}, detail={first_line[:240]}"
+
     if pairings_message:
-        try:
-            await pairings_message.unpin()
-        except discord.NotFound:
-            pass
-        except discord.errors.Forbidden as e:
-            link_log.warning(
-                f"Missing permission to unpin pairings message {pairings_message.id} for concluded tournament '{tournament_title}': {e}"
-            )
-        except discord.errors.HTTPException as e:
-            link_log.debug(
-                f"Could not unpin pairings message {pairings_message.id} for concluded tournament '{tournament_title}': {e}"
-            )
+        if pairings_message.pinned:
+            try:
+                await pairings_message.unpin()
+            except discord.NotFound:
+                pass
+            except discord.errors.Forbidden as e:
+                link_log.warning(
+                    f"Missing permission to unpin pairings message {pairings_message.id} for concluded tournament '{tournament_title}': {e}"
+                )
+            except discord.errors.HTTPException as e:
+                if getattr(e, "status", None) == 429:
+                    link_log.warning(
+                        f"Rate limited while unpinning pairings message {pairings_message.id} for concluded tournament '{tournament_title}'. "
+                        f"{_http_exception_summary(e)}"
+                    )
+                else:
+                    link_log.debug(
+                        f"Could not unpin pairings message {pairings_message.id} for concluded tournament '{tournament_title}': "
+                        f"{_http_exception_summary(e)}"
+                    )
 
     if standings_message:
-        try:
-            await standings_message.pin()
-        except discord.NotFound:
-            pass
-        except discord.errors.Forbidden as e:
-            link_log.warning(
-                f"Missing permission to pin final standings message {standings_message.id} for concluded tournament '{tournament_title}': {e}"
-            )
-        except discord.errors.HTTPException as e:
-            link_log.debug(
-                f"Could not pin final standings message {standings_message.id} for concluded tournament '{tournament_title}': {e}"
-            )
+        if not standings_message.pinned:
+            try:
+                await standings_message.pin()
+            except discord.NotFound:
+                pass
+            except discord.errors.Forbidden as e:
+                link_log.warning(
+                    f"Missing permission to pin final standings message {standings_message.id} for concluded tournament '{tournament_title}': {e}"
+                )
+            except discord.errors.HTTPException as e:
+                if getattr(e, "status", None) == 429:
+                    link_log.warning(
+                        f"Rate limited while pinning final standings message {standings_message.id} for concluded tournament '{tournament_title}'. "
+                        f"{_http_exception_summary(e)}"
+                    )
+                else:
+                    link_log.debug(
+                        f"Could not pin final standings message {standings_message.id} for concluded tournament '{tournament_title}': "
+                        f"{_http_exception_summary(e)}"
+                    )
 
 
 class ConfirmDropModal(discord.ui.Modal):
