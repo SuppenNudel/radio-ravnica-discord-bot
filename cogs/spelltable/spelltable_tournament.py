@@ -26,6 +26,7 @@ from modules.db import (
     SwissMatch,
     DiscordUser,
 )
+from modules.db import BannedUser
 from modules.spelltable.tournament_model import SpelltableTournament, load_tournaments, active_tournaments, update_tournament_message
 from modules.spelltable.common_views import SubmitDeckView, ParticipationState, StartNextRoundView, FinishTournamentView, next_round, update_hall_of_fame_batch
 from modules.spelltable import common_views
@@ -378,6 +379,13 @@ class EditTournamentView(discord.ui.View):
             await self.tournament.save_tournament_participants()
             if self.tournament.swiss_tournament:
                 await self.tournament.save_tournament_swiss()
+            try:
+                self.tournament.bot.add_view(participation_view, message_id=existing_message.id)
+            except Exception:
+                log.exception(
+                    f"Failed to register persistent ParticipationView for tournament '{self.tournament.title}' "
+                    f"(message_id={existing_message.id}) while editing"
+                )
             # Rename thread if message is in a thread
             if isinstance(existing_message.channel, discord.Thread):
                 await existing_message.channel.edit(name=self.tournament.title)
@@ -401,6 +409,13 @@ class EditTournamentView(discord.ui.View):
             participants_content = await self.tournament.get_participants_message()
             message = await thread.send(content=participants_content, embed=await self.tournament.to_embed(), view=participation_view)
             self.tournament.message = message
+            try:
+                self.tournament.bot.add_view(participation_view, message_id=message.id)
+            except Exception:
+                log.exception(
+                    f"Failed to register persistent ParticipationView for tournament '{self.tournament.title}' "
+                    f"(message_id={message.id}) while creating"
+                )
             await message.edit(view=participation_view)
             active_tournaments[await self.tournament.get_id()] = self.tournament
             await self.tournament.save_tournament_metadata()
@@ -918,6 +933,13 @@ class SpelltableTournamentManager(Cog):
                     # tournament has not been started yet
                     # sign-up is still open
                     view = await ParticipationView.create(tournament)
+                    try:
+                        self.bot.add_view(view, message_id=tournament_message.id)
+                    except Exception:
+                        log.exception(
+                            f"Failed to register persistent ParticipationView for tournament '{tournament.title}' "
+                            f"(message_id={tournament_message.id}) during startup"
+                        )
                     participants_content = await tournament.get_participants_message()
                     embed = await tournament.to_embed()
                     await tournament_message.edit(content=participants_content, embed=embed, view=view)
@@ -1256,6 +1278,80 @@ class SpelltableTournamentManager(Cog):
         Wait until the bot is ready before starting the task.
         """
         await self.bot.wait_until_ready()
+
+    @slash_command(
+        name="turnier_sperre",
+        description="Sperrt oder entsperrt einen Spieler für zukünftige Turniere",
+        guild_ids=[env.GUILD_ID],
+        default_member_permissions=discord.Permissions(administrator=True),
+    )
+    async def turnier_sperre(
+        self,
+        ctx: ApplicationContext,
+        aktion: Annotated[
+            str,
+            Option(
+                str,
+                description="Aktion auswählen",
+                choices=["sperren", "aufheben"],
+            ),
+        ],
+        mitglied: Annotated[discord.Member, Option(discord.Member, description="Der betroffene Spieler")],
+        grund: Annotated[str, Option(str, description="Begründung (optional, bei sperren)", required=False)] = None,
+    ):
+        await ctx.defer(ephemeral=True)
+        if ctx.guild is None or not isinstance(ctx.author, discord.Member):
+            await ctx.followup.send("Dieser Befehl kann nur auf dem Server verwendet werden.", ephemeral=True)
+            return
+
+        db = SessionLocal()
+        try:
+            ban = db.query(BannedUser).filter(BannedUser.user_id == str(mitglied.id)).first()
+
+            if aktion == "sperren":
+                if ban:
+                    await ctx.followup.send(
+                        f"{mitglied.mention} ist bereits gesperrt.",
+                        ephemeral=True,
+                    )
+                    return
+
+                new_ban = BannedUser(
+                    user_id=str(mitglied.id),
+                    banned_by=str(ctx.author.id),
+                    reason=grund,
+                )
+                db.add(new_ban)
+                db.commit()
+
+                reason_text = f"\nGrund: {grund}" if grund else ""
+                await ctx.followup.send(
+                    f"{mitglied.mention} wurde von zukünftigen Turnier-Teilnahmen gesperrt.{reason_text}",
+                    ephemeral=True,
+                )
+                log.info(f"[ban] {ctx.author} ({ctx.author.id}) banned {mitglied} ({mitglied.id}). Reason: {grund!r}")
+                return
+
+            if aktion == "aufheben":
+                if not ban:
+                    await ctx.followup.send(
+                        f"{mitglied.mention} ist nicht gesperrt.",
+                        ephemeral=True,
+                    )
+                    return
+
+                db.delete(ban)
+                db.commit()
+                await ctx.followup.send(
+                    f"Die Turniersperre für {mitglied.mention} wurde aufgehoben.",
+                    ephemeral=True,
+                )
+                log.info(f"[ban] {ctx.author} ({ctx.author.id}) unbanned {mitglied} ({mitglied.id}).")
+                return
+
+            await ctx.followup.send("Ungültige Aktion. Erlaubt sind: `sperren`, `aufheben`.", ephemeral=True)
+        finally:
+            db.close()
 
 def setup(bot:Bot):
     bot.add_cog(SpelltableTournamentManager(bot))

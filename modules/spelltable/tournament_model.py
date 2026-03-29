@@ -18,6 +18,7 @@ from modules.db import (
     SwissMatch,
     DiscordUser,
 )
+from modules.db import BannedUser
 from sqlalchemy import text
 import pytz
 from pathlib import Path
@@ -683,6 +684,17 @@ class SpelltableTournament(Serializable):
             )
             return "Ungültige Benutzer-ID."
 
+        # Check if the user is banned from tournament participation.
+        if state == ParticipationState.PARTICIPATE:
+            db = SessionLocal()
+            try:
+                ban = db.query(BannedUser).filter(BannedUser.user_id == str(userid)).first()
+            finally:
+                db.close()
+            if ban:
+                reason_text = f"\nGrund: {ban.reason}" if ban.reason else ""
+                return f"Du wurdest von der Turnier-Teilnahme gesperrt und kannst dich nicht anmelden.{reason_text}"
+
         # Build the new state in-memory copy first, then persist to DB.
         # Only after successful DB commit do we update the live in-memory tournament state.
         next_users = dict(self.users)
@@ -718,11 +730,7 @@ class SpelltableTournament(Serializable):
         if message:
             embed = await self.to_embed()
             participants_content = await self.get_participants_message()
-            view = discord.utils.get(self.bot.persistent_views, message_id=message.id)
-            if view:
-                await message.edit(content=participants_content, embed=embed, view=view)
-            else:
-                await message.edit(content=participants_content, embed=embed)
+            await message.edit(content=participants_content, embed=embed)
             link_log.info(f"Benutzer <@{userid}> hat den Status auf {state.name} für das Turnier {message.jump_url} gesetzt")
         else:
             raise Exception("Message not found")

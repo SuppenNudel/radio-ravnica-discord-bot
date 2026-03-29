@@ -163,6 +163,19 @@ class DiscordUser(Base):
         return f"<DiscordUser(user_id={self.user_id}, display_name='{self.display_name}')>"
 
 
+class BannedUser(Base):
+    """Users banned from tournament participation"""
+    __tablename__ = "banned_users"
+
+    user_id = Column(DISCORD_ID_TYPE, primary_key=True)
+    banned_by = Column(DISCORD_ID_TYPE, nullable=True)
+    reason = Column(Text, nullable=True)
+    banned_at = Column(DateTime, default=datetime.utcnow)
+
+    def __repr__(self):
+        return f"<BannedUser(user_id={self.user_id})>"
+
+
 def _sqlite_column_types(table_name: str) -> dict[str, str]:
     with sqlite3.connect(DB_PATH) as conn:
         rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
@@ -387,10 +400,25 @@ def _migrate_add_format_name_column():
             connection.execute(text("ALTER TABLE tournaments ADD COLUMN format_name VARCHAR"))
 
 
+def _ensure_banned_users_table():
+    """Create banned_users table if it does not exist."""
+    with engine.begin() as connection:
+        connection.execute(text("""
+            CREATE TABLE IF NOT EXISTS banned_users (
+                user_id VARCHAR(32) NOT NULL,
+                banned_by VARCHAR(32),
+                reason TEXT,
+                banned_at DATETIME,
+                PRIMARY KEY (user_id)
+            )
+        """))
+
+
 def init_db():
     """Create all tables in the database"""
     Base.metadata.create_all(bind=engine)
     _migrate_add_format_name_column()
+    _ensure_banned_users_table()
     print("✅ Database tables created")
 
 
