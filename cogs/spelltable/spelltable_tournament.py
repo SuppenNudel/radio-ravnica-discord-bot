@@ -303,6 +303,13 @@ class EditTournamentView(discord.ui.View):
 
     @discord.ui.button(label="Max. Runden", style=discord.ButtonStyle.primary, emoji="🔃")
     async def round_count_callback(self, button:discord.ui.Button, interaction:discord.Interaction):
+        if self.tournament.swiss_tournament:
+            await interaction.response.send_message(
+                "Die Rundenzahl wurde beim Turnierstart festgelegt und kann nicht mehr geändert werden.",
+                ephemeral=True,
+            )
+            return
+
         input = discord.ui.InputText(
             label="Maximal Runden (0 für empfohlene Anzahl)",
             placeholder="Wieviele Runden maximal gespielt werden sollen",
@@ -954,12 +961,12 @@ class SpelltableTournamentManager(Cog):
                     and swiss_tournament.rounds_count
                     and current_round.round_number >= swiss_tournament.rounds_count
                 )
-                tournament_concluded = swiss_tournament.winner is not None or (is_last_round and current_round_concluded)
+                tournament_concluded = swiss_tournament.winner is not None
 
-                if tournament_concluded and swiss_tournament.winner is None:
+                if (is_last_round and current_round_concluded) and swiss_tournament.winner is None:
                     link_log.warning(
-                        f"Treating tournament '{tournament.title}' as concluded during startup because the last round is already concluded, "
-                        f"but winner_player_id is not set."
+                        f"Tournament '{tournament.title}' has a concluded last round during startup but no winner_player_id is set. "
+                        f"Keeping tournament open so organizer can finish it explicitly."
                     )
 
                 await self._refresh_historical_pairings_messages(

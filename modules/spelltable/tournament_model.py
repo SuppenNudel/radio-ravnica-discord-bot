@@ -737,6 +737,10 @@ class SpelltableTournament(Serializable):
         return message_str
 
     def calc_round_count_and_text(self):
+        if self.swiss_tournament:
+            fixed_rounds = self.swiss_tournament.rounds_count
+            return fixed_rounds, f"Beim Start festgelegt: {fixed_rounds}"
+
         participants = self.get_users_by_state(ParticipationState.PARTICIPATE)
         rec_round_count = swiss_mtg.recommended_rounds(len(participants))
         if self.max_rounds:
@@ -943,6 +947,9 @@ class SpelltableTournament(Serializable):
                 )
 
             if save_metadata:
+                if self.swiss_tournament:
+                    self.max_rounds = self.swiss_tournament.rounds_count
+
                 t_row.name = self.title
                 t_row.organizer_id = self.organizer_id
                 t_row.description = self.description
