@@ -1324,12 +1324,52 @@ class SpelltableTournamentManager(Cog):
                 db.add(new_ban)
                 db.commit()
 
+                async def remove_user_from_registration(tournament: SpelltableTournament) -> str | None:
+                    if tournament.swiss_tournament is not None:
+                        return None
+
+                    is_registered = mitglied.id in tournament.users or mitglied.id in tournament.waitlist
+                    if not is_registered:
+                        return None
+
+                    await tournament.user_state(mitglied.id, ParticipationState.DECLINE)
+                    tournament_message = await tournament.message
+                    if tournament_message:
+                        return tournament_message.jump_url
+                    return None
+
+                removed_from_registrations = 0
+                removed_tournament_links: list[str] = []
+                for tournament in list(active_tournaments.values()):
+                    if not isinstance(tournament, SpelltableTournament):
+                        continue
+                    try:
+                        tournament_link = await remove_user_from_registration(tournament)
+                        if tournament_link is not None:
+                            removed_from_registrations += 1
+                            removed_tournament_links.append(tournament_link)
+                    except Exception as error:
+                        log.error(
+                            f"Fehler beim Entfernen von <@{mitglied.id}> aus einer Turnier-Anmeldung in '{tournament.title}': {error}"
+                        )
+
                 reason_text = f"\nGrund: {grund}" if grund else ""
+                removal_text = (
+                    f"\nDer Nutzer wurde aus {removed_from_registrations} laufenden Turnier-Anmeldungen entfernt."
+                    if removed_from_registrations
+                    else "\nDer Nutzer war in keiner laufenden Turnier-Anmeldung eingetragen."
+                )
                 await ctx.followup.send(
-                    f"{mitglied.mention} wurde von zukünftigen Turnier-Teilnahmen gesperrt.{reason_text}",
+                    f"{mitglied.mention} wurde von zukünftigen Turnier-Teilnahmen gesperrt.{reason_text}{removal_text}",
                     ephemeral=True,
                 )
-                log.info(f"[ban] {ctx.author} ({ctx.author.id}) banned {mitglied} ({mitglied.id}). Reason: {grund!r}")
+                link_log.info(
+                    f"Turnier-Ausschluss gesetzt: Moderator <@{ctx.author.id}> hat Benutzer <@{mitglied.id}> von zukünftigen Turnieren ausgeschlossen. Grund: {grund or 'kein Grund angegeben'}. Aus laufenden Anmeldungen entfernt: {removed_from_registrations}."
+                )
+                for tournament_link in removed_tournament_links:
+                    link_log.info(
+                        f"Turnier-Anmeldung entfernt: Benutzer <@{mitglied.id}> wurde im Zuge einer Turnier-Sperre aus {tournament_link} ausgetragen."
+                    )
                 return
 
             if aktion == "aufheben":
@@ -1346,7 +1386,9 @@ class SpelltableTournamentManager(Cog):
                     f"Die Turniersperre für {mitglied.mention} wurde aufgehoben.",
                     ephemeral=True,
                 )
-                log.info(f"[ban] {ctx.author} ({ctx.author.id}) unbanned {mitglied} ({mitglied.id}).")
+                link_log.info(
+                    f"Turnier-Ausschluss aufgehoben: Moderator <@{ctx.author.id}> hat den Ausschluss von Benutzer <@{mitglied.id}> für zukünftige Turniere aufgehoben."
+                )
                 return
 
             await ctx.followup.send("Ungültige Aktion. Erlaubt sind: `sperren`, `aufheben`.", ephemeral=True)
