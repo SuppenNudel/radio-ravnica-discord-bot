@@ -1048,7 +1048,10 @@ class SpelltableTournamentManager(Cog):
         concluded_tournaments_for_hof: list[SpelltableTournament] = []
         for result in results:
             if isinstance(result, Exception):
-                log.exception(f"Unexpected error loading tournament during startup: {result}")
+                log.error(
+                    f"Unexpected error loading tournament during startup: "
+                    f"{type(result).__name__}: {result}"
+                )
             elif isinstance(result, SpelltableTournament):
                 concluded_tournaments_for_hof.append(result)
 
