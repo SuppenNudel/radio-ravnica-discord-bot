@@ -1573,5 +1573,111 @@ class SpelltableTournamentManager(Cog):
         embed.set_footer(text=f"{len(lines)} aktive Sperre(n)")
         await ctx.followup.send(embed=embed, ephemeral=True)
 
+    @slash_command(
+        name="turnier_runde_zuruecksetzen",
+        description="Setzt die zuletzt gestartete Runde des aktuellen Turniers zurück",
+        guild_ids=[env.GUILD_ID],
+    )
+    async def reset_tournament_round(
+        self,
+        ctx: ApplicationContext,
+        bestaetigen: Annotated[
+            bool,
+            Option(bool, description="Muss auf true gesetzt werden, um die letzte Runde wirklich zurückzusetzen"),
+        ] = False,
+    ):
+        await ctx.defer(ephemeral=True)
+
+        if not isinstance(ctx.channel, discord.Thread):
+            await ctx.followup.send("Dieser Befehl kann nur in einem Turnier-Thread ausgeführt werden.", ephemeral=True)
+            return
+        if not isinstance(ctx.author, discord.Member):
+            await ctx.followup.send("Dieser Befehl kann nur in einem Server ausgeführt werden.", ephemeral=True)
+            return
+
+        this_tournament = None
+        for tournament in list(active_tournaments.values()):
+            tournament_message = await tournament.message
+            if not tournament_message:
+                continue
+            if tournament_message.channel.id == ctx.channel.id:
+                this_tournament = tournament
+                break
+
+        if not this_tournament:
+            await ctx.followup.send("Kein Turnier in diesem Thread gefunden.", ephemeral=True)
+            return
+
+        if not (
+            ctx.author.id == this_tournament.organizer_id
+            or any(role.name in ["Admin", "Moderator"] for role in ctx.author.roles)
+        ):
+            await ctx.followup.send(
+                "Nur der Turnier-Organisator, ein Admin oder ein Moderator darf diesen Befehl verwenden.",
+                ephemeral=True,
+            )
+            return
+
+        if not this_tournament.swiss_tournament or not this_tournament.swiss_tournament.current_round():
+            await ctx.followup.send("Es gibt aktuell keine Runde, die zurückgesetzt werden kann.", ephemeral=True)
+            return
+
+        current_round_number = this_tournament.swiss_tournament.current_round().round_number
+        if not bestaetigen:
+            await ctx.followup.send(
+                f"Dieser Befehl würde Runde {current_round_number} zurücksetzen. Ruf ihn erneut mit `bestaetigen=true` auf, um fortzufahren.",
+                ephemeral=True,
+            )
+            return
+
+        try:
+            reset_result = await common_views.reset_latest_round(this_tournament)
+        except ValueError as e:
+            await ctx.followup.send(str(e), ephemeral=True)
+            return
+        except RuntimeError as e:
+            await ctx.followup.send(str(e), ephemeral=True)
+            return
+        except Exception as e:
+            log.exception(f"Unexpected error while resetting round in tournament '{this_tournament.title}': {e}")
+            await ctx.followup.send(
+                "Beim Zuruecksetzen der Runde ist ein unerwarteter Fehler aufgetreten.",
+                ephemeral=True,
+            )
+            return
+
+        if reset_result["reverted_to_signup"]:
+            tournament_message = await this_tournament.message
+            if tournament_message:
+                participation_view = await ParticipationView.create(this_tournament)
+                try:
+                    self.bot.add_view(participation_view, message_id=tournament_message.id)
+                except Exception:
+                    log.exception(
+                        f"Failed to register ParticipationView for tournament '{this_tournament.title}' after round reset"
+                    )
+                await tournament_message.edit(
+                    content=await this_tournament.get_participants_message(),
+                    embed=await this_tournament.to_embed(),
+                    view=participation_view,
+                )
+
+        restored_round_number = reset_result["restored_round_number"]
+        if restored_round_number is None:
+            await ctx.followup.send(
+                f"Runde {reset_result['reset_round_number']} wurde zurückgesetzt. Das Turnier wurde in den Anmeldestatus zurückversetzt.",
+                ephemeral=True,
+            )
+        else:
+            await ctx.followup.send(
+                f"Runde {reset_result['reset_round_number']} wurde zurückgesetzt. Runde {restored_round_number} ist jetzt wieder die aktuelle Runde.",
+                ephemeral=True,
+            )
+
+        link_log.info(
+            f"Runde zurückgesetzt: Benutzer <@{ctx.author.id}> hat in '{this_tournament.title}' Runde {reset_result['reset_round_number']} zurückgesetzt. "
+            f"Anmeldestatus wiederhergestellt={reset_result['reverted_to_signup']}, aktuelle Runde={reset_result['restored_round_number']}"
+        )
+
 def setup(bot:Bot):
     bot.add_cog(SpelltableTournamentManager(bot))

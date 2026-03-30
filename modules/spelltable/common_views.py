@@ -991,6 +991,87 @@ async def remove_tournament_views(tournament: SpelltableTournament):
         except (discord.errors.DiscordServerError, discord.errors.HTTPException) as e:
             log.warning(f"Failed to remove view from message {message.id} in tournament `{tournament.title}`: {e}")
 
+
+async def reset_latest_round(tournament: SpelltableTournament) -> dict[str, int | bool | None]:
+    if not tournament.swiss_tournament:
+        raise ValueError("Das Turnier wurde noch nicht gestartet.")
+
+    tournament_id = await tournament.get_id()
+    if tournament_id not in _tournament_round_locks:
+        _tournament_round_locks[tournament_id] = asyncio.Lock()
+
+    lock = _tournament_round_locks[tournament_id]
+    if lock.locked():
+        raise RuntimeError("Für dieses Turnier läuft bereits eine Runden-Aktion. Bitte versuche es gleich noch einmal.")
+
+    async with lock:
+        swiss_tournament = tournament.swiss_tournament
+        current_round = swiss_tournament.current_round() if swiss_tournament else None
+        if current_round is None:
+            raise ValueError("Es gibt keine Runde, die zurückgesetzt werden kann.")
+
+        tournament_message = await tournament.message
+        if tournament_message and isinstance(tournament_message.channel, discord.Thread) and tournament_message.channel.archived:
+            await tournament_message.channel.edit(archived=False)
+
+        deleted_message_count = 0
+        for message_id in (current_round.message_id_pairings, current_round.message_id_standings):
+            if not message_id:
+                continue
+            message = await tournament.get_message(message_id)
+            if not message:
+                continue
+            try:
+                await message.edit(view=None)
+            except (discord.NotFound, discord.errors.Forbidden, discord.errors.HTTPException):
+                pass
+            try:
+                await message.delete()
+                deleted_message_count += 1
+            except discord.NotFound:
+                pass
+            except (discord.errors.Forbidden, discord.errors.HTTPException) as e:
+                log.warning(
+                    f"Could not delete reset target message {message_id} in tournament '{tournament.title}': {e}"
+                )
+
+        removed_round = swiss_tournament.rounds.pop()
+        for match in removed_round.matches:
+            for player in (match.player1, match.player2):
+                if player and match in player.match_history:
+                    player.match_history.remove(match)
+
+        swiss_tournament.winner = None
+
+        if not swiss_tournament.rounds:
+            tournament.swiss_tournament = None
+            await tournament.save_tournament_swiss()
+            return {
+                "reset_round_number": removed_round.round_number,
+                "deleted_message_count": deleted_message_count,
+                "reverted_to_signup": True,
+                "restored_round_number": None,
+            }
+
+        restored_round = swiss_tournament.current_round()
+        await tournament.save_tournament_swiss()
+        await update_pairings(tournament, restored_round)
+        await update_standings(tournament, None)
+
+        restored_pairings_message = await tournament.get_message(restored_round.message_id_pairings)
+        if restored_pairings_message and not restored_pairings_message.pinned:
+            try:
+                await restored_pairings_message.pin()
+            except (discord.NotFound, discord.errors.Forbidden, discord.errors.HTTPException):
+                pass
+
+        return {
+            "reset_round_number": removed_round.round_number,
+            "deleted_message_count": deleted_message_count,
+            "reverted_to_signup": False,
+            "restored_round_number": restored_round.round_number,
+        }
+
 class KickPlayerSelect(discord.ui.Select):
     def __init__(self, tournament: SpelltableTournament, participant_lookup: dict[int, str], options: list[discord.SelectOption], placeholder: str):
         super().__init__(placeholder=placeholder, min_values=1, max_values=1, options=options)
