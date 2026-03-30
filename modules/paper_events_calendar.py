@@ -164,38 +164,54 @@ async def _export_events_json_and_push(guild: discord.Guild) -> None:
         return
 
     def _git_commit_push() -> str | None:
-        r = subprocess.run(
-            ["git", "add", str(output_path.relative_to(repo_path))],
-            cwd=str(repo_path),
-            capture_output=True,
-            text=True,
-        )
-        if r.returncode != 0:
-            return f"git add failed: {r.stderr.strip()}"
+        def _run_git(*args: str) -> subprocess.CompletedProcess[str]:
+            return subprocess.run(
+                ["git", *args],
+                cwd=str(repo_path),
+                capture_output=True,
+                text=True,
+            )
 
-        r = subprocess.run(
-            ["git", "commit", "-m", "Update events.json"],
-            cwd=str(repo_path),
-            capture_output=True,
-            text=True,
-        )
+        def _format_git_error(action: str, result: subprocess.CompletedProcess[str]) -> str:
+            output = result.stderr.strip() or result.stdout.strip() or f"exit code {result.returncode}"
+            return f"{action} failed: {output}"
+
+        def _push_with_rebase_retry() -> str | None:
+            push_result = _run_git("push", "origin", "HEAD:main")
+            if push_result.returncode == 0:
+                return None
+
+            combined = (push_result.stdout + push_result.stderr).lower()
+            if "fetch first" not in combined and "non-fast-forward" not in combined:
+                return _format_git_error("git push", push_result)
+
+            fetch_result = _run_git("fetch", "origin", "main")
+            if fetch_result.returncode != 0:
+                return _format_git_error("git fetch origin main", fetch_result)
+
+            rebase_result = _run_git("rebase", "origin/main")
+            if rebase_result.returncode != 0:
+                _run_git("rebase", "--abort")
+                return _format_git_error("git rebase origin/main", rebase_result)
+
+            retry_result = _run_git("push", "origin", "HEAD:main")
+            if retry_result.returncode != 0:
+                return _format_git_error("git push after rebase", retry_result)
+
+            return None
+
+        r = _run_git("add", str(output_path.relative_to(repo_path)))
+        if r.returncode != 0:
+            return _format_git_error("git add", r)
+
+        r = _run_git("commit", "-m", "Update events.json")
         if r.returncode != 0:
             # "nothing to commit" is not an error
             combined = (r.stdout + r.stderr).lower()
-            if "nothing to commit" in combined:
-                return None
-            return f"git commit failed: {r.stderr.strip()}"
+            if "nothing to commit" not in combined:
+                return _format_git_error("git commit", r)
 
-        r = subprocess.run(
-            ["git", "push"],
-            cwd=str(repo_path),
-            capture_output=True,
-            text=True,
-        )
-        if r.returncode != 0:
-            return f"git push failed: {r.stderr.strip()}"
-
-        return None
+        return _push_with_rebase_retry()
 
     try:
         err = await asyncio.to_thread(_git_commit_push)
