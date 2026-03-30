@@ -171,6 +171,7 @@ class BannedUser(Base):
     banned_by = Column(DISCORD_ID_TYPE, nullable=True)
     reason = Column(Text, nullable=True)
     banned_at = Column(DateTime, default=datetime.utcnow)
+    banned_until = Column(DateTime, nullable=True)
 
     def __repr__(self):
         return f"<BannedUser(user_id={self.user_id})>"
@@ -409,9 +410,18 @@ def _ensure_banned_users_table():
                 banned_by VARCHAR(32),
                 reason TEXT,
                 banned_at DATETIME,
+                banned_until DATETIME,
                 PRIMARY KEY (user_id)
             )
         """))
+
+
+def _migrate_add_banned_until_column():
+    """Add banned_until column to banned_users table if it doesn't exist yet."""
+    col_types = _sqlite_column_types("banned_users")
+    if "banned_until" not in col_types:
+        with engine.begin() as connection:
+            connection.execute(text("ALTER TABLE banned_users ADD COLUMN banned_until DATETIME"))
 
 
 def init_db():
@@ -419,6 +429,7 @@ def init_db():
     Base.metadata.create_all(bind=engine)
     _migrate_add_format_name_column()
     _ensure_banned_users_table()
+    _migrate_add_banned_until_column()
     print("✅ Database tables created")
 
 

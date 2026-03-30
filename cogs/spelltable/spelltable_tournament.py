@@ -1,6 +1,7 @@
 from ezcord import Cog, log
 from typing import Annotated
 from discord.ext.commands import slash_command
+from discord.ext import commands
 from discord import ApplicationContext, Bot, Option
 import discord
 from modules import date_time_interpretation
@@ -11,7 +12,7 @@ import logging
 import asyncio
 
 from discord.ext import tasks
-from datetime import datetime, time
+from datetime import datetime, time, timezone
 from pathlib import Path
 import aiohttp
 from urllib.parse import urlparse
@@ -386,13 +387,6 @@ class EditTournamentView(discord.ui.View):
             await self.tournament.save_tournament_participants()
             if self.tournament.swiss_tournament:
                 await self.tournament.save_tournament_swiss()
-            try:
-                self.tournament.bot.add_view(participation_view, message_id=existing_message.id)
-            except Exception:
-                log.exception(
-                    f"Failed to register persistent ParticipationView for tournament '{self.tournament.title}' "
-                    f"(message_id={existing_message.id}) while editing"
-                )
             # Rename thread if message is in a thread
             if isinstance(existing_message.channel, discord.Thread):
                 await existing_message.channel.edit(name=self.tournament.title)
@@ -416,13 +410,6 @@ class EditTournamentView(discord.ui.View):
             participants_content = await self.tournament.get_participants_message()
             message = await thread.send(content=participants_content, embed=await self.tournament.to_embed(), view=participation_view)
             self.tournament.message = message
-            try:
-                self.tournament.bot.add_view(participation_view, message_id=message.id)
-            except Exception:
-                log.exception(
-                    f"Failed to register persistent ParticipationView for tournament '{self.tournament.title}' "
-                    f"(message_id={message.id}) while creating"
-                )
             await message.edit(view=participation_view)
             active_tournaments[await self.tournament.get_id()] = self.tournament
             await self.tournament.save_tournament_metadata()
@@ -940,13 +927,6 @@ class SpelltableTournamentManager(Cog):
                     # tournament has not been started yet
                     # sign-up is still open
                     view = await ParticipationView.create(tournament)
-                    try:
-                        self.bot.add_view(view, message_id=tournament_message.id)
-                    except Exception:
-                        log.exception(
-                            f"Failed to register persistent ParticipationView for tournament '{tournament.title}' "
-                            f"(message_id={tournament_message.id}) during startup"
-                        )
                     participants_content = await tournament.get_participants_message()
                     embed = await tournament.to_embed()
                     await tournament_message.edit(content=participants_content, embed=embed, view=view)
@@ -1225,8 +1205,8 @@ class SpelltableTournamentManager(Cog):
         await ctx.followup.send(embed=embed, ephemeral=True)
 
     # @has_role("Moderator")
-    @slash_command(description="Erstelle ein Spelltable Turnier für den Server")
-    async def erstelle_turnier(
+    @slash_command(name="turnier_erstellen", description="Erstelle ein Spelltable Turnier für den Server")
+    async def turnier_erstellen(
         self,
         ctx:ApplicationContext,
         titel: Annotated[str, Option(str, description="Der Titel, den das Turnier tragen soll")]
@@ -1295,121 +1275,303 @@ class SpelltableTournamentManager(Cog):
         """
         await self.bot.wait_until_ready()
 
+    async def _autocomplete_banned_users(self, ctx: discord.AutocompleteContext):
+        query = (ctx.value or "").strip().lower()
+        guild = getattr(ctx.interaction, "guild", None)
+
+        db = SessionLocal()
+        try:
+            banned_users = db.query(BannedUser).all()
+        finally:
+            db.close()
+
+        choices: list[discord.OptionChoice] = []
+        for ban in banned_users:
+            user_id_str = str(ban.user_id)
+            display = user_id_str
+            if guild is not None:
+                try:
+                    member = guild.get_member(int(user_id_str))
+                    if member is not None:
+                        display = f"{member.display_name} ({member.name})"
+                except (TypeError, ValueError):
+                    pass
+
+            label = f"{display} [{user_id_str}]"
+            searchable_text = f"{display} {user_id_str}".lower()
+            if query and query not in searchable_text:
+                continue
+
+            choices.append(discord.OptionChoice(name=label[:100], value=user_id_str))
+            if len(choices) >= 25:
+                break
+
+        return choices
+
     @slash_command(
         name="turnier_sperre",
-        description="Sperrt oder entsperrt einen Spieler für zukünftige Turniere",
+        description="Sperrt einen Spieler für eine bestimmte Zeit von Turnieren",
         guild_ids=[env.GUILD_ID],
-        default_member_permissions=discord.Permissions(administrator=True),
     )
-    async def turnier_sperre(
+    @commands.has_role("Moderator")
+    async def ban_user_from_tournaments(
         self,
         ctx: ApplicationContext,
-        aktion: Annotated[
-            str,
-            Option(
-                str,
-                description="Aktion auswählen",
-                choices=["sperren", "aufheben"],
-            ),
-        ],
         mitglied: Annotated[discord.Member, Option(discord.Member, description="Der betroffene Spieler")],
-        grund: Annotated[str, Option(str, description="Begründung (optional, bei sperren)", required=False)] = None,
+        zeit: Annotated[str, Option(str, description="Dauer der Sperre (z.B. '2 Wochen', '30 Tage')")],
+        aus_offenen_abmelden: Annotated[
+            bool,
+            Option(bool, description="Aus offenen Turnier-Anmeldungen austragen", required=False),
+        ] = False,
+        aus_laufenden_entfernen: Annotated[
+            bool,
+            Option(bool, description="Aus aktuell laufenden Turnieren entfernen", required=False),
+        ] = False,
+        grund: Annotated[str | None, Option(str, description="Begründung (optional)", required=False)] = None,
     ):
         await ctx.defer(ephemeral=True)
         if ctx.guild is None or not isinstance(ctx.author, discord.Member):
             await ctx.followup.send("Dieser Befehl kann nur auf dem Server verwendet werden.", ephemeral=True)
             return
 
+        parsed_until = date_time_interpretation.parse_date(zeit)
+        if parsed_until is None:
+            await ctx.followup.send(
+                "Die angegebene Zeit konnte nicht verstanden werden. Beispiel: `2 Wochen`, `30 Tage`, `in 12 Stunden`.",
+                ephemeral=True,
+            )
+            return
+
+        if parsed_until <= datetime.now(parsed_until.tzinfo):
+            await ctx.followup.send("Die Sperrdauer muss in der Zukunft liegen.", ephemeral=True)
+            return
+
+        banned_until_utc_naive = parsed_until.astimezone(timezone.utc).replace(tzinfo=None)
+
         db = SessionLocal()
         try:
-            ban = db.query(BannedUser).filter(BannedUser.user_id == str(mitglied.id)).first()
+            existing_ban = db.query(BannedUser).filter(BannedUser.user_id == str(mitglied.id)).first()
 
-            if aktion == "sperren":
-                if ban:
-                    await ctx.followup.send(
-                        f"{mitglied.mention} ist bereits gesperrt.",
-                        ephemeral=True,
-                    )
-                    return
-
-                new_ban = BannedUser(
-                    user_id=str(mitglied.id),
-                    banned_by=str(ctx.author.id),
-                    reason=grund,
+            if existing_ban:
+                await ctx.followup.send(
+                    f"{mitglied.mention} ist bereits gesperrt.",
+                    ephemeral=True,
                 )
-                db.add(new_ban)
-                db.commit()
+                return
 
-                async def remove_user_from_registration(tournament: SpelltableTournament) -> str | None:
-                    if tournament.swiss_tournament is not None:
-                        return None
+            new_ban = BannedUser(
+                user_id=str(mitglied.id),
+                banned_by=str(ctx.author.id),
+                reason=grund,
+                banned_until=banned_until_utc_naive,
+            )
+            db.add(new_ban)
+            db.commit()
 
-                    is_registered = mitglied.id in tournament.users or mitglied.id in tournament.waitlist
-                    if not is_registered:
-                        return None
-
-                    await tournament.user_state(mitglied.id, ParticipationState.DECLINE)
-                    tournament_message = await tournament.message
-                    if tournament_message:
-                        return tournament_message.jump_url
+            async def remove_user_from_open_registration(tournament: SpelltableTournament) -> str | None:
+                if tournament.swiss_tournament is not None:
                     return None
 
-                removed_from_registrations = 0
-                removed_tournament_links: list[str] = []
-                for tournament in list(active_tournaments.values()):
-                    if not isinstance(tournament, SpelltableTournament):
-                        continue
-                    try:
-                        tournament_link = await remove_user_from_registration(tournament)
-                        if tournament_link is not None:
-                            removed_from_registrations += 1
-                            removed_tournament_links.append(tournament_link)
-                    except Exception as error:
-                        log.error(
-                            f"Fehler beim Entfernen von <@{mitglied.id}> aus einer Turnier-Anmeldung in '{tournament.title}': {error}"
-                        )
+                is_registered = mitglied.id in tournament.users or mitglied.id in tournament.waitlist
+                if not is_registered:
+                    return None
 
-                reason_text = f"\nGrund: {grund}" if grund else ""
-                removal_text = (
-                    f"\nDer Nutzer wurde aus {removed_from_registrations} laufenden Turnier-Anmeldungen entfernt."
-                    if removed_from_registrations
-                    else "\nDer Nutzer war in keiner laufenden Turnier-Anmeldung eingetragen."
+                await tournament.user_state(
+                    mitglied.id,
+                    ParticipationState.DECLINE,
+                    forced_by=ctx.author.id,
+                    forced_reason="Turnier-Sperre",
                 )
-                await ctx.followup.send(
-                    f"{mitglied.mention} wurde von zukünftigen Turnier-Teilnahmen gesperrt.{reason_text}{removal_text}",
-                    ephemeral=True,
-                )
-                link_log.info(
-                    f"Turnier-Ausschluss gesetzt: Moderator <@{ctx.author.id}> hat Benutzer <@{mitglied.id}> von zukünftigen Turnieren ausgeschlossen. Grund: {grund or 'kein Grund angegeben'}. Aus laufenden Anmeldungen entfernt: {removed_from_registrations}."
-                )
-                for tournament_link in removed_tournament_links:
+                tournament_message = await tournament.message
+                if tournament_message:
+                    return tournament_message.jump_url
+                return None
+
+            async def remove_user_from_running_tournament(tournament: SpelltableTournament) -> str | None:
+                swiss_tournament = tournament.swiss_tournament
+                if swiss_tournament is None or swiss_tournament.winner or tournament.cancelled:
+                    return None
+
+                player = swiss_tournament.player_by_id(mitglied.id)
+                if player is None or player.dropped:
+                    return None
+
+                player.dropped = True
+                await tournament.save_tournament()
+
+                tournament_message = await tournament.message
+                if tournament_message:
                     link_log.info(
-                        f"Turnier-Anmeldung entfernt: Benutzer <@{mitglied.id}> wurde im Zuge einer Turnier-Sperre aus {tournament_link} ausgetragen."
+                        f"Drop erzwungen: Moderator <@{ctx.author.id}> hat Benutzer <@{mitglied.id}> im laufenden "
+                        f"Turnier {tournament_message.jump_url} als gedroppt markiert. Grund: Turnier-Sperre."
                     )
-                return
+                    return tournament_message.jump_url
 
-            if aktion == "aufheben":
-                if not ban:
-                    await ctx.followup.send(
-                        f"{mitglied.mention} ist nicht gesperrt.",
-                        ephemeral=True,
-                    )
-                    return
-
-                db.delete(ban)
-                db.commit()
-                await ctx.followup.send(
-                    f"Die Turniersperre für {mitglied.mention} wurde aufgehoben.",
-                    ephemeral=True,
-                )
                 link_log.info(
-                    f"Turnier-Ausschluss aufgehoben: Moderator <@{ctx.author.id}> hat den Ausschluss von Benutzer <@{mitglied.id}> für zukünftige Turniere aufgehoben."
+                    f"Drop erzwungen: Moderator <@{ctx.author.id}> hat Benutzer <@{mitglied.id}> im laufenden "
+                    f"Turnier '{tournament.title}' als gedroppt markiert. Grund: Turnier-Sperre."
                 )
-                return
+                return None
 
-            await ctx.followup.send("Ungültige Aktion. Erlaubt sind: `sperren`, `aufheben`.", ephemeral=True)
+            removed_from_open_count = 0
+            removed_from_running_count = 0
+            removed_open_links: list[str] = []
+            removed_running_links: list[str] = []
+
+            for tournament in list(active_tournaments.values()):
+                if not isinstance(tournament, SpelltableTournament):
+                    continue
+                try:
+                    if aus_offenen_abmelden:
+                        tournament_link = await remove_user_from_open_registration(tournament)
+                        if tournament_link is not None:
+                            removed_from_open_count += 1
+                            removed_open_links.append(tournament_link)
+
+                    if aus_laufenden_entfernen:
+                        running_tournament_link = await remove_user_from_running_tournament(tournament)
+                        if running_tournament_link is not None:
+                            removed_from_running_count += 1
+                            removed_running_links.append(running_tournament_link)
+                except Exception as error:
+                    log.error(
+                        f"Fehler beim Entfernen von <@{mitglied.id}> aus einem Turnier in '{tournament.title}': {error}"
+                    )
+
+            reason_text = f"\nGrund: {grund}" if grund else ""
+            until_text = f"\nSperre bis: <t:{int(parsed_until.timestamp())}:F> (<t:{int(parsed_until.timestamp())}:R>)"
+            open_removal_text = (
+                f"\nAus offenen Anmeldungen entfernt: {removed_from_open_count}"
+                if aus_offenen_abmelden
+                else ""
+            )
+            running_removal_text = (
+                f"\nAus laufenden Turnieren entfernt: {removed_from_running_count}"
+                if aus_laufenden_entfernen
+                else ""
+            )
+            await ctx.followup.send(
+                f"{mitglied.mention} wurde für Turniere gesperrt.{until_text}{reason_text}{open_removal_text}{running_removal_text}",
+                ephemeral=True,
+            )
+            link_log.info(
+                f"Turnier-Ausschluss gesetzt: Moderator <@{ctx.author.id}> hat Benutzer <@{mitglied.id}> bis "
+                f"{discord.utils.format_dt(parsed_until, 'F')} ({discord.utils.format_dt(parsed_until, 'R')}) "
+                f"von zukünftigen Turnieren ausgeschlossen. Grund: {grund or 'kein Grund angegeben'}. "
+                f"Aus offenen Anmeldungen entfernt: {removed_from_open_count}. Aus laufenden Turnieren entfernt: {removed_from_running_count}."
+            )
+            for tournament_link in removed_open_links:
+                link_log.info(
+                    f"Offene Turnier-Anmeldung entfernt: Benutzer <@{mitglied.id}> wurde im Zuge einer Turnier-Sperre aus {tournament_link} ausgetragen."
+                )
+            for tournament_link in removed_running_links:
+                link_log.info(
+                    f"Laufendes Turnier: Benutzer <@{mitglied.id}> wurde im Zuge einer Turnier-Sperre in {tournament_link} als gedroppt markiert."
+                )
         finally:
             db.close()
+
+    @slash_command(
+        name="turnier_sperre_aufheben",
+        description="Hebt eine Turniersperre für einen Spieler auf",
+        guild_ids=[env.GUILD_ID],
+    )
+    @commands.has_role("Moderator")
+    async def unban_user_from_tournaments(
+        self,
+        ctx: ApplicationContext,
+        mitglied: Annotated[
+            str,
+            Option(
+                str,
+                description="Gesperrter Spieler",
+                autocomplete=_autocomplete_banned_users,
+            ),
+        ],
+    ):
+        await ctx.defer(ephemeral=True)
+        if ctx.guild is None or not isinstance(ctx.author, discord.Member):
+            await ctx.followup.send("Dieser Befehl kann nur auf dem Server verwendet werden.", ephemeral=True)
+            return
+
+        try:
+            user_id = int(mitglied)
+        except (TypeError, ValueError):
+            await ctx.followup.send("Ungültiger Spieler. Bitte einen Eintrag aus der Vorschlagsliste auswählen.", ephemeral=True)
+            return
+
+        member = ctx.guild.get_member(user_id)
+        mention = member.mention if member else f"<@{user_id}>"
+
+        db = SessionLocal()
+        try:
+            ban = db.query(BannedUser).filter(BannedUser.user_id == str(user_id)).first()
+            if not ban:
+                await ctx.followup.send(
+                    f"{mention} ist nicht gesperrt.",
+                    ephemeral=True,
+                )
+                return
+
+            db.delete(ban)
+            db.commit()
+            await ctx.followup.send(
+                f"Die Turniersperre für {mention} wurde aufgehoben.",
+                ephemeral=True,
+            )
+            link_log.info(
+                f"Turnier-Ausschluss aufgehoben: Moderator <@{ctx.author.id}> hat den Ausschluss von Benutzer <@{user_id}> für zukünftige Turniere aufgehoben."
+            )
+        finally:
+            db.close()
+
+    @slash_command(
+        name="turnier_sperrliste",
+        description="Zeigt alle aktuell gesperrten Turnierspieler",
+        guild_ids=[env.GUILD_ID],
+    )
+    @commands.has_role("Moderator")
+    async def list_banned_users(self, ctx: ApplicationContext):
+        await ctx.defer(ephemeral=True)
+
+        db = SessionLocal()
+        try:
+            bans = db.query(BannedUser).order_by(BannedUser.banned_at.asc()).all()
+        finally:
+            db.close()
+
+        if not bans:
+            await ctx.followup.send("Es sind aktuell keine Spieler gesperrt.", ephemeral=True)
+            return
+
+        now = datetime.utcnow()
+        lines: list[str] = []
+        for ban in bans:
+            user_mention = f"<@{ban.user_id}>"
+            if ban.banned_until:
+                if ban.banned_until <= now:
+                    continue  # expired, skip (will be cleaned up on next sign-up attempt)
+                until_ts = int(ban.banned_until.replace(tzinfo=timezone.utc).timestamp())
+                until_str = f"bis <t:{until_ts}:F> (<t:{until_ts}:R>)"
+            else:
+                until_str = "unbefristet"
+
+            reason_str = f" — {ban.reason}" if ban.reason else ""
+            moderator_str = f" (gesperrt von <@{ban.banned_by}>)" if ban.banned_by else ""
+            lines.append(f"• {user_mention}{moderator_str} {until_str}{reason_str}")
+
+        if not lines:
+            await ctx.followup.send("Es sind aktuell keine aktiven Sperren vorhanden.", ephemeral=True)
+            return
+
+        embed = discord.Embed(
+            title="🚫 Gesperrte Turnierspieler",
+            description="\n".join(lines),
+            color=discord.Color.red(),
+            timestamp=datetime.utcnow(),
+        )
+        embed.set_footer(text=f"{len(lines)} aktive Sperre(n)")
+        await ctx.followup.send(embed=embed, ephemeral=True)
 
 def setup(bot:Bot):
     bot.add_cog(SpelltableTournamentManager(bot))

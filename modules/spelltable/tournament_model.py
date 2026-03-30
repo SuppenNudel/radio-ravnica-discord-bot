@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from ezcord import log
 import logging
 import traceback
@@ -677,7 +677,14 @@ class SpelltableTournament(Serializable):
         finally:
             db.close()
 
-    async def user_state(self, userid:int, state:ParticipationState):
+    async def user_state(
+        self,
+        userid:int,
+        state:ParticipationState,
+        *,
+        forced_by:int|None = None,
+        forced_reason:str|None = None,
+    ):
         if not isinstance(userid, int):
             link_log.warning(
                 f"Skipping user_state update with invalid userid={userid!r} in tournament '{self.title}'."
@@ -689,11 +696,20 @@ class SpelltableTournament(Serializable):
             db = SessionLocal()
             try:
                 ban = db.query(BannedUser).filter(BannedUser.user_id == str(userid)).first()
+                if ban and ban.banned_until and ban.banned_until <= datetime.utcnow():
+                    db.delete(ban)
+                    db.commit()
+                    link_log.info(
+                        f"Turnier-Sperre abgelaufen: Benutzer <@{userid}> wurde automatisch entsperrt "
+                        f"(Sperre war bis <t:{int(ban.banned_until.replace(tzinfo=timezone.utc).timestamp())}:F> gültig)."
+                    )
+                    ban = None
             finally:
                 db.close()
             if ban:
                 reason_text = f"\nGrund: {ban.reason}" if ban.reason else ""
-                return f"Du wurdest von der Turnier-Teilnahme gesperrt und kannst dich nicht anmelden.{reason_text}"
+                until_text = f"\nGültig bis: <t:{int(ban.banned_until.replace(tzinfo=timezone.utc).timestamp())}:F>" if ban.banned_until else ""
+                return f"Du wurdest von der Turnier-Teilnahme gesperrt und kannst dich nicht anmelden.{reason_text}{until_text}"
 
         # Build the new state in-memory copy first, then persist to DB.
         # Only after successful DB commit do we update the live in-memory tournament state.
@@ -731,7 +747,14 @@ class SpelltableTournament(Serializable):
             embed = await self.to_embed()
             participants_content = await self.get_participants_message()
             await message.edit(content=participants_content, embed=embed)
-            link_log.info(f"Benutzer <@{userid}> hat den Status auf {state.name} für das Turnier {message.jump_url} gesetzt")
+            if forced_by is None:
+                link_log.info(f"Benutzer <@{userid}> hat den Status auf {state.name} für das Turnier {message.jump_url} gesetzt")
+            else:
+                reason_text = f" Grund: {forced_reason}." if forced_reason else ""
+                link_log.info(
+                    f"Statusänderung erzwungen: Moderator <@{forced_by}> hat den Status von Benutzer <@{userid}> "
+                    f"auf {state.name} für das Turnier {message.jump_url} gesetzt.{reason_text}"
+                )
         else:
             raise Exception("Message not found")
         return message_str
