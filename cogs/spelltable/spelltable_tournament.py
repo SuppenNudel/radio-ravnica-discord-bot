@@ -5,7 +5,6 @@ from discord.ext import commands
 from discord import ApplicationContext, Bot, Option
 import discord
 from modules import date_time_interpretation
-import re
 from modules import swiss_mtg
 from modules import env
 import logging
@@ -13,9 +12,6 @@ import asyncio
 
 from discord.ext import tasks
 from datetime import datetime, time, timezone
-from pathlib import Path
-import aiohttp
-from urllib.parse import urlparse
 
 from modules.db import (
     SessionLocal,
@@ -29,15 +25,11 @@ from modules.db import (
 )
 from modules.db import BannedUser
 from modules.spelltable.tournament_model import SpelltableTournament, load_tournaments, active_tournaments, update_tournament_message
-from modules.spelltable.common_views import SubmitDeckView, ParticipationState, StartNextRoundView, FinishTournamentView, next_round, update_hall_of_fame_batch
+from modules.spelltable.common_views import SubmitDeckView, ParticipationState, next_round, update_hall_of_fame_batch
 from modules.spelltable import common_views
 from modules.hall_of_fame import FORMAT_CHOICES
 
 link_log = logging.getLogger("link_logger")
-
-IS_DEBUG = env.DEBUG
-
-EMOJI_PATTERN = re.compile("[\U0001F300-\U0001F6FF\U0001F900-\U0001F9FF\U0001FA70-\U0001FAFF\U0001F600-\U0001F64F]+", flags=re.UNICODE)
 
 def auto_detect_format_from_channel(channel: discord.TextChannel) -> str | None:
     """
@@ -332,16 +324,6 @@ class EditTournamentView(discord.ui.View):
             self.tournament.days_per_match = 7
         view = await EditTournamentView.create(self.tournament, self.channel)
         await interaction.response.edit_message(embed=await self.tournament.to_embed(), view=view)
-
-        # input = discord.ui.InputText(
-        #     label="Tage pro Runde",
-        #     placeholder="Wie viele Tage man für seine Runde Zeit hat. 0 für Turnier wird am Stück ausgetragen",
-        #     required=True,
-        #     value=self.tournament.days_per_match if self.tournament.days_per_match else "",
-        #     style=discord.InputTextStyle.long,
-        # )
-
-        # await interaction.response.send_modal(EnterTextModal(input, "days_per_match", self.tournament, self))
 
     @discord.ui.button(label="Format", style=discord.ButtonStyle.primary, emoji="🎴")
     async def format_callback(self, button:discord.ui.Button, interaction:discord.Interaction):
@@ -646,255 +628,6 @@ class SpelltableTournamentManager(Cog):
             or display_name == "deleted user"
             or display_name.startswith("deleted user ")
         )
-
-    @staticmethod
-    def _sanitize_path_component(name: str, fallback: str) -> str:
-        sanitized = re.sub(r'[<>:"/\\|?*\x00-\x1F]', "_", (name or "").strip()).rstrip(".")
-        return sanitized[:120] if sanitized else fallback
-
-    @staticmethod
-    def _extract_extension_from_url(url: str | None) -> str:
-        if not url:
-            return ".png"
-        parsed = urlparse(url)
-        suffix = Path(parsed.path).suffix.lower()
-        if suffix in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
-            return suffix
-        return ".png"
-
-    async def _download_message_image(
-        self,
-        message: discord.Message | None,
-        destination_without_extension: Path,
-        session: aiohttp.ClientSession,
-    ) -> tuple[int, int]:
-        if not message:
-            log.debug(f"archive_spelltable_images: no message for destination '{destination_without_extension}'")
-            return 0, 0
-
-        known_extensions = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
-        saved_count = 0
-        existing_count = 0
-        image_index = 0
-
-        def _stem_for_index(index: int) -> str:
-            if index == 1:
-                return destination_without_extension.name
-            return f"{destination_without_extension.name}_{index}"
-
-        def _existing_destination_for_index(index: int) -> Path | None:
-            stem = _stem_for_index(index)
-            for existing_file in destination_without_extension.parent.glob(f"{stem}.*"):
-                if not existing_file.is_file():
-                    continue
-                if existing_file.suffix.lower() in known_extensions:
-                    return existing_file
-            return None
-
-        def _destination_for_index(index: int, extension: str) -> Path:
-            stem = _stem_for_index(index)
-            return destination_without_extension.parent / f"{stem}{extension}"
-
-        for attachment in message.attachments:
-            content_type = (attachment.content_type or "").lower()
-            is_image = content_type.startswith("image/") or attachment.filename.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".gif"))
-            if not is_image:
-                continue
-            image_index += 1
-            if _existing_destination_for_index(image_index):
-                existing_count += 1
-                log.debug(
-                    f"archive_spelltable_images: skip existing attachment image #{image_index} for '{destination_without_extension}'"
-                )
-                continue
-            extension = Path(attachment.filename).suffix.lower() or ".png"
-            if extension not in known_extensions:
-                extension = ".png"
-            destination = _destination_for_index(image_index, extension)
-            destination.write_bytes(await attachment.read())
-            saved_count += 1
-            log.debug(
-                f"archive_spelltable_images: saved attachment image #{image_index} -> '{destination}'"
-            )
-
-        image_urls: list[str] = []
-        for embed in message.embeds:
-            if embed.image and embed.image.url:
-                image_urls.append(embed.image.url)
-            if embed.thumbnail and embed.thumbnail.url:
-                image_urls.append(embed.thumbnail.url)
-            if embed.type == "image" and embed.url:
-                image_urls.append(embed.url)
-
-        seen_urls: set[str] = set()
-        deduped_urls = [url for url in image_urls if not (url in seen_urls or seen_urls.add(url))]
-
-        for image_url in deduped_urls:
-            image_index += 1
-            if _existing_destination_for_index(image_index):
-                existing_count += 1
-                log.debug(
-                    f"archive_spelltable_images: skip existing embed image #{image_index} for '{destination_without_extension}' ({image_url})"
-                )
-                continue
-            extension = self._extract_extension_from_url(image_url)
-            destination = _destination_for_index(image_index, extension)
-            async with session.get(image_url) as response:
-                if response.status != 200:
-                    log.debug(
-                        f"archive_spelltable_images: failed embed image #{image_index} ({image_url}) with status {response.status}"
-                    )
-                    continue
-                destination.write_bytes(await response.read())
-                saved_count += 1
-                log.debug(
-                    f"archive_spelltable_images: saved embed image #{image_index} -> '{destination}' ({image_url})"
-                )
-
-        if image_index == 0:
-            log.debug(f"archive_spelltable_images: no images found for '{destination_without_extension}'")
-        else:
-            log.debug(
-                f"archive_spelltable_images: finished '{destination_without_extension}' (saved={saved_count}, existing={existing_count}, discovered={image_index})"
-            )
-
-        return saved_count, existing_count
-
-    @slash_command(
-        name="archive_spelltable_images",
-        description="Lädt Pairings- und Standings-Bilder aller Spelltable-Turniere herunter.",
-        guild_ids=[env.GUILD_ID],
-        default_member_permissions=discord.Permissions(administrator=True),
-    )
-    async def archive_spelltable_images(self, ctx: ApplicationContext):
-        await ctx.defer(ephemeral=True)
-
-        log.info(f"archive_spelltable_images: invoked by user_id={getattr(ctx.author, 'id', 'unknown')}")
-
-        if ctx.guild is None or not isinstance(ctx.author, discord.Member):
-            await ctx.followup.send("Dieser Befehl kann nur auf dem Server verwendet werden.", ephemeral=True)
-            return
-
-        if env.SPELLTABLE_MEDIA_EXPORT_USER_ID is None:
-            await ctx.followup.send(
-                "`SPELLTABLE_MEDIA_EXPORT_USER_ID` ist nicht gesetzt. Bitte in den ENV-Variablen konfigurieren.",
-                ephemeral=True,
-            )
-            return
-
-        if ctx.author.id != env.SPELLTABLE_MEDIA_EXPORT_USER_ID:
-            await ctx.followup.send("Du darfst diesen Befehl nicht verwenden.", ephemeral=True)
-            return
-
-        bot_root = Path(__file__).resolve().parents[2]
-        base_export_dir = bot_root / "data" / "old_tournaments"
-
-        tournaments_processed = 0
-        files_saved = 0
-        files_skipped_existing = 0
-        missing_images = 0
-        errors: list[str] = []
-        loaded_tournaments = await load_tournaments(self.bot)
-
-        log.debug(f"archive_spelltable_images: loaded tournaments={len(loaded_tournaments)}")
-
-        async with aiohttp.ClientSession() as session:
-            for tournament in list(loaded_tournaments.values()):
-                if not tournament.swiss_tournament:
-                    continue
-
-                tournaments_processed += 1
-                tournament_message = await tournament.message
-                if not tournament_message:
-                    continue
-
-                channel = tournament_message.channel
-                if isinstance(channel, discord.Thread) and channel.parent:
-                    format_name = channel.parent.name
-                elif isinstance(channel, discord.TextChannel):
-                    format_name = channel.name
-                else:
-                    format_name = "unknown_format"
-                format_dir = self._sanitize_path_component(format_name, "unknown_format")
-                tournament_dir = self._sanitize_path_component(tournament.title, "unknown_tournament")
-                export_dir = base_export_dir / format_dir / tournament_dir
-                export_dir.mkdir(parents=True, exist_ok=True)
-
-                log.debug(
-                    f"archive_spelltable_images: processing tournament='{tournament.title}', rounds={len(tournament.swiss_tournament.rounds)}, export_dir='{export_dir}'"
-                )
-
-                for round_obj in tournament.swiss_tournament.rounds:
-                    try:
-                        log.debug(
-                            f"archive_spelltable_images: processing tournament='{tournament.title}' round={round_obj.round_number}"
-                        )
-
-                        pairings_message = await tournament.get_message(round_obj.message_id_pairings)
-                        pairings_saved_count, pairings_existing_count = await self._download_message_image(
-                            pairings_message,
-                            export_dir / f"{round_obj.round_number}_pairings",
-                            session,
-                        )
-                        files_saved += pairings_saved_count
-                        files_skipped_existing += pairings_existing_count
-                        if pairings_saved_count == 0 and pairings_existing_count == 0:
-                            missing_images += 1
-                            log.debug(
-                                f"archive_spelltable_images: missing pairings image for tournament='{tournament.title}' round={round_obj.round_number}"
-                            )
-
-                        standings_message = await tournament.get_message(round_obj.message_id_standings)
-                        standings_saved_count, standings_existing_count = await self._download_message_image(
-                            standings_message,
-                            export_dir / f"{round_obj.round_number}_standings",
-                            session,
-                        )
-                        files_saved += standings_saved_count
-                        files_skipped_existing += standings_existing_count
-                        if standings_saved_count == 0 and standings_existing_count == 0:
-                            missing_images += 1
-                            log.debug(
-                                f"archive_spelltable_images: missing standings image for tournament='{tournament.title}' round={round_obj.round_number}"
-                            )
-
-                        log.debug(
-                            "archive_spelltable_images: round finished "
-                            f"tournament='{tournament.title}' round={round_obj.round_number} "
-                            f"pairings(saved={pairings_saved_count}, existing={pairings_existing_count}) "
-                            f"standings(saved={standings_saved_count}, existing={standings_existing_count})"
-                        )
-
-                    except Exception as e:
-                        errors.append(f"{tournament.title} / Runde {round_obj.round_number}: {e}")
-                        log.exception(
-                            f"archive_spelltable_images: error in tournament='{tournament.title}' round={round_obj.round_number}"
-                        )
-
-        log.info(
-            "archive_spelltable_images: finished "
-            f"tournaments_processed={tournaments_processed}, files_saved={files_saved}, "
-            f"files_skipped_existing={files_skipped_existing}, missing_images={missing_images}, errors={len(errors)}"
-        )
-
-        embed = discord.Embed(
-            title="Spelltable-Bilder archiviert",
-            color=discord.Color.green() if not errors else discord.Color.orange(),
-            timestamp=datetime.utcnow(),
-        )
-        embed.add_field(name="Turniere geprüft", value=str(tournaments_processed), inline=True)
-        embed.add_field(name="Dateien gespeichert", value=str(files_saved), inline=True)
-        embed.add_field(name="Schon vorhanden", value=str(files_skipped_existing), inline=True)
-        embed.add_field(name="Ohne Bild", value=str(missing_images), inline=True)
-        embed.add_field(name="Zielpfad", value=str(base_export_dir), inline=False)
-
-        if errors:
-            preview = "\n".join(errors[:10])
-            if len(errors) > 10:
-                preview += "\n..."
-            embed.add_field(name="Fehler", value=preview, inline=False)
-
-        await ctx.followup.send(embed=embed, ephemeral=True)
 
     @Cog.listener()
     async def on_ready(self):

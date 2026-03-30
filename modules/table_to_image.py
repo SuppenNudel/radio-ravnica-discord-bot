@@ -11,6 +11,12 @@ def _load_font(path, size):
 
 
 def _load_fallback_font(size):
+    env_font_path = os.getenv("EMOJI_FONT_PATH")
+    if env_font_path:
+        font = _load_font(env_font_path, size)
+        if font:
+            return font
+
     candidates = []
     if sys.platform.startswith("win"):
         windir = os.environ.get("WINDIR", "C:\\Windows")
@@ -26,6 +32,9 @@ def _load_fallback_font(size):
         ]
     else:
         candidates = [
+            # Prefer the non-color Noto Emoji font — renders correctly with Pillow/FreeType
+            "/usr/share/fonts/truetype/noto/NotoEmoji-Regular.ttf",
+            "/usr/share/fonts/noto/NotoEmoji-Regular.ttf",
             "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
             "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         ]
@@ -38,26 +47,35 @@ def _load_fallback_font(size):
 
 
 def _is_emoji_or_special(char):
-    """Check if a character is an emoji or special character that needs fallback font."""
+    """Check if a character is an emoji or special character that needs the fallback font."""
     code = ord(char)
-    # Emoji ranges
-    emoji_ranges = [
-        (0x1F300, 0x1F9FF),  # Miscellaneous Symbols and Pictographs, Emoticons, etc.
-        (0x2600, 0x26FF),    # Miscellaneous Symbols
-        (0x2700, 0x27BF),    # Dingbats
-        (0xFE00, 0xFE0F),    # Variation Selectors
-        (0x1F000, 0x1F02F),  # Mahjong Tiles
-        (0x1F0A0, 0x1F0FF),  # Playing Cards
-        (0x1F100, 0x1F64F),  # Enclosed Characters, Emoticons
-        (0x1F680, 0x1F6FF),  # Transport and Map Symbols
-        (0x1F900, 0x1F9FF),  # Supplemental Symbols and Pictographs
-        (0x1FA00, 0x1FA6F),  # Chess Symbols, Symbols and Pictographs Extended-A
-        (0x1FA70, 0x1FAFF),  # Symbols and Pictographs Extended-A
-        (0x2300, 0x23FF),    # Miscellaneous Technical
-        (0x2B50, 0x2B50),    # Star
-        (0xE0000, 0xE007F),  # Tags
+    # All supplementary plane characters (U+10000 and above) are outside the BMP and
+    # almost never present in typical text fonts. This covers every 0x1F*** emoji range
+    # (including gaps like Alchemical Symbols, Ornamental Dingbats, etc.) and tag blocks.
+    if code > 0xFFFF:
+        return True
+    # Common emoji and symbol ranges within the Basic Multilingual Plane
+    bmp_ranges = [
+        (0x00A9, 0x00A9),   # ©
+        (0x00AE, 0x00AE),   # ®
+        (0x203C, 0x203C),   # ‼
+        (0x2049, 0x2049),   # ⁉
+        (0x20D0, 0x20FF),   # Combining Diacritical Marks for Symbols (e.g. ⃣ in keycap sequences)
+        (0x2122, 0x2122),   # ™
+        (0x2139, 0x2139),   # ℹ
+        (0x2194, 0x2199),   # ↔ ↕ ↖ ↗ ↘ ↙
+        (0x21A9, 0x21AA),   # ↩ ↪
+        (0x231A, 0x231B),   # ⌚ ⌛
+        (0x2300, 0x27BF),   # Misc Technical, Symbols, Geometric Shapes, Dingbats
+        (0x2934, 0x2935),   # ⤴ ⤵
+        (0x2B00, 0x2BFF),   # Misc Symbols and Arrows (⭐ ⭕ ⬛ ⬜ etc.)
+        (0x3030, 0x3030),   # 〰
+        (0x303D, 0x303D),   # 〽
+        (0x3297, 0x3297),   # ㊗
+        (0x3299, 0x3299),   # ㊙
+        (0xFE00, 0xFE0F),   # Variation Selectors
     ]
-    return any(start <= code <= end for start, end in emoji_ranges)
+    return any(start <= code <= end for start, end in bmp_ranges)
 
 
 def _split_runs(text, primary, fallback):
