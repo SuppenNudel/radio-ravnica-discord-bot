@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone as dt_timezone
 from ezcord import log
 import logging
 import traceback
@@ -25,8 +25,9 @@ from pathlib import Path
 import asyncio
 import aiohttp
 import discord
+import json
 
-timezone = pytz.timezone("Europe/Berlin")
+tz_berlin = pytz.timezone("Europe/Berlin")
 
 class ParticipationState(StrEnum):
     PARTICIPATE = auto()
@@ -66,8 +67,8 @@ def _normalize_tournament_datetime(value: datetime | None) -> datetime | None:
     if value is None:
         return None
     if value.tzinfo is None:
-        return timezone.localize(value)
-    return value.astimezone(timezone)
+        return tz_berlin.localize(value)
+    return value.astimezone(tz_berlin)
 
 async def save_tournaments():
     for tournament in active_tournaments.values():
@@ -402,6 +403,127 @@ async def update_tournament_message(bot:discord.Bot, trigger_guild:discord.Guild
     activity = discord.CustomActivity(name=activity_name)
     await bot.change_presence(activity=activity)
 
+    # Update format-specific overviews
+    await update_format_overviews(bot, trigger_guild)
+
+
+def _load_format_message_ids() -> dict:
+    """Load format-specific message IDs from JSON config file."""
+    config_path = Path("format_overview_messages.json")
+    if config_path.exists():
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            log.warning(f"Failed to load format message IDs: {e}")
+            return {"messages": {}, "last_updated": None}
+    return {"messages": {}, "last_updated": None}
+
+
+def _save_format_message_ids(config: dict) -> None:
+    """Save format-specific message IDs to JSON config file."""
+    config_path = Path("format_overview_messages.json")
+    try:
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=2)
+    except Exception as e:
+        log.error(f"Failed to save format message IDs: {e}")
+
+
+async def generate_format_overview_message(tournaments: list["SpelltableTournament"], format_name: str) -> str:
+    """
+    Generate an overview message for a specific tournament format.
+    Lists all tournaments of that format with their winners (or TBD if not concluded).
+    """
+    format_tournaments = [t for t in tournaments if t.format_name == format_name]
+    format_tournaments = sorted(format_tournaments, key=lambda t: t.message_id or 0)
+
+    msg = f"## 🧙‍♂️ **RR {format_name} Turnier**\n\n"
+
+    if format_tournaments:
+        for idx, tournament in enumerate(format_tournaments, 1):
+            # Get winner if tournament is concluded
+            winner_mention = "TBD"
+            winner_display = ""
+            if tournament.swiss_tournament and tournament.swiss_tournament.winner:
+                winner_player = tournament.swiss_tournament.winner
+                try:
+                    winner = await tournament.get_member(winner_player.player_id)
+                    if winner:
+                        winner_mention = winner.mention
+                        winner_display = f"({winner.display_name})"
+                except Exception:
+                    pass
+
+            # Use last standings message URL as leading link, fall back to tournament message
+            leading_url = f"https://discord.com/channels/{tournament.guild.id}/{tournament.channel_id}/{tournament.message_id}"
+            if tournament.swiss_tournament and tournament.swiss_tournament.rounds:
+                last_round = tournament.swiss_tournament.rounds[-1]
+                if last_round.message_id_standings:
+                    leading_url = f"https://discord.com/channels/{tournament.guild.id}/{tournament.channel_id}/{last_round.message_id_standings}"
+
+            date_text = discord.utils.format_dt(tournament.time, "D") if tournament.time else "TBD"
+            msg += f"{date_text} - {leading_url} - {winner_mention} {winner_display}\n"
+    else:
+        msg += "_Noch keine Turniere in diesem Format._"
+
+    return msg
+
+
+async def update_format_overviews(bot: discord.Bot, trigger_guild: discord.Guild | None = None):
+    """
+    Update format-specific tournament overview messages.
+    Creates new messages or updates existing ones for each format.
+    """
+    if trigger_guild and trigger_guild.id != env.GUILD_ID:
+        return  # Only update for the main guild
+
+    guild: discord.Guild = bot.get_guild(env.GUILD_ID)
+    channel: discord.TextChannel = guild.get_channel(env.SPELLTABLE_CALENDAR_CHANNEL_ID)
+
+    if not channel:
+        log.warning("Cannot find calendar channel for format overviews")
+        return
+
+    # Use all in-memory tournaments for the guild (including concluded, excluding cancelled)
+    all_tournaments: list["SpelltableTournament"] = [
+        t for t in active_tournaments.values() if t.guild.id == guild.id
+    ]
+
+    # Get unique formats in use
+    formats_in_use = {t.format_name for t in all_tournaments if t.format_name}
+
+    # Load existing format-specific message IDs
+    config = _load_format_message_ids()
+    format_messages = config.get("messages", {})
+
+    # Update or create messages for each format
+    for format_name in formats_in_use:
+        format_content = await generate_format_overview_message(all_tournaments, format_name)
+        message_id = format_messages.get(format_name)
+
+        try:
+            if message_id:
+                try:
+                    message = await channel.fetch_message(int(message_id))
+                    await message.edit(content=format_content, allowed_mentions=discord.AllowedMentions.none())
+                    link_log.debug(f"Format overview message updated for {format_name}: {message.jump_url}")
+                except discord.NotFound:
+                    message = await channel.send(format_content, allowed_mentions=discord.AllowedMentions.none())
+                    format_messages[format_name] = str(message.id)
+                    config["messages"] = format_messages
+                    _save_format_message_ids(config)
+                    link_log.debug(f"Format overview message created for {format_name}: {message.jump_url}")
+            else:
+                message = await channel.send(format_content, allowed_mentions=discord.AllowedMentions.none())
+                format_messages[format_name] = str(message.id)
+                config["messages"] = format_messages
+                _save_format_message_ids(config)
+                link_log.debug(f"Format overview message created for {format_name}: {message.jump_url}")
+        except Exception as e:
+            log.error(f"Failed to update format overview for {format_name}: {e}")
+
+
 async def use_custom_try(purpose:str, func, tournament:"SpelltableTournament"):
     try:
         await func()  # Execute the passed function
@@ -701,14 +823,14 @@ class SpelltableTournament(Serializable):
                     db.commit()
                     link_log.info(
                         f"Turnier-Sperre abgelaufen: Benutzer <@{userid}> wurde automatisch entsperrt "
-                        f"(Sperre war bis <t:{int(ban.banned_until.replace(tzinfo=timezone.utc).timestamp())}:F> gültig)."
+                        f"(Sperre war bis <t:{int(ban.banned_until.replace(tzinfo=dt_timezone.utc).timestamp())}:F> gültig)."
                     )
                     ban = None
             finally:
                 db.close()
             if ban:
                 reason_text = f"\nGrund: {ban.reason}" if ban.reason else ""
-                until_text = f"\nGültig bis: <t:{int(ban.banned_until.replace(tzinfo=timezone.utc).timestamp())}:F>" if ban.banned_until else ""
+                until_text = f"\nGültig bis: <t:{int(ban.banned_until.replace(tzinfo=dt_timezone.utc).timestamp())}:F>" if ban.banned_until else ""
                 return f"Du wurdest von der Turnier-Teilnahme gesperrt und kannst dich nicht anmelden.{reason_text}{until_text}"
 
         # Build the new state in-memory copy first, then persist to DB.
