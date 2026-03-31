@@ -430,28 +430,65 @@ def _save_format_message_ids(config: dict) -> None:
         log.error(f"Failed to save format message IDs: {e}")
 
 
-async def generate_format_overview_message(tournaments: list["SpelltableTournament"], format_name: str) -> str:
+def _build_format_overview_messages(format_name: str, lines: list[str], max_length: int = 1900) -> list[str]:
+    """Build one or more Discord messages for a format overview, each below the message limit."""
+    header = f"## 🧙‍♂️ **RR {format_name} Turnier**"
+
+    if not lines:
+        return [f"{header}\n\n_No tournaments yet for this format._"]
+
+    # Group lines into chunks first, then render chunk counters in headers.
+    groups: list[list[str]] = []
+    current_group: list[str] = []
+    # Conservative payload budget per chunk; leaves room for header + spacing.
+    payload_limit = max(200, max_length - 120)
+    current_len = 0
+
+    for line in lines:
+        line_len = len(line) + 1  # + newline
+        if current_group and current_len + line_len > payload_limit:
+            groups.append(current_group)
+            current_group = [line]
+            current_len = line_len
+        else:
+            current_group.append(line)
+            current_len += line_len
+
+    if current_group:
+        groups.append(current_group)
+
+    total = len(groups)
+    messages: list[str] = []
+    for idx, group in enumerate(groups, 1):
+        chunk_header = header if total == 1 else f"{header} ({idx}/{total})"
+        content = f"{chunk_header}\n\n" + "\n".join(group)
+        if len(content) > 2000:
+            # Last-resort truncation guard for extremely long single lines.
+            content = content[:1997] + "..."
+        messages.append(content)
+
+    return messages
+
+
+async def generate_format_overview_messages(tournaments: list["SpelltableTournament"], format_name: str) -> list[str]:
     """
     Generate an overview message for a specific tournament format.
     Lists all tournaments of that format with their winners (or TBD if not concluded).
     """
     format_tournaments = [t for t in tournaments if t.format_name == format_name]
     format_tournaments = sorted(format_tournaments, key=lambda t: t.message_id or 0)
-
-    msg = f"## 🧙‍♂️ **RR {format_name} Turnier**\n\n"
+    lines: list[str] = []
 
     if format_tournaments:
         for idx, tournament in enumerate(format_tournaments, 1):
             # Get winner if tournament is concluded
             winner_mention = "TBD"
-            winner_display = ""
             if tournament.swiss_tournament and tournament.swiss_tournament.winner:
                 winner_player = tournament.swiss_tournament.winner
                 try:
                     winner = await tournament.get_member(winner_player.player_id)
                     if winner:
                         winner_mention = winner.mention
-                        winner_display = f"({winner.display_name})"
                 except Exception:
                     pass
 
@@ -463,11 +500,9 @@ async def generate_format_overview_message(tournaments: list["SpelltableTourname
                     leading_url = f"https://discord.com/channels/{tournament.guild.id}/{tournament.channel_id}/{last_round.message_id_standings}"
 
             date_text = discord.utils.format_dt(tournament.time, "D") if tournament.time else "TBD"
-            msg += f"{date_text} - {leading_url} - {winner_mention} {winner_display}\n"
-    else:
-        msg += "_Noch keine Turniere in diesem Format._"
+            lines.append(f"{date_text} - {leading_url} - {winner_mention}")
 
-    return msg
+    return _build_format_overview_messages(format_name, lines)
 
 
 async def update_format_overviews(bot: discord.Bot, trigger_guild: discord.Guild | None = None):
@@ -497,29 +532,47 @@ async def update_format_overviews(bot: discord.Bot, trigger_guild: discord.Guild
     config = _load_format_message_ids()
     format_messages = config.get("messages", {})
 
-    # Update or create messages for each format
+    # Update or create one or more messages for each format
     for format_name in formats_in_use:
-        format_content = await generate_format_overview_message(all_tournaments, format_name)
-        message_id = format_messages.get(format_name)
+        format_contents = await generate_format_overview_messages(all_tournaments, format_name)
+        existing_entry = format_messages.get(format_name)
+        if isinstance(existing_entry, list):
+            message_ids = [str(mid) for mid in existing_entry if mid]
+        elif existing_entry:
+            message_ids = [str(existing_entry)]
+        else:
+            message_ids = []
+        new_message_ids: list[str] = []
 
         try:
-            if message_id:
-                try:
-                    message = await channel.fetch_message(int(message_id))
-                    await message.edit(content=format_content, allowed_mentions=discord.AllowedMentions.none())
-                    link_log.debug(f"Format overview message updated for {format_name}: {message.jump_url}")
-                except discord.NotFound:
-                    message = await channel.send(format_content, allowed_mentions=discord.AllowedMentions.none())
-                    format_messages[format_name] = str(message.id)
-                    config["messages"] = format_messages
-                    _save_format_message_ids(config)
+            for index, content in enumerate(format_contents):
+                if index < len(message_ids):
+                    current_id = message_ids[index]
+                    try:
+                        message = await channel.fetch_message(int(current_id))
+                        await message.edit(content=content, allowed_mentions=discord.AllowedMentions.none())
+                        new_message_ids.append(str(message.id))
+                    except discord.NotFound:
+                        message = await channel.send(content, allowed_mentions=discord.AllowedMentions.none())
+                        new_message_ids.append(str(message.id))
+                        link_log.debug(f"Format overview message recreated for {format_name}: {message.jump_url}")
+                else:
+                    message = await channel.send(content, allowed_mentions=discord.AllowedMentions.none())
+                    new_message_ids.append(str(message.id))
                     link_log.debug(f"Format overview message created for {format_name}: {message.jump_url}")
-            else:
-                message = await channel.send(format_content, allowed_mentions=discord.AllowedMentions.none())
-                format_messages[format_name] = str(message.id)
-                config["messages"] = format_messages
-                _save_format_message_ids(config)
-                link_log.debug(f"Format overview message created for {format_name}: {message.jump_url}")
+
+            # Delete extra old messages if the new chunk count is smaller.
+            for stale_id in message_ids[len(format_contents):]:
+                try:
+                    stale_message = await channel.fetch_message(int(stale_id))
+                    await stale_message.delete()
+                except discord.NotFound:
+                    pass
+
+            format_messages[format_name] = new_message_ids
+            config["messages"] = format_messages
+            config["last_updated"] = datetime.utcnow().isoformat(timespec="seconds")
+            _save_format_message_ids(config)
         except Exception as e:
             log.error(f"Failed to update format overview for {format_name}: {e}")
 
