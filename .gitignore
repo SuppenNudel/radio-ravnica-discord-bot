@@ -187,3 +187,6 @@ deploy/
 .vscode/
 web/
 tournaments.legacy/
+
+# Local runtime state
+format_overview_messages.json
