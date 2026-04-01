@@ -386,14 +386,14 @@ async def update_tournament_message(bot:discord.Bot, trigger_guild:discord.Guild
 
     if calendar_message:
         if calendar_file:
-            await calendar_message.edit(content=tourney_list_message, attachments=[], file=calendar_file)
+            await calendar_message.edit(content=tourney_list_message, attachments=[], file=calendar_file, allowed_mentions=discord.AllowedMentions.none())
         else:
-            await calendar_message.edit(content=tourney_list_message, attachments=[])
+            await calendar_message.edit(content=tourney_list_message, attachments=[], allowed_mentions=discord.AllowedMentions.none())
     else:
         if calendar_file:
-            calendar_message = await guild.get_channel(env.SPELLTABLE_CALENDAR_CHANNEL_ID).send(tourney_list_message, file=calendar_file)
+            calendar_message = await guild.get_channel(env.SPELLTABLE_CALENDAR_CHANNEL_ID).send(tourney_list_message, file=calendar_file, allowed_mentions=discord.AllowedMentions.none())
         else:
-            calendar_message = await guild.get_channel(env.SPELLTABLE_CALENDAR_CHANNEL_ID).send(tourney_list_message)
+            calendar_message = await guild.get_channel(env.SPELLTABLE_CALENDAR_CHANNEL_ID).send(tourney_list_message, allowed_mentions=discord.AllowedMentions.none())
         env.SPELLTABLE_CALENDAR_MESSAGE_ID = calendar_message.id
         env.save_to_env("SPELLTABLE_CALENDAR_MESSAGE_ID", calendar_message.id)
     link_log.debug(f"Tournament Overview Message updated: {calendar_message.jump_url}")
@@ -437,7 +437,6 @@ def _build_format_overview_messages(format_name: str, lines: list[str], max_leng
     if not lines:
         return [f"{header}\n\n_No tournaments yet for this format._"]
 
-    # Group lines into chunks first, then render chunk counters in headers.
     groups: list[list[str]] = []
     current_group: list[str] = []
     # Conservative payload budget per chunk; leaves room for header + spacing.
@@ -457,11 +456,9 @@ def _build_format_overview_messages(format_name: str, lines: list[str], max_leng
     if current_group:
         groups.append(current_group)
 
-    total = len(groups)
     messages: list[str] = []
     for idx, group in enumerate(groups, 1):
-        chunk_header = header if total == 1 else f"{header} ({idx}/{total})"
-        content = f"{chunk_header}\n\n" + "\n".join(group)
+        content = (f"{header}\n\n" if idx == 1 else "") + "\n".join(group)
         if len(content) > 2000:
             # Last-resort truncation guard for extremely long single lines.
             content = content[:1997] + "..."
@@ -489,6 +486,10 @@ async def generate_format_overview_messages(tournaments: list["SpelltableTournam
                     winner = await tournament.get_member(winner_player.player_id)
                     if winner:
                         winner_mention = winner.mention
+                        # If the winner is no longer in the guild, include a readable name fallback.
+                        if not isinstance(winner, discord.Member):
+                            winner_name = winner.global_name or winner.name
+                            winner_mention = f"{winner_mention} [{winner_name}]"
                 except Exception:
                     pass
 
@@ -500,7 +501,7 @@ async def generate_format_overview_messages(tournaments: list["SpelltableTournam
                     leading_url = f"https://discord.com/channels/{tournament.guild.id}/{tournament.channel_id}/{last_round.message_id_standings}"
 
             date_text = discord.utils.format_dt(tournament.time, "D") if tournament.time else "TBD"
-            lines.append(f"{date_text} - {leading_url} - {winner_mention}")
+            lines.append(f"{date_text} - {tournament.title} - {winner_mention} - {leading_url}")
 
     return _build_format_overview_messages(format_name, lines)
 
