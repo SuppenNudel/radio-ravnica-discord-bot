@@ -669,6 +669,10 @@ class ConfirmDropModal(discord.ui.Modal):
         if self.drop_input.value != "DROP":
             await interaction.respond("Turnier ausscheidung fehlgeschlagen", ephemeral=True)
             return
+        
+        # Defer the response to allow time for async operations
+        await interaction.response.defer(ephemeral=True)
+        
         self.player.dropped = True
         
         # update matchups, i.e. strike through dropped player
@@ -681,7 +685,7 @@ class ConfirmDropModal(discord.ui.Modal):
         message_pairings = await self.tournament.get_message(current_round.message_id_pairings)
 
         link_log.info(f"User {interaction.user.mention} dropped from tournament {message_pairings.jump_url}")
-        await interaction.response.send_message("Du wurdest aus dem Turnier entfernt", ephemeral=True)
+        await interaction.followup.send("Du wurdest aus dem Turnier entfernt", ephemeral=True)
 
 
 async def update_hall_of_fame(tournament: SpelltableTournament):
