@@ -1256,6 +1256,8 @@ class PaperEvent():
             content += f"# {self.construct_thread_title()}\n"
         if description:
             content += description
+        if url := self.fields[FieldName.URL].value:
+            content += f"\n\nWeitere Informationen: {url}"
         if not preview and self.author:
             content += f"\n\nDanke an {self.author.mention} für's Posten!"
         return content
