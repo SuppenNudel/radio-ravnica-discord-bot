@@ -2,10 +2,10 @@ ics
 pillow
 py-cord @ git+https://github.com/Pycord-Development/pycord
 ezcord
-scrapetube
 notion_client==2.2.1
 googlemaps
 beautifulsoup4
+requests
 python-dateutil
 dateparser
 atproto

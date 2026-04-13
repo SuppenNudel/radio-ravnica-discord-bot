@@ -30,3 +30,11 @@
 
 ### Youtube Benachrichtigung
     - wenn Robin ein neues Video hochgeladen hat
+
+Technisch nutzt der Bot dafuer den oeffentlichen YouTube-RSS-Feed des Kanals. Optional kann die Kanal-ID direkt ueber `YOUTUBE_CHANNEL_GAMERII_ID` gesetzt werden; wenn sie fehlt, loest der Bot sie einmalig ueber die öffentliche `@Handle`-Seite auf.
+
+Nur die YouTube-Cog-Tests laufen mit:
+
+```bash
+./venv/bin/python -m unittest tests.test_youtube_cog
+```
