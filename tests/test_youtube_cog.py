@@ -1,9 +1,15 @@
 import os
+import sys
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import requests
+
+repo_root = Path(__file__).resolve().parents[1]
+if str(repo_root) not in sys.path:
+    sys.path.insert(0, str(repo_root))
 
 from cogs.feed.youtube import ContentType, Youtube, YoutubeChannel
 
@@ -12,6 +18,7 @@ class DummyResponse:
     def __init__(self, text: str, status_code: int = 200):
         self.text = text
         self.status_code = status_code
+        self.headers = {}
 
     def raise_for_status(self):
         if self.status_code >= 400:
@@ -76,10 +83,11 @@ class YoutubeCogTestCase(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(self.cog, "ensure_channel_id", AsyncMock(return_value=True)), \
              patch.object(self.cog, "fetch_recent_videos_from_feed", side_effect=[Exception("Timeout"), expected_contents]) as fetch_latest, \
-             patch("cogs.feed.youtube.asyncio.sleep", new=AsyncMock()) as sleep:
-            contents, fetch_failed = await self.cog.get_latest_content(channel, ContentType.VIDEOS)
+             patch("discord_bot_shared.youtube_feed.asyncio.sleep", new=AsyncMock()) as sleep:
+            contents, fetch_failed, not_modified = await self.cog.get_latest_content(channel, ContentType.VIDEOS)
 
         self.assertFalse(fetch_failed)
+        self.assertFalse(not_modified)
         self.assertEqual(contents, expected_contents)
         self.assertEqual(fetch_latest.call_count, 2)
         sleep.assert_awaited_once_with(1)
@@ -89,10 +97,22 @@ class YoutubeCogTestCase(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(self.cog, "ensure_channel_id", AsyncMock(return_value=True)), \
              patch.object(self.cog, "fetch_recent_videos_from_feed", side_effect=Exception("bad xml")):
-            contents, fetch_failed = await self.cog.get_latest_content(channel, ContentType.VIDEOS)
+            contents, fetch_failed, not_modified = await self.cog.get_latest_content(channel, ContentType.VIDEOS)
 
         self.assertIsNone(contents)
         self.assertTrue(fetch_failed)
+        self.assertFalse(not_modified)
+
+    async def test_get_latest_content_marks_not_modified(self):
+        channel = YoutubeChannel("GameRii", 99, "UC123")
+
+        with patch.object(self.cog, "ensure_channel_id", AsyncMock(return_value=True)), \
+             patch.object(self.cog, "fetch_recent_videos_from_feed", return_value=None):
+            contents, fetch_failed, not_modified = await self.cog.get_latest_content(channel, ContentType.VIDEOS)
+
+        self.assertIsNone(contents)
+        self.assertFalse(fetch_failed)
+        self.assertTrue(not_modified)
 
     async def test_check_channels_posts_all_unseen_videos_in_order(self):
         channel = self.cog.channels[0]
@@ -105,7 +125,7 @@ class YoutubeCogTestCase(unittest.IsolatedAsyncioTestCase):
             {"videoId": "old123", "title": "Old", "published": "2026-04-13T11:00:00+00:00"},
         ]
 
-        with patch.object(self.cog, "get_latest_content", AsyncMock(return_value=(feed_contents, False))), \
+        with patch.object(self.cog, "get_latest_content", AsyncMock(return_value=(feed_contents, False, False))), \
              patch.object(self.cog, "post_video", AsyncMock()) as post_video:
             await Youtube.check_channels.coro(self.cog)
 
@@ -123,7 +143,7 @@ class YoutubeCogTestCase(unittest.IsolatedAsyncioTestCase):
             {"videoId": "older123", "title": "Older", "published": "2026-04-13T11:00:00+00:00"},
         ]
 
-        with patch.object(self.cog, "get_latest_content", AsyncMock(return_value=(feed_contents, False))), \
+        with patch.object(self.cog, "get_latest_content", AsyncMock(return_value=(feed_contents, False, False))), \
              patch.object(self.cog, "post_video", AsyncMock()) as post_video:
             await Youtube.check_channels.coro(self.cog)
 
@@ -140,7 +160,7 @@ class YoutubeCogParsingTestCase(unittest.TestCase):
     def test_resolve_channel_id_returns_cached_id_without_request(self):
         channel = YoutubeChannel("GameRii", 99, "UC_CACHED")
 
-        with patch("cogs.feed.youtube.requests.get") as requests_get:
+        with patch("discord_bot_shared.youtube_feed.requests.get") as requests_get:
             channel_id = self.cog.resolve_channel_id(channel)
 
         self.assertEqual(channel_id, "UC_CACHED")
@@ -150,7 +170,7 @@ class YoutubeCogParsingTestCase(unittest.TestCase):
         channel = YoutubeChannel("GameRii", 99)
         response = DummyResponse('<html>"channelId":"UCabc123-def"</html>')
 
-        with patch("cogs.feed.youtube.requests.get", return_value=response) as requests_get:
+        with patch("discord_bot_shared.youtube_feed.requests.get", return_value=response) as requests_get:
             channel_id = self.cog.resolve_channel_id(channel)
 
         self.assertEqual(channel_id, "UCabc123-def")
@@ -164,11 +184,13 @@ class YoutubeCogParsingTestCase(unittest.TestCase):
             <feed xmlns=\"http://www.w3.org/2005/Atom\" xmlns:yt=\"http://www.youtube.com/xml/schemas/2015\">
                 <entry>
                     <yt:videoId>video456</yt:videoId>
+                    <link rel=\"alternate\" href=\"https://www.youtube.com/watch?v=video456\" />
                     <title>Second Upload</title>
                     <published>2026-04-13T12:35:56+00:00</published>
                 </entry>
                 <entry>
                     <yt:videoId>video123</yt:videoId>
+                    <link rel=\"alternate\" href=\"https://www.youtube.com/watch?v=video123\" />
                     <title>Fresh Upload</title>
                     <published>2026-04-13T12:34:56+00:00</published>
                 </entry>
@@ -176,7 +198,7 @@ class YoutubeCogParsingTestCase(unittest.TestCase):
             """
         )
 
-        with patch("cogs.feed.youtube.requests.get", return_value=response):
+        with patch("discord_bot_shared.youtube_feed.requests.get", return_value=response):
             recent = self.cog.fetch_recent_videos_from_feed(channel)
 
         self.assertEqual(
@@ -199,10 +221,56 @@ class YoutubeCogParsingTestCase(unittest.TestCase):
         channel = YoutubeChannel("GameRii", 99, "UCabc123")
         response = DummyResponse('<feed xmlns="http://www.w3.org/2005/Atom" xmlns:yt="http://www.youtube.com/xml/schemas/2015"></feed>')
 
-        with patch("cogs.feed.youtube.requests.get", return_value=response):
+        with patch("discord_bot_shared.youtube_feed.requests.get", return_value=response):
             recent = self.cog.fetch_recent_videos_from_feed(channel)
 
         self.assertEqual(recent, [])
+
+    def test_fetch_recent_videos_from_feed_returns_none_on_not_modified(self):
+        channel = YoutubeChannel("GameRii", 99, "UCabc123")
+        channel.feed_etag = '"etag-1"'
+        response = DummyResponse("", status_code=304)
+
+        with patch("discord_bot_shared.youtube_feed.requests.get", return_value=response) as requests_get:
+            recent = self.cog.fetch_recent_videos_from_feed(channel)
+
+        self.assertIsNone(recent)
+        self.assertEqual(requests_get.call_args.kwargs["headers"]["If-None-Match"], '"etag-1"')
+
+    def test_fetch_recent_videos_from_feed_skips_shorts(self):
+        channel = YoutubeChannel("GameRii", 99, "UCabc123")
+        response = DummyResponse(
+            """
+            <feed xmlns="http://www.w3.org/2005/Atom" xmlns:yt="http://www.youtube.com/xml/schemas/2015">
+                <entry>
+                    <yt:videoId>short123</yt:videoId>
+                    <link rel="alternate" href="https://www.youtube.com/shorts/short123" />
+                    <title>Short</title>
+                    <published>2026-04-13T12:35:56+00:00</published>
+                </entry>
+                <entry>
+                    <yt:videoId>video123</yt:videoId>
+                    <link rel="alternate" href="https://www.youtube.com/watch?v=video123" />
+                    <title>Video</title>
+                    <published>2026-04-13T12:34:56+00:00</published>
+                </entry>
+            </feed>
+            """
+        )
+
+        with patch("discord_bot_shared.youtube_feed.requests.get", return_value=response):
+            recent = self.cog.fetch_recent_videos_from_feed(channel)
+
+        self.assertEqual(
+            recent,
+            [
+                {
+                    "videoId": "video123",
+                    "title": "Video",
+                    "published": "2026-04-13T12:34:56+00:00",
+                }
+            ],
+        )
 
 
 if __name__ == "__main__":
