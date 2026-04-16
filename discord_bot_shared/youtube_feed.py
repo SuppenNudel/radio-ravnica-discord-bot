@@ -249,7 +249,7 @@ class BaseYoutube(commands.Cog):
         channel.latest_video = newest_content
         channel.content[ContentType.VIDEOS] = newest_content
 
-    @tasks.loop(minutes=15)
+    @tasks.loop(minutes=10)
     async def check_channels(self):
         for yt_channel in self.channels:
             recent_contents, fetch_failed, not_modified = await self.get_latest_content(yt_channel)
