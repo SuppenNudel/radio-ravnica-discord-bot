@@ -699,7 +699,7 @@ class SpelltableTournamentManager(Cog):
                     submit_deck_view = await SubmitDeckView.create(tournament)
                     total_rounds = tournament.swiss_tournament.rounds_count
                     await tournament.update_metagame(
-                        include_embed=False,
+                        include_embed=True,
                         content=f"## 🏆 Finale Platzierung nach {total_rounds} Runden",
                         view=submit_deck_view,
                     )

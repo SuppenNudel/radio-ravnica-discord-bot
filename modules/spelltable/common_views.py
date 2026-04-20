@@ -188,7 +188,7 @@ class SubmitDeckModal(discord.ui.DesignerModal):
         
         player.deck = swiss_mtg.Deck.deserialize({"link": decklist, "archetype": archetype})
         await self.tournament.save_tournament_swiss()
-        await self.tournament.update_metagame(include_embed=False)
+        await self.tournament.update_metagame(include_embed=True)
         await interaction.followup.send("Deine Deckliste wurde erfolgreich eingereicht!", ephemeral=True)
 
 class FinishTournamentView(discord.ui.View):
@@ -250,7 +250,7 @@ class FinishTournamentView(discord.ui.View):
                 submit_deck_view = await SubmitDeckView.create(self.tournament)
                 total_rounds = self.tournament.swiss_tournament.rounds_count
                 await self.tournament.update_metagame(
-                    include_embed=False,
+                    include_embed=True,
                     content=f"## 🏆 Finale Platzierung nach {total_rounds} Runden",
                     view=submit_deck_view,
                 )
