@@ -1,6 +1,6 @@
 ics
 pillow
-py-cord @ git+https://github.com/Pycord-Development/pycord
+py-cord==2.8.0
 ezcord
 notion_client==2.2.1
 googlemaps
