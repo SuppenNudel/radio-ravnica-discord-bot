@@ -1,5 +1,145 @@
 # Changelog
 
+## 20. April 2026
+
+### Geändert
+
+- In den finalen Turnier-Standings werden Deck-Links angezeigt.
+
+## 16. April 2026
+
+### Geändert
+
+- Der YouTube-Feed wurde auf API v3 umgestellt.
+- Das Polling läuft nun im 10-Minuten-Takt und berücksichtigt einen `content_type`-Wert.
+
+## 13. April 2026
+
+### Hinzugefügt
+
+- Bei **📅paper-turniere**-Posts kann nun eine Event-URL mit angegeben werden.
+
+## 31. März 2026
+
+### Hinzugefügt
+
+- Eine Turnierübersicht nach Formaten wurde ergänzt.
+
+### Behoben
+
+- Übersichtsnachrichten werden aufgeteilt, um Discord-Längenlimits zuverlässig einzuhalten.
+
+## 29. März 2026
+
+### Hinzugefügt
+
+- Bann-Befehl für SpellTable-Turniere inklusive Durchsetzung hinzugefügt.
+
+### Geändert
+
+- Gebannte Nutzer werden aus laufenden Anmeldelisten entfernt.
+
+## 27. März 2026
+
+### Hinzugefügt
+
+- Im Turnier-Editor kann der Titel/Name nachträglich bearbeitet werden.
+- Bei erhöhter Teilnehmerzahl werden Personen auf der Warteliste automatisch nachgezogen.
+- Hall-of-Fame-Filter nutzen deutsche Slash-Optionen.
+
+### Geändert
+
+- Das Turnierformat wird automatisch aus Kanal oder Kategorie erkannt.
+- Hall of Fame liest Daten direkt aus `tournaments.db`.
+
+### Behoben
+
+- Die Umbenennung von Threads bei Titeländerungen wurde robuster gemacht.
+- Das Flackern der Standings-Nachricht beim Starten/Abschließen wurde behoben.
+
+## 20. März 2026
+
+### Hinzugefügt
+
+- Variable Teilnahmegebühren (Bereiche) für **📅paper-turniere**.
+- Slash-Command für Turnier-User-Sync hinzugefügt.
+
+### Geändert
+
+- SpellTable-Turniere wurden auf SQLite-basierte Persistenz umgestellt.
+- Legacy-Turniere aus Textkanälen werden weiterhin unterstützt.
+
+### Behoben
+
+- Match-Validierung im Swiss-Format liefert klarere Fehlermeldungen.
+- Fehler beim Bearbeiten fremder Nachrichten (`Forbidden`) werden abgefangen.
+
+## 2. März 2026
+
+### Hinzugefügt
+
+- Hall-of-Fame-System für Turniersiege und Teilnehmerstatistiken.
+- Infrastruktur für einen Paper-Events-Kalender ergänzt.
+
+### Geändert
+
+- Turnieraktionen sind stärker auf Organisatoren beschränkt.
+
+### Behoben
+
+- Race Condition beim Starten neuer Runden behoben.
+- Fehler bei archivierten Threads beim Aktualisieren von Nachrichten behoben.
+
+## 19. November 2025
+
+### Geändert
+
+- Beim Start wird kein Guild-Chunking mehr erzwungen.
+
+## 13. November 2025
+
+### Behoben
+
+- Hintergrund-Loops werden nur gestartet, wenn sie nicht bereits laufen.
+
+## 12. November 2025
+
+### Geändert
+
+- Globaler Instagram-Cache eingeführt.
+
+## 10. November 2025
+
+### Geändert
+
+- Instagram-Funktionalität reaktiviert und Logging bei der Initialisierung verbessert.
+
+## 27. Oktober 2025
+
+### Hinzugefügt
+
+- Spieler mit offenen Matches können automatisch erinnert werden.
+
+### Geändert
+
+- Turnierorganisator, Admins und Moderatoren können Ergebnisse setzen bzw. überschreiben.
+
+## 24. Oktober 2025
+
+### Hinzugefügt
+
+- Deck-Einreichung ist auch nach abgeschlossenem Turnier möglich.
+
+### Behoben
+
+- Korrekturen am Turnierkalender sowie an der Behandlung bereits abgeschlossener oder abgebrochener Turniere.
+
+## 13. Oktober 2025
+
+### Hinzugefügt
+
+- Mod-Ticket-Funktion implementiert.
+
 ## 26. September 2025
 
 ### Geändert
