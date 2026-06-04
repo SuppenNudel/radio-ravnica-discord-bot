@@ -20,10 +20,10 @@ def _score_select_options(default_score: int) -> list[discord.SelectOption]:
     ]
 
 
-def _report_mode_options() -> list[discord.SelectOption]:
+def _report_mode_options() -> list[discord.RadioGroupOption]:
     return [
-        discord.SelectOption(label="Gespielt", value="played", default=True),
-        discord.SelectOption(label="Keinen Termin gefunden", value="no_time_found"),
+        discord.RadioGroupOption(label="Gespielt / Aufgabe", value="played", default=True),
+        discord.RadioGroupOption(label="Keinen gemeinsamen Termin gefunden", value="no_time_found"),
     ]
 
 
@@ -38,15 +38,15 @@ def _match_score_defaults(match: swiss_mtg.Match) -> tuple[int, int, int]:
 
 
 def _selected_match_result(
-    report_mode_select: discord.ui.StringSelect,
+    report_mode_select: discord.ui.RadioGroup,
     p1_score_select: discord.ui.StringSelect,
     p2_score_select: discord.ui.StringSelect,
     draw_score_select: discord.ui.StringSelect,
 ) -> tuple[int, int, int]:
-    if not report_mode_select.values:
+    if not report_mode_select.value:
         raise ValueError("Bitte wähle aus, ob gespielt wurde oder kein Termin gefunden wurde.")
 
-    if report_mode_select.values[0] == "no_time_found":
+    if report_mode_select.value == "no_time_found":
         return 1, 1, 1
 
     if not p1_score_select.values or not p2_score_select.values or not draw_score_select.values:
@@ -373,17 +373,14 @@ class ReportMatchAdminModal(discord.ui.DesignerModal):
 
         default_p1, default_p2, default_draws = _match_score_defaults(match)
 
-        self.report_mode_select = discord.ui.StringSelect(
-            placeholder="Bitte auswählen",
+        self.report_mode_select = discord.ui.RadioGroup(
             options=_report_mode_options(),
-            min_values=1,
-            max_values=1,
             required=True
         )
         self.add_item(discord.ui.Label(
             "Status",
             self.report_mode_select,
-            description="Gespielt meldet das ausgewählte Ergebnis.\nKeinen Termin gefunden meldet automatisch 1-1-1."
+            description="Gespielt/Aufgabe: eingetragenes Ergebnis.\nKein Termin: automatisch 1-1-1."
         ))
 
         self.p1_score_select = discord.ui.StringSelect(
@@ -469,17 +466,14 @@ class ReportMatchModal(discord.ui.DesignerModal):
 
         default_p1, default_p2, default_draws = _match_score_defaults(match)
 
-        self.report_mode_select = discord.ui.StringSelect(
-            placeholder="Bitte auswählen",
+        self.report_mode_select = discord.ui.RadioGroup(
             options=_report_mode_options(),
-            min_values=1,
-            max_values=1,
             required=True
         )
         self.add_item(discord.ui.Label(
             "Status",
             self.report_mode_select,
-            description="Gespielt meldet das ausgewählte Ergebnis. Keinen Termin gefunden meldet automatisch 1-1-1."
+            description="Gespielt/Aufgabe: eingetragenes Ergebnis.\nKein Termin: automatisch 1-1-1."
         ))
 
         self.p1_score_select = discord.ui.StringSelect(
@@ -533,12 +527,13 @@ class ReportMatchModal(discord.ui.DesignerModal):
             p1_mention, p2_mention, p1_name, p2_name = await _resolve_match_participants(self.tournament, self.match)
 
             if self.message_label.item.value:
-                message_to_opponend = f"{interaction.user.mention} lässt ausrichten:\n> {self.message_label.item.value}"  # type: ignore
-            elif self.report_mode_select.values and self.report_mode_select.values[0] == "no_time_found":
-                message_to_opponend = "Keinen Termin gefunden"
+                message_to_opponent = f"{interaction.user.mention} lässt ausrichten:\n> {self.message_label.item.value}"  # type: ignore
+            elif self.report_mode_select.value == "no_time_found":
+                message_to_opponent = "Keinen Termin gefunden"
             else:
-                message_to_opponend = "GGs!"
-            gg_message = await interaction.followup.send(f"{p1_mention} {score1} - {score2} {p2_mention}{f' ({draw_score} Unentschieden)' if draw_score else ''}\n{message_to_opponend}", wait=True)
+                message_to_opponent = "GGs!"
+
+            gg_message = await interaction.followup.send(f"{p1_mention} {score1} - {score2} {p2_mention}{f' ({draw_score} Unentschieden)' if draw_score else ''}\n{message_to_opponent}", wait=True)
 
             if env.DEBUG:
                 swiss_mtg.simulate_remaining_matches(self.tournament.swiss_tournament)
@@ -1445,3 +1440,4 @@ class StartNextRoundView(discord.ui.View):
                     pass
 
         await use_custom_try("Nächste Runde Erstellen", do_the_thing, self.tournament)
+
