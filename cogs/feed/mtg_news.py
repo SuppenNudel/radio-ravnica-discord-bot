@@ -62,7 +62,7 @@ class MtgNews(Cog):
             latest_articles = check_website.request_website(obj["url"], "article", SELECTORS)
             channel:discord.TextChannel = await discord.utils.get_or_fetch(self.bot, "channel", obj["channel_id"])
             if latest_articles is None:
-                log.error("Failed to fetch latest articles from Magic News DE")
+                log.error("Failed to fetch latest articles from Magic News %s (url=%s)", lang, obj["url"])
                 return
 
             # On first run, just save all articles and skip posting

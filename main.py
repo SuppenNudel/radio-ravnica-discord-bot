@@ -80,6 +80,40 @@ def install_safe_message_edit_patch() -> None:
 
 install_safe_message_edit_patch()
 
+
+def _is_unknown_interaction(error: Exception) -> bool:
+    return isinstance(error, discord.NotFound) and getattr(error, "code", None) == 10062
+
+
+def install_unknown_interaction_suppressor() -> None:
+    """Silently drop Unknown Interaction (10062) errors from modals, views, and slash commands.
+
+    These occur when Discord's 3-second acknowledgement window has already expired and are
+    unrecoverable — there is nothing meaningful the bot can do in response.
+    """
+    original_modal_on_error = discord.ui.Modal.on_error
+
+    async def safe_modal_on_error(self, error: Exception, interaction: discord.Interaction) -> None:
+        if _is_unknown_interaction(error):
+            log.debug("Suppressed Unknown Interaction (10062) in modal %s", self.__class__.__name__)
+            return
+        await original_modal_on_error(self, error, interaction)
+
+    discord.ui.Modal.on_error = safe_modal_on_error  # type: ignore[method-assign]
+
+    original_view_on_error = discord.ui.View.on_error
+
+    async def safe_view_on_error(self, error: Exception, item, interaction: discord.Interaction) -> None:
+        if _is_unknown_interaction(error):
+            log.debug("Suppressed Unknown Interaction (10062) in view %s item %s", self.__class__.__name__, getattr(item, "__class__", item))
+            return
+        await original_view_on_error(self, error, item, interaction)
+
+    discord.ui.View.on_error = safe_view_on_error  # type: ignore[method-assign]
+
+
+install_unknown_interaction_suppressor()
+
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
@@ -94,6 +128,14 @@ bot:Bot = Bot(
     debug_guilds=debug_guilds
 )
 # bot.add_help_command()
+
+@bot.event
+async def on_application_command_error(ctx, error: Exception):
+    if _is_unknown_interaction(error):
+        log.debug("Suppressed Unknown Interaction (10062) for command %s", getattr(ctx, "command", None))
+        return
+    raise error
+
 
 @bot.event
 async def on_ready():

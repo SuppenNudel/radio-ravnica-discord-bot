@@ -78,7 +78,7 @@ class PaperEventsStatusMonitor(Cog):
         paper_events_db.init_db(conn)
         rows = conn.execute(
             """
-            SELECT thread_id, start_at, end_at
+            SELECT thread_id, start_at, end_at, is_recurring
             FROM paper_events
             WHERE thread_id IS NOT NULL
                             AND server_id = ?
@@ -117,7 +117,8 @@ class PaperEventsStatusMonitor(Cog):
             if not event_start:
                 continue
 
-            await schedule_event_timers(self.bot, self.guild, thread_id, event_start, event_end)
+            is_recurring = bool(int(row["is_recurring"] or 0))
+            await schedule_event_timers(self.bot, self.guild, thread_id, event_start, event_end, is_recurring=is_recurring)
 
     async def _delete_event_entry(self, thread_id: int, reason: str) -> None:
         conn = paper_events_db.connect()
@@ -549,7 +550,7 @@ class PaperEventsStatusMonitor(Cog):
             conn.commit()
             conn.close()
 
-            await schedule_event_timers(self.bot, self.guild, thread.id, next_start, next_end)
+            await schedule_event_timers(self.bot, self.guild, thread.id, next_start, next_end, is_recurring=True)
             await update_paper_events_calendar(self.bot, self.guild)
 
             log.info(f"Created next recurring event for thread {thread_id}: new thread {thread.id}")
@@ -590,7 +591,7 @@ class PaperEventsStatusMonitor(Cog):
                 del _active_timers[thread_id]
 
 
-async def schedule_event_timers(bot: Bot, guild: discord.Guild, thread_id: int, event_start: datetime, event_end: datetime | None):
+async def schedule_event_timers(bot: Bot, guild: discord.Guild, thread_id: int, event_start: datetime, event_end: datetime | None, is_recurring: bool = False):
     """
     Schedule timers to archive and delete event threads at appropriate times.
     Called when an event is created or on bot startup.
@@ -615,7 +616,8 @@ async def schedule_event_timers(bot: Bot, guild: discord.Guild, thread_id: int, 
     
     # Calculate time until archive
     archive_time = date_to_compare
-    delete_time = date_to_compare + timedelta(days=30)
+    delete_days = 7 if is_recurring else 30
+    delete_time = date_to_compare + timedelta(days=delete_days)
     
     # If event already ended more than 30 days ago, delete immediately
     if delete_time <= now:

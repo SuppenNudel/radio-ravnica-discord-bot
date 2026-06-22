@@ -159,7 +159,7 @@ class InstagramMonitor(commands.Cog):
                         await self.post_content(ig_channel, post)
                         content_cache.append(post['id'])
             except Exception as e:
-                log.error(f"Error checking Instagram channel {ig_channel.name}: {e}")
+                log.error(f"Error checking Instagram channel {ig_channel.name}: {e}", exc_info=True)
 
 def setup(bot:Bot):
     bot.add_cog(InstagramMonitor(bot))

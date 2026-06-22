@@ -2,6 +2,19 @@ import os
 from apify_client import ApifyClient
 import time
 
+
+def _default_dataset_id(run) -> str:
+    dataset_id = getattr(run, "default_dataset_id", None)
+    if dataset_id:
+        return dataset_id
+
+    if isinstance(run, dict):
+        dataset_id = run.get("defaultDatasetId") or run.get("default_dataset_id")
+        if dataset_id:
+            return dataset_id
+
+    raise ValueError("Apify actor run did not provide a default dataset id")
+
 def get_post_by_id(id: str, apify_token: str = None) -> str:
     if apify_token is None:
         raise ValueError("Apify API token must be provided")
@@ -17,7 +30,7 @@ def get_post_by_id(id: str, apify_token: str = None) -> str:
 
     time.sleep(5)
 
-    dataset_items = client.dataset(run["defaultDatasetId"]).list_items().items
+    dataset_items = client.dataset(_default_dataset_id(run)).list_items().items
 
     if not dataset_items:
         raise ValueError(f"No post found for ID: {id}")
@@ -73,7 +86,7 @@ def get_latest_instagram_posts(profile_username: str, max_posts: int = 5, apify_
     time.sleep(5)
 
     # Fetch the results (this automatically fetches dataset items)
-    dataset_items = client.dataset(run["defaultDatasetId"]).list_items().items
+    dataset_items = client.dataset(_default_dataset_id(run)).list_items().items
 
     # Return structured post data
     return dataset_items

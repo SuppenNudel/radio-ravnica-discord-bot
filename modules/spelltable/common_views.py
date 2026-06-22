@@ -550,7 +550,16 @@ class ReportMatchModal(discord.ui.DesignerModal):
             else:
                 await interaction.respond(f"Ungültiges Match-Ergebnis: {e}", ephemeral=True)
         except Exception:
-            link_log.exception("[player-report] Unexpected error while submitting match result")
+            p1_id = self.match.player1.player_id if self.match.player1 else "?"
+            p2_id = self.match.player2.player_id if self.match.player2 else "?"
+            link_log.exception(
+                "[player-report] Unexpected error while submitting match result: "
+                "tournament='%s' round=%s match=%s vs %s",
+                self.tournament.title,
+                getattr(self.round, 'round_number', '?'),
+                p1_id,
+                p2_id,
+            )
             if interaction.response.is_done():
                 await interaction.followup.send("Beim Übermitteln deines Ergebnisses ist ein Fehler aufgetreten.", ephemeral=True)
             else:
@@ -1109,7 +1118,12 @@ class ReportMatchView(discord.ui.View):
             p2_name = self.player_names.get(the_match.player2.player_id, f"Player({the_match.player2.player_id})")
             await interaction.response.send_modal(ReportMatchModal(self.tournament, self.round, the_match, p1_name, p2_name))
         except Exception:
-            link_log.exception("[player-report] Failed to open report modal")
+            link_log.exception(
+                "[player-report] Failed to open report modal: tournament='%s' user=%s (%s)",
+                self.tournament.title,
+                interaction.user.id,
+                interaction.user.display_name,
+            )
             try:
                 if interaction.response.is_done():
                     await interaction.followup.send("Beim Öffnen des Ergebnis-Dialogs ist ein Fehler aufgetreten.", ephemeral=True)
@@ -1345,21 +1359,20 @@ class StartNextRoundView(discord.ui.View):
     
     @discord.ui.button(label="Nächste Runde", style=discord.ButtonStyle.success, emoji="➡️")
     async def next_round_button(self, button: discord.ui.Button, interaction: discord.Interaction):
+        # Check permission immediately
+        if interaction.user.id != self.tournament.organizer_id:
+            await interaction.response.send_message("Nur der Turnier-Organisator darf dies tun.", ephemeral=True)
+            return
+
+        # Acknowledge interaction immediately to avoid timeout during prep work
+        try:
+            await interaction.response.defer(ephemeral=True)
+        except discord.NotFound:
+            link_log.warning("[next-round] Interaction expired before defer; aborting next-round start")
+            return
+
         async def do_the_thing():
             progress_message = None
-            # check if the user even is allowed to start the next round
-            # only Organizer
-            if interaction.user.id != self.tournament.organizer_id:
-                await interaction.respond("Nur der Turnier-Organisator darf dies tun.", ephemeral=True)
-                return
-
-            # Acknowledge interaction immediately to avoid timeout during prep work
-            try:
-                await interaction.response.defer(ephemeral=True)
-            except discord.NotFound:
-                link_log.warning("[next-round] Interaction expired before defer; aborting next-round start")
-                return
-
             if interaction.message:
                 try:
                     await interaction.message.edit(view=None)
