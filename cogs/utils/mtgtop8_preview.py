@@ -14,6 +14,11 @@ import io
 
 MTGTOP8_URL_REGEX = r"https?://[w]{0,3}\.?mtgtop8\.com/event\?(?:[^ ]*?&)?d=\d+(?:&[^ ]*)?"
 
+SCRYFALL_HEADERS = {
+    "User-Agent": "rr-discord-bot/1.0 (+discord MTGTop8 preview)",
+    "Accept": "application/json;q=0.9,*/*;q=0.8",
+}
+
 # Enum for card groups
 class CardGroup(Enum):
     COMMANDER = "COMMANDER"
@@ -45,7 +50,7 @@ class Card:
         if self.image_url:
             return self.image_url
         search_url = f"https://api.scryfall.com/cards/search?q=!\"{self.name}\" game:paper"
-        response = requests.get(search_url)
+        response = requests.get(search_url, headers=SCRYFALL_HEADERS, timeout=10)
         if response.status_code == 200:
             data = response.json()
             data = data['data'][0]
@@ -85,57 +90,133 @@ def shrink_image_if_needed(image_path, output_path, max_size_mb=10):
 async def request_scryfall_card_images(deck_list: list[Card]):
     IMAGE_TYPE = "border_crop"
 
-    # Replace all "/" in card names with "//"
-    for card in deck_list:
-        card.name = card.name.replace("/", "//")
+    def card_name_variants(name: str) -> list[str]:
+        raw = (name or "").strip()
+        if not raw:
+            return []
 
-    # Prepare identifiers, including names before "//" for split cards
+        variants = [raw]
+
+        # Normalize split card separators for Scryfall exact-name matching.
+        if "//" in raw and " // " not in raw:
+            variants.append(raw.replace("//", " // "))
+        if " / " in raw:
+            variants.append(raw.replace(" / ", " // "))
+
+        split_sep = " // " if " // " in raw else None
+        if not split_sep and " / " in raw:
+            split_sep = " / "
+        if split_sep:
+            variants.append(raw.split(split_sep)[0].strip())
+
+        # Preserve order while removing duplicates.
+        deduped = []
+        seen = set()
+        for v in variants:
+            if v and v not in seen:
+                deduped.append(v)
+                seen.add(v)
+        return deduped
+
+    def extract_image_url(card_data: dict):
+        if "image_uris" in card_data:
+            return card_data["image_uris"].get(IMAGE_TYPE) or card_data["image_uris"].get("large")
+        if "card_faces" in card_data and card_data["card_faces"]:
+            first_face = card_data["card_faces"][0]
+            if "image_uris" in first_face:
+                return first_face["image_uris"].get(IMAGE_TYPE) or first_face["image_uris"].get("large")
+        return None
+
+    # Prepare identifiers (with normalized split-card variants)
     identifiers = []
+    seen_names = set()
     for card in deck_list:
-        identifiers.append({"name": card.name})
-        if "//" in card.name:
-            front_name = card.name.split(" // ")[0].strip()
-            if not any(iden["name"] == front_name for iden in identifiers):
-                identifiers.append({"name": front_name})
+        for variant in card_name_variants(card.name):
+            if variant not in seen_names:
+                identifiers.append({"name": variant})
+                seen_names.add(variant)
+
+    # Map original card names to possible lookup variants for assignment later.
+    original_to_variants = {
+        card.name: card_name_variants(card.name)
+        for card in deck_list
+    }
 
     # Split identifiers into batches of 75 cards (Scryfall API limit)
     batch_size = 75
+    name_to_url = {}
     for i in range(0, len(identifiers), batch_size):
         batch = identifiers[i:i+batch_size]
-        response = requests.post(
-            "https://api.scryfall.com/cards/collection",
-            json={"identifiers": batch},
-            headers={"Content-Type": "application/json"}
-        )
-        if response.status_code == 200:
-            data = response.json()
-            if data.get("not_found"):
-                print(f"WARNING: Cards not found: {data['not_found']}")
-            cards_data = data.get("data", [])
-            # Map card names to image URLs
-            name_to_url = {}
-            for card_data in cards_data:
-                image_url = None
-                if "image_uris" in card_data:
-                    image_url = card_data["image_uris"].get(IMAGE_TYPE) or card_data["image_uris"].get("large")
-                elif "card_faces" in card_data:
-                    image_url = card_data["card_faces"][0]["image_uris"].get(IMAGE_TYPE) or card_data["card_faces"][0]["image_uris"].get("large")
-                if image_url:
-                    name_to_url[card_data["name"]] = image_url
-                    if "//" in card_data["name"]:
-                        name_to_url[card_data["name"].split(" // ")[0].strip()] = image_url
-                else:
-                    log.error(f"No image found for {card_data['name']} in Scryfall response")
-            # Assign image_url to each Card in the deck_list
-            for card in deck_list:
-                if card.name in name_to_url:
-                    card.image_url = name_to_url[card.name]
-                elif "//" in card.name:
-                    front_name = card.name.split(" // ")[0].strip()
-                    if front_name in name_to_url:
-                        card.image_url = name_to_url[front_name]
+        try:
+            response = requests.post(
+                "https://api.scryfall.com/cards/collection",
+                json={"identifiers": batch},
+                headers={**SCRYFALL_HEADERS, "Content-Type": "application/json"},
+                timeout=10,
+            )
+        except Exception as exc:
+            log.error(f"Failed to fetch card images from Scryfall collection API: {exc}")
+            continue
+
+        if response.status_code != 200:
+            log.error(
+                f"Failed to fetch card images from Scryfall: {response.status_code} - "
+                f"{response.text[:300]}"
+            )
+            continue
+
+        data = response.json()
+        if data.get("not_found"):
+            print(f"WARNING: Cards not found: {data['not_found']}")
+        cards_data = data.get("data", [])
+        for card_data in cards_data:
+            image_url = extract_image_url(card_data)
+            if image_url:
+                name = card_data.get("name")
+                if name:
+                    name_to_url[name] = image_url
+                    if " // " in name:
+                        name_to_url[name.split(" // ")[0].strip()] = image_url
+            else:
+                log.error(f"No image found for {card_data.get('name', 'unknown card')} in Scryfall response")
+
+    # Assign from collection results first.
+    unresolved_cards = []
+    for card in deck_list:
+        variants = original_to_variants.get(card.name, [card.name])
+        matched_url = next((name_to_url[v] for v in variants if v in name_to_url), None)
+        if matched_url:
+            card.image_url = matched_url
         else:
-            log.error(f"Failed to fetch card images from Scryfall: {response.status_code}")
+            unresolved_cards.append(card)
+
+    # Fallback for unresolved cards via Scryfall named endpoint.
+    for card in unresolved_cards:
+        found = False
+        for variant in original_to_variants.get(card.name, [card.name]):
+            try:
+                response = requests.get(
+                    "https://api.scryfall.com/cards/named",
+                    params={"exact": variant},
+                    headers=SCRYFALL_HEADERS,
+                    timeout=10,
+                )
+            except Exception as exc:
+                log.error(f"Scryfall named lookup failed for '{variant}': {exc}")
+                continue
+
+            if response.status_code != 200:
+                continue
+
+            card_data = response.json()
+            image_url = extract_image_url(card_data)
+            if image_url:
+                card.image_url = image_url
+                found = True
+                break
+
+        if not found:
+            log.warning(f"No Scryfall image URL found for card '{card.name}' after fallback lookups.")
 
 class MTGTop8Preview(Cog):
     def __init__(self, bot):
@@ -212,12 +293,41 @@ async def stack_cards(deck_id, deck_list: list[Card], title: str = "MTGTop8 Deck
     # Prepare image cache
     image_cache = {}
 
+    def make_placeholder_image(card_name: str):
+        placeholder = Image.new("RGB", (CARD_WIDTH, CARD_HEIGHT), color=(40, 40, 40))
+        draw_ph = ImageDraw.Draw(placeholder)
+        try:
+            ph_font = ImageFont.truetype("assets/beleren.ttf", 20)
+        except Exception:
+            ph_font = ImageFont.load_default()
+
+        text = f"No image\n{card_name}"
+        # Keep placeholder simple and readable if Scryfall has no image URL.
+        draw_ph.multiline_text((10, 10), text, font=ph_font, fill=(255, 255, 255, 255), spacing=4)
+        return placeholder
+
     async def fetch_card_image(card: Card):
-        if card.image_url not in image_cache:
-            response = requests.get(card.image_url)
-            img = Image.open(BytesIO(response.content)).resize((CARD_WIDTH, CARD_HEIGHT))
-            image_cache[card.image_url] = img
-        return image_cache[card.image_url]
+        image_url = card.image_url
+        if not image_url or not isinstance(image_url, str) or not image_url.startswith(("http://", "https://")):
+            cache_key = f"placeholder:{card.name}"
+            if cache_key not in image_cache:
+                image_cache[cache_key] = make_placeholder_image(card.name)
+                log.warning(f"Missing or invalid image URL for card '{card.name}'. Using placeholder.")
+            return image_cache[cache_key]
+
+        if image_url not in image_cache:
+            try:
+                response = requests.get(image_url, timeout=10)
+                response.raise_for_status()
+                img = Image.open(BytesIO(response.content)).convert("RGB").resize((CARD_WIDTH, CARD_HEIGHT))
+                image_cache[image_url] = img
+            except Exception as exc:
+                cache_key = f"placeholder:{card.name}"
+                if cache_key not in image_cache:
+                    image_cache[cache_key] = make_placeholder_image(card.name)
+                log.error(f"Failed to load image for '{card.name}' ({image_url}): {exc}")
+                return image_cache[cache_key]
+        return image_cache[image_url]
 
     # Prepare stacks: group by card, stack up to 4, show number if >4
     stacks = []
