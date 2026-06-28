@@ -218,24 +218,25 @@ class PaperEventsStatusMonitor(Cog):
                     next_start = self._add_months(start_at, interval)
                 else:
                     def nth_weekday_date(year: int, month: int, n: int, weekday: int) -> date:
-                        """Return the date of the n-th weekday (1-based; -1 = last) in the given month."""
+                        """Return the date of the n-th weekday in month (1-based, negatives from month end)."""
                         if n > 0:
                             first = date(year, month, 1)
                             days_until = (weekday - first.weekday()) % 7
                             return first + timedelta(days=days_until + (n - 1) * 7)
-                        else:  # n == -1 → last occurrence
+                        else:
                             last = date(year, month, calendar.monthrange(year, month)[1])
                             days_back = (last.weekday() - weekday) % 7
-                            return last - timedelta(days=days_back)
+                            # n=-1 => last, n=-2 => second-last, etc.
+                            return last - timedelta(days=days_back + (abs(n) - 1) * 7)
 
-                    # Build sorted list of (position, python_weekday) tuples
-                    # Sort by position (treat -1 as 5 so it comes after 4)
+                    # Build sorted list of (position, python_weekday) tuples.
+                    # Positive positions come first (1..4), then negative from earlier to later (-2, -1).
                     occurrences_in_cycle = [
                         (int(pos), ICAL_TO_PYTHON[day])
                         for pos, day in matches
                         if day in ICAL_TO_PYTHON
                     ]
-                    occurrences_in_cycle.sort(key=lambda x: x[0] if x[0] > 0 else 5)
+                    occurrences_in_cycle.sort(key=lambda x: (0, x[0]) if x[0] > 0 else (1, x[0]))
 
                     current_date = start_at.date()
                     cy, cm = current_date.year, current_date.month

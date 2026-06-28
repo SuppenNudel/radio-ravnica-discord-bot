@@ -23,7 +23,7 @@ def _score_select_options(default_score: int) -> list[discord.SelectOption]:
 def _report_mode_options() -> list[discord.RadioGroupOption]:
     return [
         discord.RadioGroupOption(label="Gespielt / Aufgabe", value="played", default=True),
-        discord.RadioGroupOption(label="Keinen gemeinsamen Termin gefunden", value="no_time_found"),
+        discord.RadioGroupOption(label="Keinen gemeinsamen Termin gefunden/Unentschieden geeinigt", value="no_time_found"),
     ]
 
 
@@ -47,7 +47,7 @@ def _selected_match_result(
         raise ValueError("Bitte wähle aus, ob gespielt wurde oder kein Termin gefunden wurde.")
 
     if report_mode_select.value == "no_time_found":
-        return 1, 1, 1
+        return 0, 0, 3
 
     if not p1_score_select.values or not p2_score_select.values or not draw_score_select.values:
         raise ValueError("Bitte wähle Siege und Unentschieden aus.")
@@ -380,7 +380,7 @@ class ReportMatchAdminModal(discord.ui.DesignerModal):
         self.add_item(discord.ui.Label(
             "Status",
             self.report_mode_select,
-            description="Gespielt/Aufgabe: eingetragenes Ergebnis.\nKein Termin: automatisch 1-1-1."
+            description="Gespielt/Aufgabe: eingetragenes Ergebnis.\nKein Termin/Unentschieden geeinigt: automatisch 0-0-3."
         ))
 
         self.p1_score_select = discord.ui.StringSelect(
@@ -473,7 +473,7 @@ class ReportMatchModal(discord.ui.DesignerModal):
         self.add_item(discord.ui.Label(
             "Status",
             self.report_mode_select,
-            description="Gespielt/Aufgabe: eingetragenes Ergebnis.\nKein Termin: automatisch 1-1-1."
+            description="Gespielt/Aufgabe: eingetragenes Ergebnis.\nKein Termin/Unentschieden geeinigt: automatisch 0-0-3."
         ))
 
         self.p1_score_select = discord.ui.StringSelect(
@@ -529,7 +529,7 @@ class ReportMatchModal(discord.ui.DesignerModal):
             if self.message_label.item.value:
                 message_to_opponent = f"{interaction.user.mention} lässt ausrichten:\n> {self.message_label.item.value}"  # type: ignore
             elif self.report_mode_select.value == "no_time_found":
-                message_to_opponent = "Keinen Termin gefunden"
+                message_to_opponent = "Keinen Termin gefunden bzw Unentschieden geeinigt"
             else:
                 message_to_opponent = "GGs!"
 

@@ -76,6 +76,7 @@ WEEK_POSITION_OPTIONS = [
     ("2. Woche", "2"),
     ("3. Woche", "3"),
     ("4. Woche", "4"),
+    ("Vorletzte Woche", "-2"),
     ("Letzte Woche", "-1"),
 ]
 
@@ -87,7 +88,7 @@ INTERVAL_OPTIONS = [
 
 ICAL_WEEKDAY_SHORT = {"MO": "Mo", "TU": "Di", "WE": "Mi", "TH": "Do", "FR": "Fr", "SA": "Sa", "SU": "So"}
 ICAL_WEEKDAY_TO_PYTHON = {"MO": 0, "TU": 1, "WE": 2, "TH": 3, "FR": 4, "SA": 5, "SU": 6}
-WEEK_POSITION_LABEL = {"1": "1.", "2": "2.", "3": "3.", "4": "4.", "-1": "Letzte"}
+WEEK_POSITION_LABEL = {"1": "1.", "2": "2.", "3": "3.", "4": "4.", "-2": "Vorletzte", "-1": "Letzte"}
 
 
 def build_recurrence_rule(interval_val: str, weekdays: list[str], week_positions: list[str]) -> str | None:
