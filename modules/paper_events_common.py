@@ -24,7 +24,7 @@ from ezcord import log
 import asyncio
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse, parse_qs
 
 CHANNEL_PAPER_EVENTS_ID = env.CHANNEL_PAPER_EVENTS_ID
 DEBUG = env.DEBUG
@@ -378,6 +378,51 @@ def _fetch_og_image_sync(url: str) -> str | None:
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
         page_url = response.url or url
+
+        def _query_resolution(candidate_url: str) -> int:
+            parsed = urlparse(candidate_url)
+            query = parse_qs(parsed.query)
+            try:
+                width = int((query.get("width") or [0])[0] or 0)
+                height = int((query.get("height") or [0])[0] or 0)
+                if width and height:
+                    return width * height
+                if width:
+                    return width * width
+                if height:
+                    return height * height
+            except Exception:
+                pass
+            return 0
+
+        def _best_src_from_srcset(srcset: str | None) -> tuple[str | None, int]:
+            if not srcset:
+                return None, 0
+            best_url = None
+            best_score = -1
+            for raw_part in srcset.split(","):
+                part = raw_part.strip()
+                if not part:
+                    continue
+                bits = part.split()
+                candidate_url = bits[0]
+                score = _query_resolution(candidate_url)
+                if len(bits) > 1:
+                    descriptor = bits[1].lower()
+                    try:
+                        if descriptor.endswith("w"):
+                            width = int(descriptor[:-1])
+                            score = max(score, width * width)
+                        elif descriptor.endswith("x"):
+                            multiplier = float(descriptor[:-1])
+                            score = int(max(score, 1) * multiplier * multiplier)
+                    except Exception:
+                        pass
+                if score >= best_score:
+                    best_score = score
+                    best_url = candidate_url
+            return best_url, best_score
+
         for attr in (
             {"property": "og:image"},
             {"name": "og:image"},
@@ -388,7 +433,51 @@ def _fetch_og_image_sync(url: str) -> str | None:
             if tag and tag.get("content"):
                 return urljoin(page_url, tag["content"])
 
-        min_favicon_resolution = 64 * 64
+        best_branded_image_url = None
+        best_branded_image_score = (-1, -1)
+        for tag in soup.find_all(["img", "source"]):
+            src = tag.get("src") or tag.get("data-src") or tag.get("data-srcset")
+            srcset = tag.get("srcset")
+            rel_text = " ".join(tag.get("class", [])) if tag.get("class") else ""
+
+            candidate_url = None
+            candidate_resolution = 0
+            if srcset:
+                candidate_url, candidate_resolution = _best_src_from_srcset(srcset)
+            if not candidate_url and src:
+                candidate_url = src.split(",", 1)[0].strip()
+                candidate_resolution = _query_resolution(candidate_url)
+
+            if not candidate_url:
+                continue
+
+            haystack = " ".join(filter(None, [candidate_url.lower(), rel_text.lower(), tag.get("alt", "").lower()]))
+            if not any(keyword in haystack for keyword in ["logo", "avatar", "brand"]):
+                continue
+
+            semantic_score = 0
+            if "battle bear" in haystack:
+                semantic_score += 5
+            if "logo" in haystack:
+                semantic_score += 4
+            if "avatar" in haystack:
+                semantic_score += 3
+            if "/shop/files/" in candidate_url.lower():
+                semantic_score += 2
+            if "/shop/articles/" in candidate_url.lower():
+                semantic_score -= 4
+            if "/shop/collections/" in candidate_url.lower():
+                semantic_score -= 2
+
+            candidate_score = (semantic_score, candidate_resolution)
+            if candidate_score >= best_branded_image_score:
+                best_branded_image_score = candidate_score
+                best_branded_image_url = urljoin(page_url, candidate_url)
+
+        if best_branded_image_url and best_branded_image_score[1] >= 200 * 200:
+            return best_branded_image_url
+
+        min_favicon_resolution = 48 * 48
         best_favicon_url = None
         best_favicon_resolution = -1
         icon_links = soup.find_all("link", rel=lambda rel: rel and "icon" in rel.lower())
@@ -407,6 +496,15 @@ def _fetch_og_image_sync(url: str) -> str | None:
                     resolution = max(resolution, int(width) * int(height))
                 except Exception:
                     continue
+
+            if resolution == 0:
+                resolution = _query_resolution(href)
+
+            rel_tokens = [token.lower() for token in (link.get("rel") or [])]
+            if resolution == 0 and "apple-touch-icon" in rel_tokens:
+                resolution = 180 * 180
+            elif resolution == 0 and "icon" in rel_tokens:
+                resolution = min_favicon_resolution
 
             if resolution >= best_favicon_resolution:
                 best_favicon_resolution = resolution
@@ -1119,13 +1217,40 @@ class PaperEvent():
                 self.fields[FieldName.END]._value = datetime.fromisoformat(end_str)
             except Exception:
                 pass
-        location_parts = [row["location_name"], row["location_address"]]
-        location_str = " ".join(p for p in location_parts if p)
-        if location_str:
+        saved_location = None
+        location_osm_type = row["location_osm_type"] if "location_osm_type" in row.keys() else None
+        location_osm_id = row["location_osm_id"] if "location_osm_id" in row.keys() else None
+        if location_osm_type and location_osm_id:
             try:
-                self.fields[FieldName.LOCATION].value = location_str
+                saved_location = gmaps.get_location_by_osm_id(location_osm_type, location_osm_id)
             except Exception as e:
-                log.error(f"Could not resolve location '{location_str}': {e}")
+                log.warning(f"Could not reload location by OSM id {location_osm_type}{location_osm_id}: {e}")
+
+        if not saved_location:
+            saved_location = gmaps.Location.from_saved_data(
+                name=row["location_name"] if "location_name" in row.keys() else None,
+                formatted_address=row["location_address"] if "location_address" in row.keys() else None,
+                city=row["location_city"] if "location_city" in row.keys() else None,
+                country=row["location_country"] if "location_country" in row.keys() else None,
+                state=row["location_state"] if "location_state" in row.keys() else None,
+                lat=row["location_lat"] if "location_lat" in row.keys() else None,
+                lng=row["location_lng"] if "location_lng" in row.keys() else None,
+                url=row["location_url"] if "location_url" in row.keys() else None,
+                osm_type=location_osm_type,
+                osm_id=location_osm_id,
+                place_id=row["location_place_id"] if "location_place_id" in row.keys() else None,
+            )
+
+        if saved_location:
+            self.fields[FieldName.LOCATION]._value = saved_location
+        else:
+            location_parts = [row["location_name"], row["location_address"]]
+            location_str = " ".join(p for p in location_parts if p)
+            if location_str:
+                try:
+                    self.fields[FieldName.LOCATION].value = location_str
+                except Exception as e:
+                    log.error(f"Could not resolve location '{location_str}': {e}")
         fee_from = row["fee_from"] if "fee_from" in row.keys() else None
         fee_to = row["fee_to"] if "fee_to" in row.keys() else None
         fee_currency = row["fee_currency"] if "fee_currency" in row.keys() else None
@@ -1197,6 +1322,11 @@ class PaperEvent():
             "location_country": _long_name(location.country) if location else None,
             "location_lat": location.coord.lat if location and location.coord else None,
             "location_lng": location.coord.lng if location and location.coord else None,
+            "location_state": _long_name(location.state) if location else None,
+            "location_url": location.url if location else None,
+            "location_osm_type": location.osm_type if location else None,
+            "location_osm_id": location.osm_id if location else None,
+            "location_place_id": location.place_id if location else None,
             "fee_eur": legacy_fee_eur,
             "fee_from": fee_from,
             "fee_to": fee_to,
@@ -1226,7 +1356,7 @@ class PaperEvent():
     def get_files(self):
         files = []
         location:gmaps.Location|None = self.fields[FieldName.LOCATION].value
-        if location:
+        if location and location.file_path and location.file_name:
             files.append(discord.File(location.file_path, filename=location.file_name))
         title = self.build_title()
         safe_title = sanitize_filename(title)
@@ -1267,49 +1397,63 @@ class PaperEvent():
         location:gmaps.Location|None = self.fields[FieldName.LOCATION].value
         if not location:
             return None
-        embed_fields = [
-                discord.EmbedField(name="Name", value=location.name, inline=False),
-                discord.EmbedField(name="Adresse", value=location.formatted_address, inline=False),
-            ]
+        embed_fields = [discord.EmbedField(name="Adresse", value=location.formatted_address, inline=False)]
+        if location.name:
+            embed_fields.insert(0, discord.EmbedField(name="Name", value=location.name, inline=False))
         if location.url:
             embed_fields.append(discord.EmbedField(name="Webseite", value=location.url, inline=False))
         embed = discord.Embed(
             color=env.RR_GREEN,
-            title="Google Maps",
+            title="OpenStreetMap",
             url=location.get_search_url(),
-            image=f"attachment://{location.file_name}",
             fields=embed_fields,
         )
+        if location.file_name:
+            embed.set_image(url=f"attachment://{location.file_name}")
         return embed
     
     async def resolve_image(self) -> str | None:
         """Pre-resolve and cache the best image URL for this event.
 
-        Priority: explicit IMAGE field > og:image from venue website > og:image from event URL.
-        Result is cached per (venue_url, event_url) pair to avoid redundant HTTP requests.
+        Priority: explicit IMAGE field > og:image from event URL > og:image from
+        the event location URL. If no event URL was provided, the location URL is
+        used as the sole fallback source.
         """
         explicit = self.fields[FieldName.IMAGE].value
         if explicit:
+            log.debug(f"resolve_image: using explicit flyer image url {explicit}")
             self._resolved_image_url = explicit
             self._image_cache_key = None  # reset so removing explicit triggers a fresh auto-fetch
             return explicit
 
         location: gmaps.Location = self.fields[FieldName.LOCATION].value
-        venue_url = getattr(location, "url", None) if location else None
         event_url = self.fields[FieldName.URL].value
-        cache_key = (venue_url, event_url)
+        location_website_url = getattr(location, "url", None) if location else None
+        location_search_url = location.get_search_url() if location else None
+        source_url = event_url or location_website_url or location_search_url
+        cache_key = source_url
 
         if self._image_cache_key == cache_key:
+            log.debug(f"resolve_image: cache hit for source_url={source_url}, resolved_image_url={self._resolved_image_url}")
             return self._resolved_image_url
 
         self._image_cache_key = cache_key
         self._resolved_image_url = None
 
-        for url in filter(None, [venue_url, event_url]):
-            img = await fetch_og_image(url)
+        log.debug(
+            f"resolve_image: explicit flyer missing, event_url={event_url}, "
+            f"location_website_url={location_website_url}, location_search_url={location_search_url}, "
+            f"chosen_source_url={source_url}"
+        )
+
+        if source_url:
+            img = await fetch_og_image(source_url)
             if img:
+                log.debug(f"resolve_image: resolved fallback image url {img} from source_url={source_url}")
                 self._resolved_image_url = img
                 return img
+
+        log.debug(f"resolve_image: no fallback image resolved from source_url={source_url}")
 
         return None
 

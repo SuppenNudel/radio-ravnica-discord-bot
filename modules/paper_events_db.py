@@ -24,6 +24,11 @@ class EventRow:
     location_country: str | None
     location_lat: float | None
     location_lng: float | None
+    location_state: str | None
+    location_url: str | None
+    location_osm_type: str | None
+    location_osm_id: str | None
+    location_place_id: str | None
     fee_from: float | None
     fee_to: float | None
     fee_currency: str | None
@@ -63,6 +68,9 @@ def init_db(conn: sqlite3.Connection) -> None:
             location_lng REAL,
             location_state TEXT,
             location_url TEXT,
+            location_osm_type TEXT,
+            location_osm_id TEXT,
+            location_place_id TEXT,
             fee_eur REAL,
             fee_from REAL,
             fee_to REAL,
@@ -108,6 +116,16 @@ def init_db(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE paper_events ADD COLUMN location_lat REAL")
     if "location_lng" not in existing_columns:
         conn.execute("ALTER TABLE paper_events ADD COLUMN location_lng REAL")
+    if "location_state" not in existing_columns:
+        conn.execute("ALTER TABLE paper_events ADD COLUMN location_state TEXT")
+    if "location_url" not in existing_columns:
+        conn.execute("ALTER TABLE paper_events ADD COLUMN location_url TEXT")
+    if "location_osm_type" not in existing_columns:
+        conn.execute("ALTER TABLE paper_events ADD COLUMN location_osm_type TEXT")
+    if "location_osm_id" not in existing_columns:
+        conn.execute("ALTER TABLE paper_events ADD COLUMN location_osm_id TEXT")
+    if "location_place_id" not in existing_columns:
+        conn.execute("ALTER TABLE paper_events ADD COLUMN location_place_id TEXT")
     if "fee_from" not in existing_columns:
         conn.execute("ALTER TABLE paper_events ADD COLUMN fee_from REAL")
     if "fee_to" not in existing_columns:
@@ -211,6 +229,11 @@ def list_upcoming_events(
                 location_country=row["location_country"] if "location_country" in row.keys() else None,
                 location_lat=row["location_lat"] if "location_lat" in row.keys() else None,
                 location_lng=row["location_lng"] if "location_lng" in row.keys() else None,
+                location_state=row["location_state"] if "location_state" in row.keys() else None,
+                location_url=row["location_url"] if "location_url" in row.keys() else None,
+                location_osm_type=row["location_osm_type"] if "location_osm_type" in row.keys() else None,
+                location_osm_id=row["location_osm_id"] if "location_osm_id" in row.keys() else None,
+                location_place_id=row["location_place_id"] if "location_place_id" in row.keys() else None,
                 fee_from=row["fee_from"] if "fee_from" in row.keys() else row["fee_eur"] if "fee_eur" in row.keys() else None,
                 fee_to=row["fee_to"] if "fee_to" in row.keys() else None,
                 fee_currency=row["fee_currency"] if "fee_currency" in row.keys() else "EUR" if row["fee_eur"] is not None else None,
@@ -296,6 +319,11 @@ def export_public_events_json(
                 "location_country": item.location_country,
                 "location_lat": item.location_lat,
                 "location_lng": item.location_lng,
+                "location_state": item.location_state,
+                "location_url": item.location_url,
+                "location_osm_type": item.location_osm_type,
+                "location_osm_id": item.location_osm_id,
+                "location_place_id": item.location_place_id,
                 "fee_from": item.fee_from,
                 "fee_to": item.fee_to,
                 "fee_currency": item.fee_currency,

@@ -3,7 +3,6 @@ pillow
 py-cord==2.8.0
 ezcord
 notion_client==2.2.1
-googlemaps
 beautifulsoup4
 requests
 python-dateutil

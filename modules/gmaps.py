@@ -1,44 +1,216 @@
-import googlemaps
-
 if __name__ == "__main__":
     import env
 else:
     from modules import env, notion
+from io import BytesIO
+import math
+import os
 import requests
 import urllib.parse
 import logging
+from PIL import Image, ImageDraw
 
 DEFAULT_LOG = "ezcord"
 log = logging.getLogger(DEFAULT_LOG)
 link_log = logging.getLogger("link_logger")
 
-GMAPS_TOKEN = env.GMAPS_TOKEN
 STATE_TAGS = env.STATE_TAGS
 AREA_DATABASE_ID = env.AREA_DATABASE_ID
 
-gmaps = googlemaps.Client(key=GMAPS_TOKEN)
+NOMINATIM_SEARCH_URL = "https://nominatim.openstreetmap.org/search"
+NOMINATIM_LOOKUP_URL = "https://nominatim.openstreetmap.org/lookup"
+OSM_TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+REQUEST_TIMEOUT_SECONDS = 15
+REQUEST_HEADERS = {
+    "User-Agent": "radio-ravnica-discord-bot/1.0 (paper-events geocoding)"
+}
+TILE_SIZE = 256
+MAP_WIDTH = 600
+MAP_HEIGHT = 640
+DACH_MAP_CENTER = {"lat": 50.4, "lng": 10.6}
+DACH_COUNTRY_CODES = {"DE", "AT", "CH"}
+EUROPE_MAP_CENTER = {"lat": 53.0, "lng": 15.0}
+TMP_DIR = "tmp"
+GERMAN_STATE_SHORT_NAMES = {
+    "Baden-Wurttemberg": "BW",
+    "Baden-Wuerttemberg": "BW",
+    "Bayern": "BY",
+    "Berlin": "BE",
+    "Brandenburg": "BB",
+    "Bremen": "HB",
+    "Hamburg": "HH",
+    "Hessen": "HE",
+    "Mecklenburg-Vorpommern": "MV",
+    "Niedersachsen": "NI",
+    "Nordrhein-Westfalen": "NRW",
+    "Rheinland-Pfalz": "RP",
+    "Saarland": "SL",
+    "Sachsen": "SN",
+    "Sachsen-Anhalt": "ST",
+    "Schleswig-Holstein": "SH",
+    "Thuringen": "TH",
+    "Thueringen": "TH",
+}
+
+
+def _request_nominatim(params: dict) -> list[dict]:
+    response = requests.get(
+        NOMINATIM_SEARCH_URL,
+        params=params,
+        headers=REQUEST_HEADERS,
+        timeout=REQUEST_TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def _lookup_nominatim(params: dict) -> list[dict]:
+    response = requests.get(
+        NOMINATIM_LOOKUP_URL,
+        params=params,
+        headers=REQUEST_HEADERS,
+        timeout=REQUEST_TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def _make_component(long_name: str | None, short_name: str | None = None) -> dict | None:
+    if not long_name:
+        return None
+    return {
+        "long_name": long_name,
+        "short_name": short_name or long_name,
+    }
+
+
+def _get_state_short_name(country_code: str | None, state_name: str | None) -> str | None:
+    if not state_name:
+        return None
+    if (country_code or "").upper() == "DE":
+        return GERMAN_STATE_SHORT_NAMES.get(state_name, state_name)
+    return state_name
+
+
+def _build_osm_url(search_result: dict) -> str:
+    lat = search_result["lat"]
+    lng = search_result["lon"]
+    zoom = 16 if search_result.get("category") in ["shop", "amenity", "tourism", "leisure"] else 13
+    return f"https://www.openstreetmap.org/?mlat={lat}&mlon={lng}#map={zoom}/{lat}/{lng}"
+
+
+def _get_viewport(country_code: str | None) -> dict:
+    if country_code in DACH_COUNTRY_CODES:
+        return {
+            "name": "dach",
+            "zoom": 6,
+            "center_lat": DACH_MAP_CENTER["lat"],
+            "center_lng": DACH_MAP_CENTER["lng"],
+        }
+    return {
+        "name": "europe",
+        "zoom": 4,
+        "center_lat": EUROPE_MAP_CENTER["lat"],
+        "center_lng": EUROPE_MAP_CENTER["lng"],
+    }
+
+
+def _get_base_map_file_path(viewport: dict) -> str:
+    return (
+        f"{TMP_DIR}/osm_base_{viewport['name']}_"
+        f"z{viewport['zoom']}_{str(viewport['center_lat']).replace('.', '_')}_"
+        f"{str(viewport['center_lng']).replace('.', '_')}.png"
+    )
+
+
+def _lon_to_pixel_x(lon: float, zoom: int) -> float:
+    scale = TILE_SIZE * (2 ** zoom)
+    return (lon + 180.0) / 360.0 * scale
+
+
+def _lat_to_pixel_y(lat: float, zoom: int) -> float:
+    lat_rad = math.radians(lat)
+    scale = TILE_SIZE * (2 ** zoom)
+    return (1.0 - math.log(math.tan(lat_rad) + (1 / math.cos(lat_rad))) / math.pi) / 2.0 * scale
+
+
+def _fetch_tile(zoom: int, tile_x: int, tile_y: int) -> Image.Image:
+    max_index = 2 ** zoom
+    wrapped_x = tile_x % max_index
+    clamped_y = min(max(tile_y, 0), max_index - 1)
+    response = requests.get(
+        OSM_TILE_URL.format(z=zoom, x=wrapped_x, y=clamped_y),
+        headers=REQUEST_HEADERS,
+        timeout=REQUEST_TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+    return Image.open(BytesIO(response.content)).convert("RGBA")
+
+
+def _render_base_map(viewport: dict) -> Image.Image:
+    zoom = viewport["zoom"]
+    center_lat = viewport["center_lat"]
+    center_lng = viewport["center_lng"]
+    center_pixel_x = _lon_to_pixel_x(center_lng, zoom)
+    center_pixel_y = _lat_to_pixel_y(center_lat, zoom)
+
+    left = center_pixel_x - MAP_WIDTH / 2
+    top = center_pixel_y - MAP_HEIGHT / 2
+    right = left + MAP_WIDTH
+    bottom = top + MAP_HEIGHT
+
+    start_tile_x = math.floor(left / TILE_SIZE)
+    end_tile_x = math.floor((right - 1) / TILE_SIZE)
+    start_tile_y = math.floor(top / TILE_SIZE)
+    end_tile_y = math.floor((bottom - 1) / TILE_SIZE)
+
+    canvas_width = (end_tile_x - start_tile_x + 1) * TILE_SIZE
+    canvas_height = (end_tile_y - start_tile_y + 1) * TILE_SIZE
+    canvas = Image.new("RGBA", (canvas_width, canvas_height), "white")
+
+    for tile_x in range(start_tile_x, end_tile_x + 1):
+        for tile_y in range(start_tile_y, end_tile_y + 1):
+            tile = _fetch_tile(zoom, tile_x, tile_y)
+            paste_x = (tile_x - start_tile_x) * TILE_SIZE
+            paste_y = (tile_y - start_tile_y) * TILE_SIZE
+            canvas.paste(tile, (paste_x, paste_y))
+
+    crop_left = int(left - start_tile_x * TILE_SIZE)
+    crop_top = int(top - start_tile_y * TILE_SIZE)
+    return canvas.crop((crop_left, crop_top, crop_left + MAP_WIDTH, crop_top + MAP_HEIGHT))
+
+
+def _load_or_create_base_map(viewport: dict) -> Image.Image:
+    base_map_path = _get_base_map_file_path(viewport)
+    os.makedirs(TMP_DIR, exist_ok=True)
+    if os.path.exists(base_map_path):
+        return Image.open(base_map_path).convert("RGBA")
+
+    base_map = _render_base_map(viewport)
+    base_map.convert("RGB").save(base_map_path, format="PNG")
+    return base_map
+
+
+def _draw_pin(image: Image.Image, x: float, y: float):
+    draw = ImageDraw.Draw(image)
+    radius = 12
+    pin_color = "#D12B2B"
+    outline_color = "#7D1313"
+    draw.ellipse((x - radius, y - 2 * radius, x + radius, y), fill=pin_color, outline=outline_color, width=2)
+    draw.polygon(
+        [(x, y + 16), (x - 9, y - 2), (x + 9, y - 2)],
+        fill=pin_color,
+        outline=outline_color,
+    )
+    draw.ellipse((x - 4, y - radius - 4, x + 4, y - radius + 4), fill="white")
 
 def get_distances(origin, destinations):
-    # Call the Distance Matrix API
-    result = gmaps.distance_matrix(origins=origin, destinations=destinations)
-
-    # Initialize the result map
-    distances_map = {}
-
-    if result['status'] == 'OK':
-        elements = result['rows'][0]['elements']  # Get the array of results
-        distances_map = dict(zip(destinations, elements))  # Map destinations to elements
-    else:
-        # Handle errors
-        error_message = result.get("error_message", "Unknown error occurred")
-        raise Exception(f"Distance Matrix API Error: {error_message}")
-
-    return distances_map
+    raise NotImplementedError("Distance calculations are not implemented for the OpenStreetMap backend.")
 
 class Coordinates():
     def __init__(self, coordinates) -> None:
-        self.lng = coordinates['lng']
-        self.lat = coordinates['lat']
+        self.lng = float(coordinates['lng'])
+        self.lat = float(coordinates['lat'])
 
 class Location():
     def __init__(self):
@@ -55,6 +227,11 @@ class Location():
         self.name = None
         self.gmaps_url = None
         self.url = None
+        self.osm_type = None
+        self.osm_id = None
+        self.place_id = None
+        self.file_name = None
+        self.file_path = None
 
     def __str__(self):
         parts = []
@@ -82,50 +259,100 @@ class Location():
         return " - ".join(parts) if parts else self.formatted_address or "Location"
 
     @classmethod
-    def from_geocode_result(cls, geocode_result, place_details) -> "Location":#:type:Literal['geocode', 'places']):
+    def from_geocode_result(cls, geocode_result, place_details=None) -> "Location":
         location = Location()    
-        # if type == 'geocode':
-        if geocode_result and 'address_components' in geocode_result:
-            for obj in geocode_result['address_components']:
-                types = obj.get('types', [])
-                if 'country' in types:
-                    location.country = obj
-                elif 'administrative_area_level_1' in types:
-                    location.state = obj
-                elif 'locality' in types:
-                    location.city = obj
-                elif 'administrative_area_level_3' in types:
-                    location.county = obj # Landkreis
-                elif 'route' in types:
-                    location.street = obj
-                elif 'street_number' in types:
-                    location.street_number = obj
-                elif 'postal_code' in types:
-                    location.zip = obj
-        else:
-            link_log.error(f"No address_components for {place_details['url']}")
-        # elif type == 'places':
-        #     self.name = geocode_result['name']
-        location.formatted_address:str = geocode_result['formatted_address']
-        location.coord:Coordinates = Coordinates(geocode_result['geometry']['location'])
-        location.types = geocode_result['types']
+        address = geocode_result.get('address', {})
+        country_code = (address.get('country_code') or '').upper() or None
+        country_name = address.get('country')
+        state_name = address.get('state') or address.get('region')
+        city_name = (
+            address.get('city')
+            or address.get('town')
+            or address.get('village')
+            or address.get('municipality')
+        )
+
+        location.country = _make_component(country_name, country_code)
+        location.state = _make_component(state_name, _get_state_short_name(country_code, state_name))
+        location.city = _make_component(city_name)
+        location.county = _make_component(address.get('county'))
+        location.street = _make_component(address.get('road') or address.get('pedestrian'))
+        location.street_number = _make_component(address.get('house_number'))
+        location.zip = _make_component(address.get('postcode'))
+
+        if not address:
+            link_log.error(f"No address details for {geocode_result.get('display_name', 'unknown location')}")
+
+        location.formatted_address = geocode_result['display_name']
+        location.coord = Coordinates({
+            'lat': geocode_result['lat'],
+            'lng': geocode_result['lon'],
+        })
+        location.types = [value for value in [geocode_result.get('category'), geocode_result.get('type')] if value]
+        location.name = (
+            geocode_result.get('namedetails', {}).get('name')
+            or geocode_result.get('name')
+            or address.get('amenity')
+            or address.get('shop')
+            or address.get('building')
+        )
+        location.gmaps_url = _build_osm_url(geocode_result)
+        extratags = geocode_result.get('extratags', {})
+        location.url = (
+            extratags.get('website')
+            or extratags.get('contact:website')
+            or extratags.get('url')
+        )
+        location.osm_type = geocode_result.get('osm_type')
+        location.osm_id = str(geocode_result.get('osm_id')) if geocode_result.get('osm_id') is not None else None
+        location.place_id = str(geocode_result.get('place_id')) if geocode_result.get('place_id') is not None else None
         location.get_static_map()
-        if place_details:
-            # self.phone_number = place_details['international_phone_number']
-            location.name = place_details['name']
-            location.gmaps_url = place_details['url']
-            location.url = place_details['website'] if 'website' in place_details else None
         
         return location
 
+    @classmethod
+    def from_saved_data(
+        cls,
+        *,
+        name: str | None,
+        formatted_address: str | None,
+        city: str | None,
+        country: str | None,
+        state: str | None,
+        lat: float | None,
+        lng: float | None,
+        url: str | None,
+        osm_type: str | None = None,
+        osm_id: str | None = None,
+        place_id: str | None = None,
+    ) -> "Location | None":
+        if lat is None or lng is None:
+            return None
+
+        location = Location()
+        location.name = name
+        location.formatted_address = formatted_address or name or "Location"
+        location.city = _make_component(city)
+        location.country = _make_component(country, country)
+        location.state = _make_component(state, _get_state_short_name(country, state))
+        location.coord = Coordinates({"lat": lat, "lng": lng})
+        location.url = url
+        location.gmaps_url = url or f"https://www.openstreetmap.org/?mlat={lat}&mlon={lng}#map=16/{lat}/{lng}"
+        location.osm_type = osm_type
+        location.osm_id = str(osm_id) if osm_id is not None else None
+        location.place_id = str(place_id) if place_id is not None else None
+        location.types = []
+        location.get_static_map()
+        return location
+
     def get_area_and_tag_name(self):
-        country_short = self.country['short_name']
+        country_short = self.country['short_name'] if self.country else None
         tag_name = "nicht DACH"
-        area_name = self.country['long_name']
+        area_name = self.country['long_name'] if self.country else (self.formatted_address or "Unbekannter Ort")
         if country_short == 'DE':
             state = self.state
-            state_short = state['short_name']
-            area_name = state['long_name']
+            state_short = state['short_name'] if state else None
+            area_name = state['long_name'] if state else area_name
             if state_short in STATE_TAGS:
                 tag_name = STATE_TAGS[state_short]
         else:
@@ -151,76 +378,82 @@ class Location():
     def get_search_url(self):
         if self.gmaps_url:
             return self.gmaps_url
-        search_term = self.formatted_address
-        if 'store' in self.types:
-            search_term = "https://www.google.com/maps/search/"+urllib.parse.quote(search_term)
-        return "https://www.google.com/maps/search/"+urllib.parse.quote(search_term)
+        search_term = self.formatted_address or self.name or "Location"
+        return "https://www.openstreetmap.org/search?query=" + urllib.parse.quote(search_term)
 
     def get_static_map(self):
-        lng = self.coord.lng
-        lat = self.coord.lat
-        zoom = 6 if self.country['short_name'] in ['DE', 'AT', 'CH'] else 4
-        map_url = f"https://maps.googleapis.com/maps/api/staticmap?center=50.6,11&zoom={zoom}&size=600x640&markers=color:red%257label:S%7C{lat},{lng}&language=de&key={GMAPS_TOKEN}"
+        if not self.coord:
+            self.file_name = None
+            self.file_path = None
+            return
 
-        response = requests.get(map_url)
-        # Save the file locally
-        self.file_name = f"google_map_{lat}_{lng}.png"
-        self.file_path = f"tmp/{self.file_name}"
-        with open(self.file_path, "wb") as file_maps:
-            file_maps.write(response.content)
+        country_code = self.country['short_name'] if self.country else None
+        viewport = _get_viewport(country_code)
+        zoom = viewport["zoom"]
+        center_lat = viewport["center_lat"]
+        center_lng = viewport["center_lng"]
+        center_pixel_x = _lon_to_pixel_x(center_lng, zoom)
+        center_pixel_y = _lat_to_pixel_y(center_lat, zoom)
+        left = center_pixel_x - MAP_WIDTH / 2
+        top = center_pixel_y - MAP_HEIGHT / 2
+        pin_pixel_x = _lon_to_pixel_x(self.coord.lng, zoom)
+        pin_pixel_y = _lat_to_pixel_y(self.coord.lat, zoom)
 
-# def get_places(location:str, language="de", details=False):
-#     places_results = gmaps.places(location, language=language)['results']
-#     if len(places_results) == 0:
-#         # not found
-#         raise Exception(f"No location found for {location}")
-#     if len(places_results) > 1:
-#         locations = [Location(places_result, 'places') for places_result in places_results]
-#         raise Exception(f"Multiple locations found for {location}", locations)
-#     place_details = None
-#     if details:
-#         place_details = gmaps.place(place_id=places_results[0]['place_id'])['result']
-#     # place_details enthält alles, kann ich aber erst bekommen, wenn ich die place_id habe
-#     return Location(places_results[0], place_details)
+        cropped = _load_or_create_base_map(viewport).copy()
+        pin_x = pin_pixel_x - left
+        pin_y = pin_pixel_y - top
+        _draw_pin(cropped, pin_x, pin_y)
+
+        safe_lat = str(self.coord.lat).replace(".", "_")
+        safe_lng = str(self.coord.lng).replace(".", "_")
+        self.file_name = f"osm_map_{viewport['name']}_{safe_lat}_{safe_lng}.png"
+        self.file_path = f"{TMP_DIR}/{self.file_name}"
+        os.makedirs(TMP_DIR, exist_ok=True)
+        cropped.convert("RGB").save(self.file_path, format="PNG")
 
 def get_location(location:str, language="de", details=False) -> Location:
-    geocode_results = gmaps.geocode(location, language=language)
+    geocode_results = _request_nominatim({
+        "q": location,
+        "format": "jsonv2",
+        "addressdetails": 1,
+        "namedetails": 1,
+        "extratags": 1,
+        "limit": 5,
+        "accept-language": language,
+    })
     if len(geocode_results) == 0:
         # not found
         raise Exception(f"No location  found for {location}")
     if len(geocode_results) > 1:
-        locations:[Location] = []
+        locations: list[Location] = []
         for geocode_result in geocode_results:
-            place_details = None
-            if details:
-                place_details = gmaps.place(place_id=geocode_results[0]['place_id'])['result']
-            location_result:Location = Location.from_geocode_result(geocode_result, place_details)
+            location_result:Location = Location.from_geocode_result(geocode_result)
             locations.append(location_result)
-        locations_str = '\n'.join([f"{loc.name}\n{loc.formatted_address}\n{loc.gmaps_url}\n" for loc in locations])
+        locations_str = '\n'.join([f"{loc.name or 'Ort'}\n{loc.formatted_address}\n{loc.get_search_url()}\n" for loc in locations])
         raise Exception(f"Mehrere Orte für '{location}' gefunden:\n\n{locations_str}\nBitte versuche den Ort zu spezifizieren!")
-    # location_coords = geocode_results[0]["geometry"]["location"]
-    place_details = None
-    if details:
-        place_details = gmaps.place(place_id=geocode_results[0]['place_id'])['result']
-    return Location.from_geocode_result(geocode_results[0], place_details)
+    return Location.from_geocode_result(geocode_results[0])
 
-if __name__ == "__main__":
-    lucca = get_location("Comic Planet Osnabrück")
-    lucca.get_static_map()
-    exit()
 
-    search_string = "Battlebear kaiserslautern"
-    # get_places(search_string)
-    # location = get_location(search_string)
-    # print(location)
-    exit()
+def get_location_by_osm_id(osm_type: str, osm_id: str | int, language="de") -> Location:
+    osm_type_prefix = {
+        "node": "N",
+        "way": "W",
+        "relation": "R",
+        "N": "N",
+        "W": "W",
+        "R": "R",
+    }.get(str(osm_type), None)
+    if not osm_type_prefix:
+        raise Exception(f"Unsupported osm_type: {osm_type}")
 
-    # try:
-    #     location = get_location("BattleBearTCG Kaiserslautern")
-    # except googlemaps.exceptions.HTTPError as e:
-    #     print(e)
-    origin = "66484"
-    destinations = ["Kaiserslautern", "Saarbrücken", "Berlin"]
-
-    distances = get_distances(origin, destinations)
-    pass
+    lookup_results = _lookup_nominatim({
+        "osm_ids": f"{osm_type_prefix}{osm_id}",
+        "format": "jsonv2",
+        "addressdetails": 1,
+        "namedetails": 1,
+        "extratags": 1,
+        "accept-language": language,
+    })
+    if not lookup_results:
+        raise Exception(f"No location found for OSM id {osm_type_prefix}{osm_id}")
+    return Location.from_geocode_result(lookup_results[0])
