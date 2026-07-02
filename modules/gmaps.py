@@ -19,6 +19,7 @@ AREA_DATABASE_ID = env.AREA_DATABASE_ID
 
 NOMINATIM_SEARCH_URL = "https://nominatim.openstreetmap.org/search"
 NOMINATIM_LOOKUP_URL = "https://nominatim.openstreetmap.org/lookup"
+NOMINATIM_REVERSE_URL = "https://nominatim.openstreetmap.org/reverse"
 OSM_TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
 REQUEST_TIMEOUT_SECONDS = 15
 REQUEST_HEADERS = {
@@ -52,6 +53,16 @@ GERMAN_STATE_SHORT_NAMES = {
     "Thueringen": "TH",
 }
 
+COUNTRY_NAME_TO_CODE = {
+    "DEUTSCHLAND": "DE",
+    "GERMANY": "DE",
+    "ÖSTERREICH": "AT",
+    "OESTERREICH": "AT",
+    "AUSTRIA": "AT",
+    "SCHWEIZ": "CH",
+    "SWITZERLAND": "CH",
+}
+
 
 def _request_nominatim(params: dict) -> list[dict]:
     response = requests.get(
@@ -75,6 +86,17 @@ def _lookup_nominatim(params: dict) -> list[dict]:
     return response.json()
 
 
+def _reverse_nominatim(params: dict) -> dict:
+    response = requests.get(
+        NOMINATIM_REVERSE_URL,
+        params=params,
+        headers=REQUEST_HEADERS,
+        timeout=REQUEST_TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
 def _make_component(long_name: str | None, short_name: str | None = None) -> dict | None:
     if not long_name:
         return None
@@ -82,6 +104,18 @@ def _make_component(long_name: str | None, short_name: str | None = None) -> dic
         "long_name": long_name,
         "short_name": short_name or long_name,
     }
+
+
+def _normalize_country_code(country_value: str | None) -> str | None:
+    if not country_value:
+        return None
+    cleaned = country_value.strip()
+    if not cleaned:
+        return None
+    upper = cleaned.upper()
+    if len(upper) == 2:
+        return upper
+    return COUNTRY_NAME_TO_CODE.get(upper)
 
 
 def _get_state_short_name(country_code: str | None, state_name: str | None) -> str | None:
@@ -330,11 +364,52 @@ class Location():
             return None
 
         location = Location()
+        country_short = _normalize_country_code(country)
+        state_name = state or None
+        city_name = city or None
+
+        # DB fallback rows may miss state/city and only keep coordinates.
+        # Use reverse geocoding once to recover administrative details.
+        if (not state_name or not city_name or not country_short):
+            try:
+                reverse_result = _reverse_nominatim(
+                    {
+                        "lat": lat,
+                        "lon": lng,
+                        "format": "jsonv2",
+                        "addressdetails": 1,
+                        "accept-language": "de",
+                    }
+                )
+                reverse_address = reverse_result.get("address", {})
+                reverse_country = reverse_address.get("country")
+                reverse_country_code = (reverse_address.get("country_code") or "").upper() or None
+                reverse_state = reverse_address.get("state") or reverse_address.get("region")
+                reverse_city = (
+                    reverse_address.get("city")
+                    or reverse_address.get("town")
+                    or reverse_address.get("village")
+                    or reverse_address.get("municipality")
+                )
+
+                if not country and reverse_country:
+                    country = reverse_country
+                if not country_short:
+                    country_short = reverse_country_code or _normalize_country_code(reverse_country)
+                if not state_name and reverse_state:
+                    state_name = reverse_state
+                if not city_name and reverse_city:
+                    city_name = reverse_city
+            except Exception as exc:
+                link_log.warning(
+                    f"Could not reverse-geocode saved location ({lat}, {lng}) to enrich area fields: {exc}"
+                )
+
         location.name = name
         location.formatted_address = formatted_address or name or "Location"
-        location.city = _make_component(city)
-        location.country = _make_component(country, country)
-        location.state = _make_component(state, _get_state_short_name(country, state))
+        location.city = _make_component(city_name)
+        location.country = _make_component(country, country_short or country)
+        location.state = _make_component(state_name, _get_state_short_name(country_short or country, state_name))
         location.coord = Coordinates({"lat": lat, "lng": lng})
         location.url = url
         location.gmaps_url = url or f"https://www.openstreetmap.org/?mlat={lat}&mlon={lng}#map=16/{lat}/{lng}"

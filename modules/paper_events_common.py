@@ -1516,14 +1516,27 @@ class PaperEvent():
         (area_name, tag_name) = location.get_area_and_tag_name()
         tag = discord.utils.get(channel.available_tags, name=tag_name)
         await self.resolve_image()
-        forum_post = await channel.create_thread(
-            name=self.construct_thread_title(),
-            content=self.construct_content(preview=False),
-            embeds=[self.construct_event_embed(), self.construct_gmaps_embed()],
-            applied_tags=[tag],
-            files=self.get_files(),
-            view=EditPostView(self)
-        )
+        thread_kwargs = {
+            "name": self.construct_thread_title(),
+            "content": self.construct_content(preview=False),
+            "embeds": [self.construct_event_embed(), self.construct_gmaps_embed()],
+            "applied_tags": [tag],
+            "files": self.get_files(),
+        }
+        try:
+            forum_post = await channel.create_thread(
+                **thread_kwargs,
+                view=EditPostView(self),
+            )
+        except RuntimeError as exc:
+            err_text = str(exc).lower()
+            if "event loop" not in err_text:
+                raise
+            log.warning(
+                "create_and_send_thread: failed to create EditPostView due to event loop state; "
+                "retrying thread creation without view"
+            )
+            forum_post = await channel.create_thread(**thread_kwargs)
         self.thread = forum_post
         return forum_post
     

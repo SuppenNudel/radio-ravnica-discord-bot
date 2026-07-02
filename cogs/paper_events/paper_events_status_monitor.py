@@ -555,8 +555,8 @@ class PaperEventsStatusMonitor(Cog):
             await update_paper_events_calendar(self.bot, self.guild)
 
             log.info(f"Created next recurring event for thread {thread_id}: new thread {thread.id}")
-        except Exception as e:
-            log.error(f"Failed to create next recurring event for thread {thread_id}: {e}")
+        except Exception:
+            log.exception(f"Failed to create next recurring event for thread {thread_id}")
 
     async def propagate_recurring_edits(self, thread_id: int) -> None:
         await self._propagate_recurring_edits(thread_id)
