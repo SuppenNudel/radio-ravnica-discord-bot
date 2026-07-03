@@ -37,16 +37,44 @@ TIMEOUT_DURATION = timedelta(days=1)
 @dataclass
 class MessageSignal:
     created_at: datetime
+    channel_id: int
+    message_id: int
     normalized_content: str
     link_count: int
     mention_count: int
 
 
 class BanSuggestionView(discord.ui.View):
-    def __init__(self, target_user_id: int, moderator_role_id: int | None):
+    def __init__(
+        self,
+        target_user_id: int,
+        moderator_role_id: int | None,
+        trigger_message_refs: list[tuple[int, int]],
+    ):
         super().__init__(timeout=60 * 60 * 24)
         self.target_user_id = target_user_id
         self.moderator_role_id = moderator_role_id
+        self.trigger_message_refs = trigger_message_refs
+
+    async def _delete_trigger_messages(self, guild: discord.Guild) -> int:
+        deleted = 0
+
+        for channel_id, message_id in self.trigger_message_refs:
+            channel = guild.get_channel(channel_id)
+            if not isinstance(channel, (discord.TextChannel, discord.Thread)):
+                continue
+
+            try:
+                await channel.get_partial_message(message_id).delete()
+                deleted += 1
+            except discord.NotFound:
+                continue
+            except discord.Forbidden:
+                continue
+            except discord.HTTPException:
+                continue
+
+        return deleted
 
     def _is_moderator(self, user: discord.abc.User, guild: discord.Guild) -> bool:
         member = user if isinstance(user, discord.Member) else guild.get_member(user.id)
@@ -105,8 +133,13 @@ class BanSuggestionView(discord.ui.View):
         if interaction.message:
             await interaction.message.edit(view=self)
 
+        deleted_count = await self._delete_trigger_messages(guild)
+
         await interaction.response.send_message(
-            f"Nutzer <@{self.target_user_id}> wurde gebannt.",
+            (
+                f"Nutzer <@{self.target_user_id}> wurde gebannt. "
+                f"{deleted_count} ausloesende Spam-Nachricht(en) wurden geloescht."
+            ),
             ephemeral=True,
         )
 
@@ -120,58 +153,100 @@ class AntiSpamGuard(Cog):
     def _normalize_content(self, content: str) -> str:
         return " ".join(content.lower().split())
 
-    def _collect_reasons(self, signals: deque[MessageSignal]) -> list[str]:
+    def _collect_reasons_and_trigger_signals(
+        self, signals: deque[MessageSignal]
+    ) -> tuple[list[str], list[MessageSignal]]:
         now = discord.utils.utcnow()
 
-        burst_count = sum(
-            1
+        burst_signals = [
+            signal
             for signal in signals
             if (now - signal.created_at).total_seconds() <= BURST_WINDOW_SECONDS
-        )
+        ]
+        burst_count = len(burst_signals)
 
-        duplicate_candidates = [
-            signal.normalized_content
+        duplicate_signals = [
+            signal
             for signal in signals
             if signal.normalized_content
             and (now - signal.created_at).total_seconds() <= DUPLICATE_WINDOW_SECONDS
         ]
-        duplicate_count = max(Counter(duplicate_candidates).values(), default=0)
+        duplicate_counter = Counter(signal.normalized_content for signal in duplicate_signals)
+        duplicate_count = max(duplicate_counter.values(), default=0)
+        duplicate_texts = {
+            text
+            for text, count in duplicate_counter.items()
+            if count >= DUPLICATE_THRESHOLD
+        }
 
-        link_count = sum(
-            signal.link_count
+        link_signals = [
+            signal
             for signal in signals
-            if (now - signal.created_at).total_seconds() <= LINK_WINDOW_SECONDS
-        )
+            if signal.link_count > 0 and (now - signal.created_at).total_seconds() <= LINK_WINDOW_SECONDS
+        ]
+        link_count = sum(signal.link_count for signal in link_signals)
 
-        mention_count = sum(
-            signal.mention_count
+        mention_signals = [
+            signal
             for signal in signals
-            if (now - signal.created_at).total_seconds() <= MENTION_WINDOW_SECONDS
-        )
+            if signal.mention_count > 0
+            and (now - signal.created_at).total_seconds() <= MENTION_WINDOW_SECONDS
+        ]
+        mention_count = sum(signal.mention_count for signal in mention_signals)
 
         reasons: list[str] = []
+        trigger_signal_ids: set[int] = set()
 
         if burst_count >= BURST_MESSAGE_THRESHOLD:
             reasons.append(
                 f"Nachrichten-Burst: {burst_count} Nachrichten in {BURST_WINDOW_SECONDS}s"
             )
+            trigger_signal_ids.update(signal.message_id for signal in burst_signals)
 
         if duplicate_count >= DUPLICATE_THRESHOLD:
             reasons.append(
                 f"Duplikat-Text: gleiche Nachricht {duplicate_count}x in {DUPLICATE_WINDOW_SECONDS}s"
+            )
+            trigger_signal_ids.update(
+                signal.message_id
+                for signal in duplicate_signals
+                if signal.normalized_content in duplicate_texts
             )
 
         if link_count >= LINK_THRESHOLD:
             reasons.append(
                 f"Link-Spam: {link_count} Link(s) in {LINK_WINDOW_SECONDS}s"
             )
+            trigger_signal_ids.update(signal.message_id for signal in link_signals)
 
         if mention_count >= MENTION_THRESHOLD:
             reasons.append(
                 f"Mention-Spam: {mention_count} Mentions in {MENTION_WINDOW_SECONDS}s"
             )
+            trigger_signal_ids.update(signal.message_id for signal in mention_signals)
 
-        return reasons
+        trigger_signals = [
+            signal for signal in signals if signal.message_id in trigger_signal_ids
+        ]
+
+        return reasons, trigger_signals
+
+    async def _react_to_trigger_messages(
+        self, guild: discord.Guild, trigger_signals: list[MessageSignal]
+    ) -> None:
+        for signal in trigger_signals:
+            channel = guild.get_channel(signal.channel_id)
+            if not isinstance(channel, (discord.TextChannel, discord.Thread)):
+                continue
+
+            try:
+                await channel.get_partial_message(signal.message_id).add_reaction("👍")
+            except discord.NotFound:
+                continue
+            except discord.Forbidden:
+                continue
+            except discord.HTTPException:
+                continue
 
     def _prune_old_signals(self, key: tuple[int, int], signals: deque[MessageSignal]) -> None:
         now = discord.utils.utcnow()
@@ -257,6 +332,7 @@ class AntiSpamGuard(Cog):
         reasons: list[str],
         timeout_applied: bool,
         moderator_role: discord.Role | None,
+        trigger_signals: list[MessageSignal],
     ) -> None:
         guild = message.guild
         if guild is None:
@@ -269,13 +345,17 @@ class AntiSpamGuard(Cog):
 
         summary = "\n".join(f"- {reason}" for reason in reasons)
         timeout_status = "Ja" if timeout_applied else "Nein (fehlende Berechtigung oder API-Fehler)"
+        trigger_message_count = len({signal.message_id for signal in trigger_signals})
 
         embed = discord.Embed(
             title="Verdacht auf Bot/Spam-Verhalten",
             description=(
                 f"rr-bot empfiehlt einen Bann fuer {member.mention} ({member.id}).\n\n"
                 f"**Erkannte Signale:**\n{summary}\n\n"
-                f"**Timeout (24h) angewendet:** {timeout_status}\n"
+                f"**Bot-Aktionen bisher:**\n"
+                f"- Timeout (24h) angewendet: {timeout_status}\n"
+                f"- Markierte Ausloeser-Nachrichten (👍): {trigger_message_count}\n"
+                f"- Bei Bann-Button: Diese Nachrichten werden geloescht\n\n"
                 f"**Ausloesende Nachricht:** [Zum Kontext springen]({message.jump_url})"
             ),
             color=discord.Color.orange(),
@@ -288,6 +368,9 @@ class AntiSpamGuard(Cog):
         view = BanSuggestionView(
             target_user_id=member.id,
             moderator_role_id=moderator_role.id if moderator_role else None,
+            trigger_message_refs=[
+                (signal.channel_id, signal.message_id) for signal in trigger_signals
+            ],
         )
 
         await alert_channel.send(
@@ -394,6 +477,8 @@ class AntiSpamGuard(Cog):
         signals.append(
             MessageSignal(
                 created_at=now,
+                channel_id=message.channel.id,
+                message_id=message.id,
                 normalized_content=normalized_content,
                 link_count=link_count,
                 mention_count=mention_count,
@@ -401,7 +486,7 @@ class AntiSpamGuard(Cog):
         )
 
         self._prune_old_signals(key, signals)
-        reasons = self._collect_reasons(signals)
+        reasons, trigger_signals = self._collect_reasons_and_trigger_signals(signals)
 
         if not reasons:
             return
@@ -412,15 +497,18 @@ class AntiSpamGuard(Cog):
 
         self._last_action_at[key] = now
 
+        await self._react_to_trigger_messages(message.guild, trigger_signals)
+
         moderator_role = self._find_moderator_role(message.guild)
         timeout_reason = f"Automatische Anti-Spam-Erkennung: {'; '.join(reasons)}"
         timeout_applied = await self._apply_timeout(member, timeout_reason)
 
         link_log.warning(
-            "[anti-spam] user_id=%s guild_id=%s timeout_applied=%s reasons=%s",
+            "[anti-spam] user_id=%s guild_id=%s timeout_applied=%s trigger_messages=%s reasons=%s",
             member.id,
             message.guild.id,
             timeout_applied,
+            len(trigger_signals),
             reasons,
         )
 
@@ -430,6 +518,7 @@ class AntiSpamGuard(Cog):
             reasons=reasons,
             timeout_applied=timeout_applied,
             moderator_role=moderator_role,
+            trigger_signals=trigger_signals,
         )
 
 
