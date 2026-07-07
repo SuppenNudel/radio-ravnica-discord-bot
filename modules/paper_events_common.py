@@ -1404,7 +1404,7 @@ class PaperEvent():
             embed_fields.append(discord.EmbedField(name="Webseite", value=location.url, inline=False))
         embed = discord.Embed(
             color=env.RR_GREEN,
-            title="OpenStreetMap",
+            title="Google Maps",
             url=location.get_search_url(),
             fields=embed_fields,
         )

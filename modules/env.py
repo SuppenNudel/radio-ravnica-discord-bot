@@ -45,6 +45,7 @@ RR_GREEN = 0x25584F
 COLORLESS_EMBED = 0x36393F
 SPIKE_RED = 0x9C1D26
 DEBUG = get_bool_from_env("DEBUG")
+ALLOW_PAID_APIS = get_bool_from_env("ALLOW_PAID_APIS", False)
 STATE_TAGS = get_dict_from_env("STATE_TAGS")
 GUILD_ID = get_int_from_env("GUILD")
 EVENT_DATABASE_ID:str = os.getenv("EVENT_DATABASE_ID")
