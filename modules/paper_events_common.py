@@ -542,7 +542,18 @@ async def edit_event_post(event:"PaperEvent", interaction_or_message:discord.Int
     elif type(interaction_or_message) == discord.Message:
         thread = interaction_or_message.channel
         if isinstance(thread, discord.Thread):
-            await thread.edit(name=event.construct_thread_title())
+            thread_edit_kwargs = {"name": event.construct_thread_title()}
+            parent = thread.parent
+            if isinstance(parent, discord.ForumChannel):
+                forum_tag_preview = event.get_forum_tag_preview()
+                if forum_tag_preview:
+                    _, tag_name = forum_tag_preview
+                    tag = discord.utils.get(parent.available_tags, name=tag_name)
+                    if tag:
+                        thread_edit_kwargs["applied_tags"] = [tag]
+                    else:
+                        log.warning(f"Could not find forum tag '{tag_name}' in channel '{parent.name}'")
+            await thread.edit(**thread_edit_kwargs)
         await interaction_or_message.edit(
             content=event.construct_content(preview=False),
             embeds=embeds,
@@ -1379,12 +1390,27 @@ class PaperEvent():
             location_str = f'<{FieldName.LOCATION.value}>'
 
         return textwrap.shorten(f"{start_str} - {title} @ {location_str}", width=100, placeholder="...")
+
+    def get_forum_tag_preview(self) -> tuple[str, str] | None:
+        location: gmaps.Location | None = self.fields[FieldName.LOCATION].value
+        if not location:
+            return None
+        try:
+            area_name, tag_name = location.get_area_and_tag_name()
+            return area_name, tag_name
+        except Exception as exc:
+            log.warning(f"Could not determine forum tag preview: {exc}")
+            return None
     
     def construct_content(self, preview=True):
         description:str|None = self.fields[FieldName.DESCRIPTION].value
         content = ""
         if preview:
             content += f"# {self.construct_thread_title()}\n"
+            forum_tag_preview = self.get_forum_tag_preview()
+            if forum_tag_preview:
+                area_name, tag_name = forum_tag_preview
+                content += f"🏷️ Forum-Tag (Vorschau): **{tag_name}** ({area_name})\n\n"
         if description:
             content += description
         if url := self.fields[FieldName.URL].value:
@@ -1513,7 +1539,11 @@ class PaperEvent():
 
     async def create_and_send_thread(self, channel:discord.ForumChannel):
         location:gmaps.Location = self.fields[FieldName.LOCATION].value
-        (area_name, tag_name) = location.get_area_and_tag_name()
+        forum_tag_preview = self.get_forum_tag_preview()
+        if forum_tag_preview:
+            _, tag_name = forum_tag_preview
+        else:
+            _, tag_name = location.get_area_and_tag_name()
         tag = discord.utils.get(channel.available_tags, name=tag_name)
         await self.resolve_image()
         thread_kwargs = {

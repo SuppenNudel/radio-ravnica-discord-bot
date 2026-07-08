@@ -8,7 +8,7 @@ import logging
 
 link_log = logging.getLogger("link_logger")
 
-BSKY_ARENA_DAILY_DEALS_HANDLE = "arenadailydeals.bsky.social"  # The user you want to monitor
+BSKY_ARENA_DAILY_DEALS_HANDLE = "notarenadailydeals.bsky.social"  # The user you want to monitor
 CHANNEL_ID_ARENA = int(os.getenv("CHANNEL_ID_ARENA"))
 
 class ArenaDailyDeals(Cog):
@@ -36,18 +36,44 @@ class ArenaDailyDeals(Cog):
         try:
             latest_post = bluesky.check_for_new_post(self.author_did)
             return latest_post
-        except Exception as e:
-            log.error(f"An error occured checking for lastest posts: {e}")
+        except Exception:
+            log.exception(
+                "Failed latest-post check (source=bluesky, handle=%s, did=%s)",
+                BSKY_ARENA_DAILY_DEALS_HANDLE,
+                self.author_did,
+            )
+            return None
 
     @discord.ext.tasks.loop(minutes=15)
     async def check_bsky_posts(self):
-        latest_post = await self.get_latest_post()
-        if self.latest_post and not latest_post.uri == self.latest_post.uri:
-            image_urls = [image.fullsize for image in latest_post.embed.images]
-            channel:discord.TextChannel = await discord.utils.get_or_fetch(self.bot, "channel", CHANNEL_ID_ARENA)
-            for image_url in image_urls:
-                await channel.send(image_url) #embeds=embeds)
-        self.latest_post = latest_post
+        try:
+            latest_post = await self.get_latest_post()
+            if latest_post is None:
+                return
+
+            if self.latest_post and not latest_post.uri == self.latest_post.uri:
+                embed = getattr(latest_post, "embed", None)
+                images = getattr(embed, "images", None) if embed else None
+                image_urls = [image.fullsize for image in images if getattr(image, "fullsize", None)] if images else []
+
+                if not image_urls:
+                    log.warning(
+                        "New Bluesky post has no images to send (handle=%s, uri=%s)",
+                        BSKY_ARENA_DAILY_DEALS_HANDLE,
+                        getattr(latest_post, "uri", "unknown"),
+                    )
+                else:
+                    channel:discord.TextChannel = await discord.utils.get_or_fetch(self.bot, "channel", CHANNEL_ID_ARENA)
+                    for image_url in image_urls:
+                        await channel.send(image_url) #embeds=embeds)
+
+            self.latest_post = latest_post
+        except Exception:
+            log.exception(
+                "Unexpected error in Bluesky daily deals loop (handle=%s, did=%s)",
+                BSKY_ARENA_DAILY_DEALS_HANDLE,
+                getattr(self, "author_did", None),
+            )
 
 def setup(bot:Bot):
     bot.add_cog(ArenaDailyDeals(bot))

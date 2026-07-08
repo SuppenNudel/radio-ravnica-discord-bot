@@ -44,7 +44,7 @@ OCEANIA_BOUNDS = {"lat_min": -50.0, "lat_max": 10.0, "lng_min": 110.0, "lng_max"
 ANTARCTICA_BOUNDS = {"lat_min": -90.0, "lat_max": -60.0, "lng_min": -180.0, "lng_max": 180.0}
 TMP_DIR = "tmp"
 GERMAN_STATE_SHORT_NAMES = {
-    "Baden-Wurttemberg": "BW",
+    "Baden-Württemberg": "BW",
     "Baden-Wuerttemberg": "BW",
     "Bayern": "BY",
     "Berlin": "BE",
@@ -60,7 +60,7 @@ GERMAN_STATE_SHORT_NAMES = {
     "Sachsen": "SN",
     "Sachsen-Anhalt": "ST",
     "Schleswig-Holstein": "SH",
-    "Thuringen": "TH",
+    "Thüringen": "TH",
     "Thueringen": "TH",
 }
 
