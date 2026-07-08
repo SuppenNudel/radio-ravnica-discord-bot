@@ -82,7 +82,13 @@ install_safe_message_edit_patch()
 
 
 def _is_unknown_interaction(error: Exception) -> bool:
-    return isinstance(error, discord.NotFound) and getattr(error, "code", None) == 10062
+    if isinstance(error, discord.NotFound) and getattr(error, "code", None) == 10062:
+        return True
+    # ApplicationCommandInvokeError wraps the original exception in __cause__
+    cause = getattr(error, "__cause__", None)
+    if cause is not None and isinstance(cause, discord.NotFound) and getattr(cause, "code", None) == 10062:
+        return True
+    return False
 
 
 def install_unknown_interaction_suppressor() -> None:

@@ -1,5 +1,6 @@
 import os
 import re
+from ezcord import log
 import logging
 from collections import Counter, defaultdict, deque
 from dataclasses import dataclass
@@ -521,6 +522,9 @@ class AntiSpamGuard(Cog):
             trigger_signals=trigger_signals,
         )
 
+    @Cog.listener()
+    async def on_ready(self):
+        log.info(self.__class__.__name__ + " is ready")
 
 def setup(bot: Bot):
     bot.add_cog(AntiSpamGuard(bot))

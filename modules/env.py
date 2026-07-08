@@ -76,6 +76,7 @@ API_KEY_IMGBB = os.getenv("API_KEY_IMGBB")
 CHANNEL_NEWS_DE = get_int_from_env("CHANNEL_NEWS_DE")
 CHANNEL_NEWS_EN = get_int_from_env("CHANNEL_NEWS_EN")
 API_KEY_YOUTUBE = os.getenv("API_KEY_YOUTUBE")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 # Load feature profiles from JSON
 def load_cog_profiles() -> dict:
