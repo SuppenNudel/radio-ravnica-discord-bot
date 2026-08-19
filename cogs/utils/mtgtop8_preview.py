@@ -317,7 +317,7 @@ async def stack_cards(deck_id, deck_list: list[Card], title: str = "MTGTop8 Deck
 
         if image_url not in image_cache:
             try:
-                response = requests.get(image_url, timeout=10)
+                response = requests.get(image_url, headers=SCRYFALL_HEADERS, timeout=10)
                 response.raise_for_status()
                 img = Image.open(BytesIO(response.content)).convert("RGB").resize((CARD_WIDTH, CARD_HEIGHT))
                 image_cache[image_url] = img
