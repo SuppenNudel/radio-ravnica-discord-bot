@@ -188,7 +188,6 @@ deploy/*
 !deploy/backup_tournaments_db.sh
 !deploy/tournaments-db-backup.service
 !deploy/tournaments-db-backup.timer
-.last_requirements_hash
 .vscode/
 web/
 tournaments.legacy/
