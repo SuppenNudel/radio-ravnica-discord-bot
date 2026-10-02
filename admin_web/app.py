@@ -89,7 +89,7 @@ DEFAULT_HOME_PANELS: tuple[dict[str, str], ...] = (
         "id": "bot-logs",
         "title": "Discord Bot Logs",
         "description": "Live and searchable logs for the Radio Ravnica and Blacky Discord bots.",
-        "url": "/bot-logs/",
+        "url": f"{WEBAPP_PREFIX}/bot-logs/",
         "icon": "server",
         "image_url": "",
     },
@@ -152,6 +152,8 @@ def require_admin_login() -> Any:
         return None
 
     if not session.get("admin_authenticated"):
+        if request.endpoint == "ui.bot_logs_api":
+            return jsonify({"error": "Authentication required."}), 401
         next_url = request.full_path.rstrip("?")
         return redirect(url_for("ui.admin_login", next=next_url))
 
@@ -2081,8 +2083,8 @@ def update_home_panel(panel_id: str) -> Any:
     return jsonify({"error": "Panel not found."}), 404
 
 
-@app.route("/bot-logs/")
-@app.route("/bot-logs")
+@ui.route("/bot-logs/")
+@ui.route("/bot-logs")
 def bot_logs_page() -> str:
     line_count = parse_log_line_count(request.args.get("lines"))
     bot_logs = get_bot_logs(line_count)
@@ -2095,7 +2097,7 @@ def bot_logs_page() -> str:
     )
 
 
-@app.route("/api/bot-logs", methods=["GET"])
+@ui.route("/api/bot-logs", methods=["GET"])
 def bot_logs_api() -> Any:
     line_count = parse_log_line_count(request.args.get("lines"))
     logs = get_bot_logs(line_count)
