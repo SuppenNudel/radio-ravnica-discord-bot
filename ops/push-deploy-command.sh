@@ -48,6 +48,9 @@ if [[ -n "$STASH_OID" ]]; then
         echo "Could not reapply preserved local changes; stash retained and services were not restarted." >&2
         exit 1
     fi
+    if git cat-file -e "HEAD:discord_bot_shared/__init__.py" 2>/dev/null; then
+        git restore --source=HEAD --staged --worktree -- discord_bot_shared/__init__.py
+    fi
     git stash drop stash@{0} >/dev/null
     STASH_OID=""
 fi
