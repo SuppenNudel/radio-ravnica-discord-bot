@@ -1,0 +1,35 @@
+name: Deploy RR bot and admin web
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rr-production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Add deployment key to SSH agent
+        env:
+          RR_DEPLOY_SSH_KEY: ${{ secrets.RR_DEPLOY_SSH_KEY }}
+        run: |
+          test -n "$RR_DEPLOY_SSH_KEY"
+          eval "$(ssh-agent -s)"
+          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
+          echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
+          printf '%s\n' "$RR_DEPLOY_SSH_KEY" | ssh-add -
+
+      - name: Deploy pushed commit
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          printf '%s\n' '37.120.185.142 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG4L6xrx2SdKzafBIKl6JLF9L1lBItMvBlS3j3WZUsLS' >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+          ssh -A -o BatchMode=yes -o StrictHostKeyChecking=yes discord@37.120.185.142 deploy

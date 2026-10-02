@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="login-panel">
+  <p class="eyebrow">RADIO RAVNICA</p>
+  <h2>Admin-Anmeldung</h2>
+  <p class="muted">Melde dich an, um Turniere und Spielstände zu verwalten.</p>
+  {% if error %}<p class="login-error" role="alert">{{ error }}</p>{% endif %}
+  <form method="post" class="login-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="next" value="{{ next_url }}">
+    <label class="form-field">
+      <span>Benutzername</span>
+      <input name="username" autocomplete="username" required autofocus>
+    </label>
+    <label class="form-field">
+      <span>Passwort</span>
+      <input type="password" name="password" autocomplete="current-password" required>
+    </label>
+    <button type="submit">Anmelden</button>
+  </form>
+</section>
+{% endblock %}

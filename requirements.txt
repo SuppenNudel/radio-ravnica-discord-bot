@@ -15,3 +15,4 @@ apify-client
 sqlalchemy
 flask
 google-genai
+google-api-core

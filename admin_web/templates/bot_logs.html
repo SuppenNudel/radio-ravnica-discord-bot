@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Bot Logs — Raspi Web</title>
+    <style>
+      :root {
+        --bg: #07101f;
+        --panel: #0d1a31;
+        --panel-soft: #122440;
+        --border: #243d67;
+        --text: #eff6ff;
+        --muted: #a4b6d4;
+        --accent: #37b6ff;
+        --accent-soft: #0b3151;
+        --ok: #22c55e;
+        --error: #f87171;
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        margin: 0;
+        font-family: "Segoe UI", "Noto Sans", sans-serif;
+        color: var(--text);
+        background:
+          radial-gradient(circle at 10% 0%, #173a6a 0%, transparent 30%),
+          radial-gradient(circle at 100% 100%, #0f2e4a 0%, transparent 28%),
+          var(--bg);
+        min-height: 100vh;
+      }
+
+      main {
+        width: min(1200px, 100%);
+        margin: 0 auto;
+        padding: 22px;
+      }
+
+      .page-header {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        margin-bottom: 20px;
+      }
+
+      .back-link {
+        color: var(--muted);
+        text-decoration: none;
+        font-size: 1.1rem;
+        transition: color .15s;
+      }
+
+      .back-link:hover { color: var(--text); }
+
+      h1 { margin: 0; font-size: 1.6rem; }
+
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 16px;
+        box-shadow: 0 16px 36px rgba(0,0,0,.24);
+      }
+
+      .log-controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin: 0 0 12px;
+        align-items: end;
+      }
+
+      .log-controls label {
+        display: grid;
+        gap: 4px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      .log-controls input {
+        width: 120px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: #0a162a;
+        color: var(--text);
+        padding: 7px 9px;
+      }
+
+      .refresh {
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--panel-soft);
+        color: var(--text);
+        padding: 8px 12px;
+        cursor: pointer;
+      }
+
+      .refresh:disabled { opacity: .65; cursor: not-allowed; }
+
+      .control-meta { margin: 0 0 10px; color: var(--muted); font-size: 13px; }
+
+      .log-panel { display: grid; gap: 8px; }
+
+      .bot-title { margin: 0; }
+
+      .log-source { margin: 4px 0 8px; color: var(--muted); font-size: 12px; }
+
+      .log-output {
+        margin: 0;
+        max-height: 72vh;
+        overflow: auto;
+        border-radius: 10px;
+        padding: 12px;
+        border: 1px solid var(--border);
+        background: #061124;
+        color: #dbeafe;
+        font-size: 12px;
+        line-height: 1.45;
+        font-family: Consolas, Monaco, "Courier New", monospace;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .log-line { display: block; }
+      .log-level-error   { color: #fecaca; }
+      .log-level-warning { color: #fde68a; }
+      .log-level-info    { color: #bae6fd; }
+      .log-level-debug   { color: #c4b5fd; }
+      .log-level-trace   { color: #a7f3d0; }
+      .log-level-default { color: #dbeafe; }
+
+      .level-legend { margin: 0; color: var(--muted); font-size: 12px; }
+
+      .filter-input {
+        width: 100%;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: #0a162a;
+        color: var(--text);
+        padding: 7px 9px;
+      }
+
+      .filter-meta { margin: 0; color: var(--muted); font-size: 12px; min-height: 18px; }
+
+      .status-ok    { color: var(--ok); }
+      .status-error { color: var(--error); }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="page-header">
+        <a class="back-link" href="/" aria-label="Back to Raspi Web">← Raspi Web</a>
+        <h1>Discord Bot Logs</h1>
+      </div>
+
+      <article class="card">
+        <div class="log-controls">
+          <label>
+            Lines per bot
+            <input
+              type="number"
+              name="lines"
+              id="lineCount"
+              min="{{ min_log_lines }}"
+              max="{{ max_log_lines }}"
+              value="{{ line_count }}"
+            >
+          </label>
+          <label>
+            Bot
+            <select id="botSelect" class="filter-input"></select>
+          </label>
+          <label>
+            Auto refresh
+            <select id="refreshInterval" class="filter-input">
+              <option value="0">Off</option>
+              <option value="5">Every 5s</option>
+              <option value="10" selected>Every 10s</option>
+              <option value="30">Every 30s</option>
+              <option value="60">Every 60s</option>
+            </select>
+          </label>
+          <button class="refresh" id="manualRefresh" type="button">Refresh now</button>
+        </div>
+
+        <p id="logsMeta" class="control-meta">Live logs ready.</p>
+        <section class="log-panel">
+          <h3 id="botTitle" class="bot-title">-</h3>
+          <p id="logSource" class="log-source">Source: -</p>
+          <label>
+            Filter
+            <input id="logFilter" type="text" class="filter-input" placeholder="Filter log lines">
+          </label>
+          <p class="level-legend">Color legend: Error, Warning, Info, Debug, Trace.</p>
+          <p id="filterMeta" class="filter-meta"></p>
+          <div id="logOutput" class="log-output" role="log" aria-live="polite"></div>
+        </section>
+        <noscript>
+          <p class="control-meta">JavaScript is required for auto-refresh and filter controls.</p>
+        </noscript>
+      </article>
+    </main>
+
+    <script>
+      (() => {
+        const minLogLines = {{ min_log_lines }};
+        const maxLogLines = {{ max_log_lines }};
+        const initialLogs = {{ bot_logs | tojson }};
+        const lineCountInput = document.getElementById("lineCount");
+        const botSelect = document.getElementById("botSelect");
+        const refreshIntervalSelect = document.getElementById("refreshInterval");
+        const manualRefreshButton = document.getElementById("manualRefresh");
+        const logsMeta = document.getElementById("logsMeta");
+        const botTitle = document.getElementById("botTitle");
+        const logSource = document.getElementById("logSource");
+        const logFilter = document.getElementById("logFilter");
+        const filterMeta = document.getElementById("filterMeta");
+        const logOutput = document.getElementById("logOutput");
+
+        const state = {
+          lineCount: clampLineCount(Number(lineCountInput.value)),
+          logs: initialLogs,
+          selectedBotName: "",
+          timerId: null,
+        };
+
+        function clampLineCount(value) {
+          if (!Number.isFinite(value)) return {{ line_count }};
+          return Math.max(minLogLines, Math.min(maxLogLines, Math.floor(value)));
+        }
+
+        function detectLogLevel(line) {
+          const upper = line.toUpperCase();
+          if (upper.includes("ERROR") || upper.includes("CRITICAL") || upper.includes("FATAL")) return "error";
+          if (upper.includes("WARN") || upper.includes("WARNING")) return "warning";
+          if (upper.includes("DEBUG")) return "debug";
+          if (upper.includes("TRACE")) return "trace";
+          if (upper.includes("INFO")) return "info";
+          return "default";
+        }
+
+        function getSelectedLog() {
+          if (!state.logs.length) return null;
+          const selected = state.logs.find((e) => e.name === state.selectedBotName);
+          if (selected) return selected;
+          state.selectedBotName = state.logs[0].name;
+          return state.logs[0];
+        }
+
+        function renderBotSelect() {
+          const previous = state.selectedBotName;
+          botSelect.innerHTML = "";
+          for (const log of state.logs) {
+            const option = document.createElement("option");
+            option.value = log.name;
+            option.textContent = log.name;
+            botSelect.appendChild(option);
+          }
+          state.selectedBotName = state.logs.some((e) => e.name === previous)
+            ? previous
+            : (state.logs[0] ? state.logs[0].name : "");
+          botSelect.value = state.selectedBotName;
+        }
+
+        function renderSelectedLog() {
+          const log = getSelectedLog();
+          logOutput.innerHTML = "";
+          if (!log) {
+            botTitle.textContent = "No logs available";
+            logSource.textContent = "Source: -";
+            filterMeta.textContent = "";
+            return;
+          }
+          botTitle.textContent = log.name;
+          logSource.innerHTML = "";
+          const sourceText = document.createTextNode(`Source: ${log.source} `);
+          const sourceStatus = document.createElement("span");
+          sourceStatus.className = log.has_error ? "status-error" : "status-ok";
+          sourceStatus.textContent = log.has_error ? "(read issue)" : "(ok)";
+          logSource.appendChild(sourceText);
+          logSource.appendChild(sourceStatus);
+
+          const raw = String(log.content || "");
+          const allLines = raw.split("\n");
+          const query = logFilter.value.trim().toLowerCase();
+          const visibleLines = query ? allLines.filter((l) => l.toLowerCase().includes(query)) : allLines;
+
+          if (!visibleLines.length || (visibleLines.length === 1 && visibleLines[0] === "")) {
+            const emptyLine = document.createElement("span");
+            emptyLine.className = "log-line log-level-default";
+            emptyLine.textContent = query ? "No matching lines." : "No log entries yet.";
+            logOutput.appendChild(emptyLine);
+          } else {
+            for (const line of visibleLines) {
+              const el = document.createElement("span");
+              el.className = `log-line log-level-${detectLogLevel(line)}`;
+              el.textContent = line;
+              logOutput.appendChild(el);
+            }
+          }
+
+          filterMeta.textContent = query
+            ? `Showing ${visibleLines.length} of ${allLines.length} lines for filter '${query}'.`
+            : "";
+        }
+
+        async function fetchLogs() {
+          manualRefreshButton.disabled = true;
+          logsMeta.textContent = "Refreshing logs...";
+          try {
+            const response = await fetch(`/api/bot-logs?lines=${state.lineCount}`, {
+              headers: { "Accept": "application/json" },
+              cache: "no-store",
+            });
+            if (!response.ok) throw new Error(`Request failed (${response.status})`);
+            const payload = await response.json();
+            state.logs = payload.logs || [];
+            state.lineCount = clampLineCount(Number(payload.line_count));
+            lineCountInput.value = String(state.lineCount);
+            renderBotSelect();
+            renderSelectedLog();
+            logsMeta.textContent = `Last refreshed at ${new Date().toLocaleTimeString()}.`;
+          } catch (error) {
+            logsMeta.textContent = `Refresh failed: ${error}`;
+          } finally {
+            manualRefreshButton.disabled = false;
+          }
+        }
+
+        function resetAutoRefresh() {
+          if (state.timerId !== null) { clearInterval(state.timerId); state.timerId = null; }
+          const intervalSeconds = Number(refreshIntervalSelect.value);
+          if (Number.isFinite(intervalSeconds) && intervalSeconds > 0) {
+            state.timerId = setInterval(fetchLogs, intervalSeconds * 1000);
+          }
+        }
+
+        lineCountInput.addEventListener("change", () => {
+          state.lineCount = clampLineCount(Number(lineCountInput.value));
+          lineCountInput.value = String(state.lineCount);
+          fetchLogs();
+        });
+        botSelect.addEventListener("change", () => { state.selectedBotName = botSelect.value; renderSelectedLog(); });
+        logFilter.addEventListener("input", () => { renderSelectedLog(); });
+        refreshIntervalSelect.addEventListener("change", resetAutoRefresh);
+        manualRefreshButton.addEventListener("click", fetchLogs);
+
+        renderBotSelect();
+        renderSelectedLog();
+        resetAutoRefresh();
+      })();
+    </script>
+  </body>
+</html>

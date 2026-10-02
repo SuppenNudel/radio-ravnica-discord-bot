@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Raspi Web</title>
+    <style>
+      :root {
+        --bg: #07101f;
+        --panel: #0d1a31;
+        --panel-soft: #122440;
+        --border: #243d67;
+        --text: #eff6ff;
+        --muted: #a4b6d4;
+        --accent: #37b6ff;
+        --accent-soft: #0b3151;
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        margin: 0;
+        font-family: "Segoe UI", "Noto Sans", sans-serif;
+        color: var(--text);
+        background:
+          radial-gradient(circle at 10% 0%, #173a6a 0%, transparent 30%),
+          radial-gradient(circle at 100% 100%, #0f2e4a 0%, transparent 28%),
+          var(--bg);
+        min-height: 100vh;
+      }
+
+      main {
+        width: min(900px, 100%);
+        margin: 0 auto;
+        padding: 40px 22px 60px;
+      }
+
+      h1 { margin: 0 0 6px; font-size: 1.9rem; }
+
+      .subtitle { margin: 0 0 32px; color: var(--muted); }
+
+      .page-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+
+      .add-panel-button, .edit-panel-button, .delete-panel-button {
+        border: 1px solid var(--accent);
+        border-radius: 8px;
+        cursor: pointer;
+        font: inherit;
+        font-weight: 700;
+      }
+
+      .add-panel-button { background: var(--accent); color: #061220; padding: 10px 14px; }
+      .edit-panel-button { background: transparent; color: var(--text); padding: 7px 10px; margin-top: 8px; }
+      .delete-panel-button { background: transparent; color: var(--muted); border-color: var(--border); padding: 7px 10px; margin-top: 8px; }
+      .add-panel-button:hover { filter: brightness(1.1); }
+      .edit-panel-button:hover { background: var(--accent-soft); }
+      .delete-panel-button:hover { color: var(--text); border-color: var(--accent); }
+
+      .panel-controls { display: flex; gap: 8px; }
+
+      .cards {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+        gap: 16px;
+      }
+
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 22px 20px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        box-shadow: 0 16px 36px rgba(0,0,0,.24);
+      }
+
+      .card h2 { margin: 0; font-size: 1.1rem; }
+
+      .card p { margin: 0; color: var(--muted); font-size: .9rem; line-height: 1.5; flex: 1; }
+
+      .panel-visual { width: 48px; height: 48px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-soft); display: grid; place-items: center; overflow: hidden; font-size: 1.55rem; }
+      .panel-visual img { width: 100%; height: 100%; object-fit: cover; }
+
+      .open-link {
+        display: inline-flex;
+        align-items: center;
+        border-radius: 10px;
+        border: 1px solid var(--accent);
+        background: linear-gradient(120deg, var(--accent-soft), #124974);
+        color: var(--text);
+        text-decoration: none;
+        font-weight: 700;
+        font-size: .9rem;
+        padding: 9px 14px;
+        width: fit-content;
+        margin-top: 4px;
+      }
+
+      .open-link:hover { filter: brightness(1.1); }
+
+      dialog { color: var(--text); background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 0; width: min(460px, calc(100% - 32px)); }
+      dialog::backdrop { background: rgba(0, 0, 0, .65); }
+      .panel-form { padding: 22px; display: grid; gap: 14px; }
+      .panel-form h2 { margin: 0; font-size: 1.2rem; }
+      .field { display: grid; gap: 6px; color: var(--muted); font-size: .9rem; }
+      .field input, .field textarea, .field select { width: 100%; border: 1px solid var(--border); border-radius: 6px; background: var(--panel-soft); color: var(--text); font: inherit; padding: 9px; }
+      .field textarea { resize: vertical; min-height: 76px; }
+      .form-actions { display: flex; justify-content: flex-end; gap: 10px; }
+      .form-actions button { border: 0; border-radius: 6px; cursor: pointer; font: inherit; font-weight: 700; padding: 9px 13px; }
+      .cancel-button { background: transparent; color: var(--muted); }
+      .save-button { background: var(--accent); color: #061220; }
+      .form-error { min-height: 1.2em; margin: 0; color: #ff9f9f; font-size: .9rem; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="page-header">
+        <div>
+          <h1>Raspi Web</h1>
+          <p class="subtitle">Local pages and tools on your home network.</p>
+        </div>
+        <button class="add-panel-button" id="add-panel-button" type="button">Add panel</button>
+      </div>
+
+      <div class="cards">
+        {% for panel in custom_panels %}
+        <article class="card" data-panel-id="{{ panel.id }}" data-title="{{ panel.title }}" data-url="{{ panel.url }}" data-description="{{ panel.description }}" data-icon="{{ panel.icon|default('link', true) }}" data-image-url="{{ panel.image_url|default('', true) }}">
+          <div class="panel-visual">
+            {% if panel.image_url|default('', true) %}<img src="{{ panel.image_url }}" alt="">{% else %}{{ panel_icons[panel.icon|default('link', true)] }}{% endif %}
+          </div>
+          <h2>{{ panel.title }}</h2>
+          {% if panel.description %}<p>{{ panel.description }}</p>{% else %}<p>&nbsp;</p>{% endif %}
+          <a class="open-link" href="{{ panel.url }}" target="_blank" rel="noopener noreferrer">Open panel</a>
+          <div class="panel-controls">
+            <button class="edit-panel-button" type="button">Edit</button>
+            <button class="delete-panel-button" type="button">Remove</button>
+          </div>
+        </article>
+        {% endfor %}
+
+      </div>
+    </main>
+
+    <dialog id="panel-dialog">
+      <form class="panel-form" id="panel-form">
+        <h2 id="panel-dialog-title">Add panel</h2>
+        <label class="field">Name <input name="title" maxlength="80" required></label>
+        <label class="field">Link <input name="url" type="url" placeholder="https://..." required></label>
+        <label class="field">Description <textarea name="description" maxlength="240"></textarea></label>
+        <label class="field">Icon
+          <select name="icon">
+            <option value="link">🔗 Link</option>
+            <option value="server">🖥️ Server</option>
+            <option value="home">🏠 Home</option>
+            <option value="shield">🛡️ Shield</option>
+            <option value="media">🎵 Media</option>
+            <option value="game">🎮 Game</option>
+            <option value="tools">🛠️ Tools</option>
+            <option value="star">⭐ Star</option>
+          </select>
+        </label>
+        <label class="field">Image URL (optional) <input name="image_url" type="url" placeholder="https://.../image.png"></label>
+        <p class="form-error" id="form-error" aria-live="polite"></p>
+        <div class="form-actions">
+          <button class="cancel-button" id="cancel-panel-button" type="button">Cancel</button>
+          <button class="save-button" id="save-panel-button" type="submit">Add panel</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script>
+      const panelDialog = document.querySelector("#panel-dialog");
+      const panelForm = document.querySelector("#panel-form");
+      const formError = document.querySelector("#form-error");
+      const dialogTitle = document.querySelector("#panel-dialog-title");
+      const savePanelButton = document.querySelector("#save-panel-button");
+      let editingPanelId = null;
+
+      document.querySelector("#add-panel-button").addEventListener("click", () => {
+        formError.textContent = "";
+        panelForm.reset();
+        editingPanelId = null;
+        dialogTitle.textContent = "Add panel";
+        savePanelButton.textContent = "Add panel";
+        panelDialog.showModal();
+      });
+
+      document.querySelector("#cancel-panel-button").addEventListener("click", () => panelDialog.close());
+
+      panelForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        formError.textContent = "";
+        const response = await fetch(editingPanelId ? `/api/home-panels/${editingPanelId}` : "/api/home-panels", {
+          method: editingPanelId ? "PATCH" : "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(Object.fromEntries(new FormData(panelForm))),
+        });
+        if (!response.ok) {
+          formError.textContent = (await response.json()).error || "Could not add panel.";
+          return;
+        }
+        window.location.reload();
+      });
+
+      document.querySelectorAll(".edit-panel-button").forEach((button) => {
+        button.addEventListener("click", () => {
+          const card = button.closest("[data-panel-id]");
+          editingPanelId = card.dataset.panelId;
+          panelForm.elements.title.value = card.dataset.title;
+          panelForm.elements.url.value = card.dataset.url;
+          panelForm.elements.description.value = card.dataset.description;
+          panelForm.elements.icon.value = card.dataset.icon;
+          panelForm.elements.image_url.value = card.dataset.imageUrl;
+          formError.textContent = "";
+          dialogTitle.textContent = "Edit panel";
+          savePanelButton.textContent = "Save changes";
+          panelDialog.showModal();
+        });
+      });
+
+      document.querySelectorAll(".delete-panel-button").forEach((button) => {
+        button.addEventListener("click", async () => {
+          const card = button.closest("[data-panel-id]");
+          if (!window.confirm("Remove this panel?")) return;
+          const response = await fetch(`/api/home-panels/${card.dataset.panelId}`, { method: "DELETE" });
+          if (response.ok) card.remove();
+        });
+      });
+    </script>
+  </body>
+</html>

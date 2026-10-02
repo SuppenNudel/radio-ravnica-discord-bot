@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ title if title else "Turnierübersicht" }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  </head>
+  <body>
+    <main class="container">
+      <header class="header">
+        <div class="header-bar">
+          <h1><a href="{{ url_for('ui.index') }}">Turnierübersicht</a></h1>
+          <nav class="header-nav">
+            {% if session.get('admin_authenticated') %}
+              <a class="button-link" href="{{ url_for('ui.tournament_create') }}">Turnier anlegen</a>
+              <form method="post" action="{{ url_for('ui.admin_logout') }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button class="button-link secondary" type="submit">Abmelden</button>
+              </form>
+            {% endif %}
+          </nav>
+        </div>
+      </header>
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          <section class="flash-list" aria-live="polite">
+            {% for category, message in messages %}
+              <div class="flash flash-{{ category }}">{{ message }}</div>
+            {% endfor %}
+          </section>
+        {% endif %}
+      {% endwith %}
+      {% block content %}{% endblock %}
+    </main>
+  </body>
+</html>

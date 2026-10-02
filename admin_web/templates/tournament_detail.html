@@ -1,0 +1,546 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="detail-header">
+  <div>
+    <h2>{{ tournament.name or "Unbenanntes Turnier" }}</h2>
+    {% if tournament.cancelled %}
+      <span class="pill cancelled">Abgesagt</span>
+    {% endif %}
+  </div>
+  <a class="button-link secondary" href="{{ url_for('ui.tournament_edit', tournament_id=tournament.id) }}">Turnier bearbeiten</a>
+</section>
+
+<p class="muted">Start: {{ tournament.start_time | pretty_datetime }}</p>
+<p class="muted">Tournament ID: {{ tournament.id }}</p>
+<p class="muted">
+  Organisator:
+  {% if tournament.organizer_id and users.get(tournament.organizer_id|int) %}
+    {{ users.get(tournament.organizer_id|int) }} ({{ tournament.organizer_id }})
+  {% else %}
+    {{ tournament.organizer_id }}
+  {% endif %}
+</p>
+<p class="muted">
+  Server {{ tournament.guild_id }} -
+  Discord-Kanal <a class="discord-link" href="https://discord.com/channels/{{ tournament.guild_id }}/{{ tournament.channel_id }}" target="_blank" rel="noopener noreferrer" aria-label="Discord-Kanal {{ tournament.channel_id }} öffnen"><span class="discord-icon" aria-hidden="true"><svg viewBox="0 0 127.14 96.36"><path d="M107.7 8.07A105.15 105.15 0 0 0 81.47 0a72.06 72.06 0 0 0-3.36 6.83 97.68 97.68 0 0 0-29.11 0A72.37 72.37 0 0 0 45.64 0 105.89 105.89 0 0 0 19.39 8.09C2.79 32.65-1.71 56.6.54 80.2h.04a105.73 105.73 0 0 0 32.17 16.16 77.7 77.7 0 0 0 6.89-11.11 68.42 68.42 0 0 1-10.84-5.18c.91-.66 1.8-1.34 2.66-2.04a75.57 75.57 0 0 0 64.32 0c.87.71 1.76 1.39 2.66 2.04a68.68 68.68 0 0 1-10.86 5.19 77 77 0 0 0 6.89 11.1 105.25 105.25 0 0 0 32.19-16.16h.04c2.64-27.29-4.51-50.98-18.95-72.13ZM42.45 65.69C36.18 65.69 31 59.98 31 52.96s5.05-12.74 11.43-12.74c6.43 0 11.56 5.76 11.43 12.74 0 7.02-5.05 12.73-11.43 12.73Zm42.24 0c-6.27 0-11.45-5.71-11.45-12.73S78.29 40.22 84.69 40.22c6.43 0 11.56 5.76 11.43 12.74 0 7.02-5.03 12.73-11.43 12.73Z"/></svg></span><span>{{ tournament.channel_id }}</span></a> -
+  Discord-Nachricht <a class="discord-link" href="https://discord.com/channels/{{ tournament.guild_id }}/{{ tournament.channel_id }}/{{ tournament.message_id }}" target="_blank" rel="noopener noreferrer" aria-label="Message {{ tournament.message_id }} öffnen"><span class="discord-icon" aria-hidden="true"><svg viewBox="0 0 127.14 96.36"><path d="M107.7 8.07A105.15 105.15 0 0 0 81.47 0a72.06 72.06 0 0 0-3.36 6.83 97.68 97.68 0 0 0-29.11 0A72.37 72.37 0 0 0 45.64 0 105.89 105.89 0 0 0 19.39 8.09C2.79 32.65-1.71 56.6.54 80.2h.04a105.73 105.73 0 0 0 32.17 16.16 77.7 77.7 0 0 0 6.89-11.11 68.42 68.42 0 0 1-10.84-5.18c.91-.66 1.8-1.34 2.66-2.04a75.57 75.57 0 0 0 64.32 0c.87.71 1.76 1.39 2.66 2.04a68.68 68.68 0 0 1-10.86 5.19 77 77 0 0 0 6.89 11.1 105.25 105.25 0 0 0 32.19-16.16h.04c2.64-27.29-4.51-50.98-18.95-72.13ZM42.45 65.69C36.18 65.69 31 59.98 31 52.96s5.05-12.74 11.43-12.74c6.43 0 11.56 5.76 11.43 12.74 0 7.02-5.05 12.73-11.43 12.73Zm42.24 0c-6.27 0-11.45-5.71-11.45-12.73S78.29 40.22 84.69 40.22c6.43 0 11.56 5.76 11.43 12.74 0 7.02-5.03 12.73-11.43 12.73Z"/></svg></span><span>{{ tournament.message_id }}</span></a>
+</p>
+{% if tournament.description %}
+  <p class="preserve-linebreaks">{{ tournament.description | linkify_text }}</p>
+{% endif %}
+
+<section class="section">
+  <h3>Swiss</h3>
+  <p class="muted">Planned Rounds: {{ tournament.rounds_count if tournament.rounds_count is not none else "-" }}</p>
+  <p class="muted">Winner: {{ users.get(tournament.winner_player_id|int, tournament.winner_player_id) if tournament.winner_player_id is not none else "-" }}</p>
+  <p class="muted">Um Matches anzulegen: zuerst Swiss-Player erfassen, dann eine Runde öffnen, dann dort Matches hinzufügen.</p>
+
+  <div class="form-card compact-card" id="player-form">
+    <h4>Swiss-Player hinzufügen</h4>
+    <form method="post" action="{{ url_for('ui.tournament_player_create', tournament_id=tournament.id) }}" class="inline-admin-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label class="wide-input-field">
+        <span>Spieler</span>
+        <input type="text" name="player_id" id="player-id-input" placeholder="Name oder User ID eingeben..." required autocomplete="off">
+        <div id="player-suggestions" class="autocomplete-suggestions" role="listbox" aria-label="Spieler-Vorschläge"></div>
+      </label>
+      <label>
+        <span>Deck Link</span>
+        <input type="text" name="deck_link" placeholder="https://...">
+      </label>
+      <label>
+        <span>Deck Archetype</span>
+        <input type="text" name="deck_archetype" placeholder="Dimir Control">
+      </label>
+      <label>
+        <span>Gedroppt</span>
+        <input type="checkbox" name="dropped" value="1">
+      </label>
+      <button type="submit">Player hinzufügen</button>
+    </form>
+    {% if swiss_player_choices %}
+      <p class="field-hint">Aktuell registriert: {{ swiss_player_choices|length }} Spieler.</p>
+    {% else %}
+      <p class="field-hint">Noch keine swiss_players vorhanden. Solange das so ist, erscheint beim Match-Bereich kein nutzbares Eingabeformular.</p>
+    {% endif %}
+  </div>
+
+  <div class="form-card compact-card">
+    <h4>Neue Runde anlegen</h4>
+    <form method="post" action="{{ url_for('ui.tournament_round_create', tournament_id=tournament.id) }}" class="inline-admin-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label>
+        <span>Runde</span>
+        <input type="number" name="round_number" min="1" step="1" value="{{ rounds|length + 1 }}">
+      </label>
+      <label class="wide-input-field">
+        <span>Pairings Message ID</span>
+        <input type="number" name="message_id_pairings" step="1">
+      </label>
+      <label class="wide-input-field">
+        <span>Standings Message ID</span>
+        <input type="number" name="message_id_standings" step="1">
+      </label>
+      <button type="submit">Runde hinzufügen</button>
+    </form>
+  </div>
+</section>
+
+{% if navigation_pages %}
+<nav class="page-nav" aria-label="Seiten-Navigation">
+  {% for page_index, page_label in navigation_pages %}
+    <a
+      class="page-link {% if page_index == current_page %}active{% endif %}"
+      href="{{ url_for('ui.tournament_detail', tournament_id=tournament.id, page=page_index) }}"
+    >
+      {{ page_label }}
+    </a>
+  {% endfor %}
+</nav>
+{% endif %}
+
+{% if current_page == 0 %}
+<section class="section">
+  <h3>Participants</h3>
+  <div class="stats">
+    <span class="pill">Teilnehmer {{ participant_counts.participate + participant_counts.tentative + participant_counts.waitlist + participant_counts.decline }}</span>
+  </div>
+  <table>
+    <thead>
+      <tr><th>Nutzer</th><th>User ID</th><th>Status</th><th>Deck</th><th>Beigetreten am</th><th>Aktion</th></tr>
+    </thead>
+    <tbody>
+      {% for p in participants %}
+      <tr>
+        <td title="{{ p.user_id }}" class="{% if p.dropped %}is-dropped{% endif %}">
+          {{ p.display_name or p.user_id }}
+          {% if p.dropped %}
+            <span class="pill dropped">Gedroppt</span>
+          {% endif %}
+        </td>
+        <td>{{ p.user_id }}</td>
+        <td>{{ state_labels.get(p.state, p.state) }}</td>
+        <td>
+          {% if p.deck_link %}
+            <a href="{{ p.deck_link }}" target="_blank" rel="noopener noreferrer">{{ p.deck_archetype or "Deck" }}</a>
+          {% elif p.deck_archetype %}
+            {{ p.deck_archetype }}
+          {% else %}
+            -
+          {% endif %}
+        </td>
+        <td>{{ p.joined_at }}</td>
+        <td>
+          <form
+            method="post"
+            action="{{ url_for('ui.tournament_player_dropped_update', tournament_id=tournament.id, player_id=p.user_id) }}"
+            class="inline-toggle-form"
+          >
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="page" value="{{ current_page }}">
+            <button type="submit" class="{% if p.dropped %}button-link secondary{% else %}btn-warning{% endif %}">
+              {% if p.dropped %}Drop zurücknehmen{% else %}Als dropped markieren{% endif %}
+            </button>
+          </form>
+          <form
+            method="post"
+            action="{{ url_for('ui.tournament_participant_delete', tournament_id=tournament.id, player_id=p.user_id) }}"
+            class="inline-toggle-form"
+            onsubmit="return confirm('Teilnehmer wirklich entfernen?');"
+          >
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="page" value="{{ current_page }}">
+            <button type="submit" class="btn-danger">Teilnehmer entfernen</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+<section class="section">
+  {% if current_round %}
+      <article class="round">
+        <h4>Round {{ current_round.round.round_number }}</h4>
+        <p class="muted">
+          Pairings in Discord:
+          {% if current_round.round.message_id_pairings %}
+            <a class="discord-link" href="https://discord.com/channels/{{ tournament.guild_id }}/{{ tournament.channel_id }}/{{ current_round.round.message_id_pairings }}" target="_blank" rel="noopener noreferrer" aria-label="Discord-Pairings-Nachricht {{ current_round.round.message_id_pairings }} öffnen">
+              <span class="discord-icon" aria-hidden="true"><svg viewBox="0 0 127.14 96.36"><path d="M107.7 8.07A105.15 105.15 0 0 0 81.47 0a72.06 72.06 0 0 0-3.36 6.83 97.68 97.68 0 0 0-29.11 0A72.37 72.37 0 0 0 45.64 0 105.89 105.89 0 0 0 19.39 8.09C2.79 32.65-1.71 56.6.54 80.2h.04a105.73 105.73 0 0 0 32.17 16.16 77.7 77.7 0 0 0 6.89-11.11 68.42 68.42 0 0 1-10.84-5.18c.91-.66 1.8-1.34 2.66-2.04a75.57 75.57 0 0 0 64.32 0c.87.71 1.76 1.39 2.66 2.04a68.68 68.68 0 0 1-10.86 5.19 77 77 0 0 0 6.89 11.1 105.25 105.25 0 0 0 32.19-16.16h.04c2.64-27.29-4.51-50.98-18.95-72.13ZM42.45 65.69C36.18 65.69 31 59.98 31 52.96s5.05-12.74 11.43-12.74c6.43 0 11.56 5.76 11.43 12.74 0 7.02-5.05 12.73-11.43 12.73Zm42.24 0c-6.27 0-11.45-5.71-11.45-12.73S78.29 40.22 84.69 40.22c6.43 0 11.56 5.76 11.43 12.74 0 7.02-5.03 12.73-11.43 12.73Z"/></svg></span>
+              <span>{{ current_round.round.message_id_pairings }}</span>
+            </a>
+          {% else %}
+            -
+          {% endif %}
+          - Standings in Discord:
+          {% if current_round.round.message_id_standings %}
+            <a class="discord-link" href="https://discord.com/channels/{{ tournament.guild_id }}/{{ tournament.channel_id }}/{{ current_round.round.message_id_standings }}" target="_blank" rel="noopener noreferrer" aria-label="Discord-Standings-Nachricht {{ current_round.round.message_id_standings }} öffnen">
+              <span class="discord-icon" aria-hidden="true"><svg viewBox="0 0 127.14 96.36"><path d="M107.7 8.07A105.15 105.15 0 0 0 81.47 0a72.06 72.06 0 0 0-3.36 6.83 97.68 97.68 0 0 0-29.11 0A72.37 72.37 0 0 0 45.64 0 105.89 105.89 0 0 0 19.39 8.09C2.79 32.65-1.71 56.6.54 80.2h.04a105.73 105.73 0 0 0 32.17 16.16 77.7 77.7 0 0 0 6.89-11.11 68.42 68.42 0 0 1-10.84-5.18c.91-.66 1.8-1.34 2.66-2.04a75.57 75.57 0 0 0 64.32 0c.87.71 1.76 1.39 2.66 2.04a68.68 68.68 0 0 1-10.86 5.19 77 77 0 0 0 6.89 11.1 105.25 105.25 0 0 0 32.19-16.16h.04c2.64-27.29-4.51-50.98-18.95-72.13ZM42.45 65.69C36.18 65.69 31 59.98 31 52.96s5.05-12.74 11.43-12.74c6.43 0 11.56 5.76 11.43 12.74 0 7.02-5.05 12.73-11.43 12.73Zm42.24 0c-6.27 0-11.45-5.71-11.45-12.73S78.29 40.22 84.69 40.22c6.43 0 11.56 5.76 11.43 12.74 0 7.02-5.03 12.73-11.43 12.73Z"/></svg></span>
+              <span>{{ current_round.round.message_id_standings }}</span>
+            </a>
+          {% else %}
+            -
+          {% endif %}
+        </p>
+        <form method="post" action="{{ url_for('ui.tournament_round_edit', tournament_id=tournament.id, round_id=current_round.round.id) }}" class="inline-admin-form" style="margin-bottom:12px">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <label class="wide-input-field">
+            <span>Pairings Message ID</span>
+            <input type="number" name="message_id_pairings" step="1" value="{{ current_round.round.message_id_pairings or '' }}">
+          </label>
+          <label class="wide-input-field">
+            <span>Standings Message ID</span>
+            <input type="number" name="message_id_standings" step="1" value="{{ current_round.round.message_id_standings or '' }}">
+          </label>
+          <button type="submit">IDs speichern</button>
+        </form>
+        <div class="form-card compact-card round-admin-card" id="match-form">
+          <h4>Match hinzufügen</h4>
+          {% if swiss_player_choices %}
+            <form
+              method="post"
+              action="{{ url_for('ui.tournament_match_create', tournament_id=tournament.id, round_id=current_round.round.id) }}"
+              class="inline-admin-form"
+            >
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <label class="player-input-field">
+                <span>Player 1</span>
+                <input type="text" name="player1_id" id="player1-id-input" list="swiss-player-options" placeholder="Name oder ID" required>
+              </label>
+              <label class="player-input-field">
+                <span>Player 2</span>
+                <input type="text" name="player2_id" list="swiss-player-options" placeholder="Leer lassen für Bye">
+              </label>
+              <label class="result-input-field">
+                <span>P1</span>
+                <input type="number" name="player1_wins" min="0" step="1" value="0">
+              </label>
+              <label class="result-input-field">
+                <span>P2</span>
+                <input type="number" name="player2_wins" min="0" step="1" value="0">
+              </label>
+              <label class="result-input-field">
+                <span>D</span>
+                <input type="number" name="draws" min="0" step="1" value="0">
+              </label>
+              <button type="submit">Match hinzufügen</button>
+            </form>
+          {% else %}
+            <p class="muted">Keine swiss_players für dieses Turnier gefunden. Füge oben zuerst Swiss-Player hinzu, dann erscheint hier das Match-Formular.</p>
+          {% endif %}
+        </div>
+        <table>
+          <thead>
+            <tr><th>Player 1</th><th>Player 2</th><th>Result (W-L-D)</th><th>Aktion</th></tr>
+          </thead>
+          <tbody>
+            {% for m in current_round.matches %}
+              <tr>
+                <td title="{{ m.player1_id }}" class="{% if dropped_indicator_round_by_player.get(m.player1_id|int) == current_round.round.round_number %}is-dropped{% else %}{% if m.player2_id is not none and m.player1_wins|int > m.player2_wins|int %}is-winner{% elif m.player2_id is none %}is-winner{% endif %}{% endif %}">
+                  {{ users.get(m.player1_id|int, m.player1_id) }}
+                  {% if dropped_indicator_round_by_player.get(m.player1_id|int) == current_round.round.round_number %}
+                    <span class="pill dropped">Gedroppt</span>
+                  {% endif %}
+                </td>
+                <td title="{{ m.player2_id }}" class="{% if dropped_indicator_round_by_player.get(m.player2_id|int) == current_round.round.round_number %}is-dropped{% else %}{% if m.player2_id is not none and m.player2_wins|int > m.player1_wins|int %}is-winner{% endif %}{% endif %}">
+                    {% if m.player2_id is not none %}{{ users.get(m.player2_id|int, m.player2_id) }}{% else %}<span class="muted">BYE</span>{% endif %}
+                  {% if dropped_indicator_round_by_player.get(m.player2_id|int) == current_round.round.round_number %}
+                    <span class="pill dropped">Gedroppt</span>
+                  {% endif %}
+                </td>
+                <td>
+                  {% if (m.player1_wins|int == 0) and (m.player2_wins|int == 0) and (m.draws|int == 0) %}
+                    pending
+                  {% else %}
+                    {{ m.player1_wins }}-{{ m.player2_wins }}{% if m.draws|int != 0 %}-{{ m.draws }}{% endif %}
+                  {% endif %}
+                </td>
+                <td>
+                  <form
+                    method="post"
+                    action="{{ url_for('ui.tournament_match_result_update', tournament_id=tournament.id, match_id=m.id) }}"
+                    class="match-result-form"
+                  >
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="page" value="{{ current_page }}">
+                    <label>
+                      <span>P1</span>
+                      <input type="number" name="player1_wins" value="{{ m.player1_wins }}" min="0" step="1">
+                    </label>
+                    <label>
+                      <span>P2</span>
+                      <input type="number" name="player2_wins" value="{{ m.player2_wins }}" min="0" step="1" {% if m.player2_id is none %}disabled{% endif %}>
+                    </label>
+                    <label>
+                      <span>D</span>
+                      <input type="number" name="draws" value="{{ m.draws }}" min="0" step="1" {% if m.player2_id is none %}disabled{% endif %}>
+                    </label>
+                    {% if m.player2_id is none %}
+                      <span class="field-hint">Bye: nutze 2-0-0 oder 0-0-0.</span>
+                    {% endif %}
+                    <button type="submit">Speichern</button>
+                  </form>
+                  <form
+                    method="post"
+                    action="{{ url_for('ui.tournament_match_delete', tournament_id=tournament.id, match_id=m.id) }}"
+                    class="match-delete-form"
+                    onsubmit="return confirm('Match wirklich löschen?');"
+                  >
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="page" value="{{ current_page }}">
+                    <button type="submit" class="btn-danger">Löschen</button>
+                  </form>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+
+        <h4>Standings after Round {{ current_round.round.round_number }}</h4>
+        <table>
+          <thead>
+            <tr><th>Rank</th><th>Player</th><th>Points</th><th>Match (W-L-D)</th><th>OMW</th><th>GW</th><th>OGW</th><th>Deck</th></tr>
+          </thead>
+          <tbody>
+            {% for standing in current_round_standings %}
+              <tr>
+                <td>{{ standing.rank }}</td>
+                <td title="{{ standing.player_id }}" class="{% if standing.dropped %}is-dropped{% endif %}">
+                  {{ users.get(standing.player_id, standing.player_id) }}
+                  {% if standing.still_playing_in_round %}
+                    <span class="pill">Spielt noch</span>
+                  {% endif %}
+                  {% if standing.dropped %}
+                    <span class="pill dropped">Dropped</span>
+                  {% endif %}
+                </td>
+                <td>{{ standing.match_points }}</td>
+                <td>{{ standing.wins }}-{{ standing.losses }}{% if standing.draws != 0 %}-{{ standing.draws }}{% endif %}</td>
+                <td>{{ "%.1f"|format(standing.omw * 100) }}%</td>
+                <td>{{ "%.1f"|format(standing.gw * 100) }}%</td>
+                <td>{{ "%.1f"|format(standing.ogw * 100) }}%</td>
+                <td>
+                  {% if standing.deck_link %}
+                    <a href="{{ standing.deck_link }}" target="_blank" rel="noopener noreferrer">{{ standing.deck_archetype or "Deck" }}</a>
+                  {% elif standing.deck_archetype %}
+                    {{ standing.deck_archetype }}
+                  {% else %}
+                    -
+                  {% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% if current_round_is_ongoing %}
+          <p class="muted">Spieler mit "Spielt noch" haben für diese Runde noch kein Ergebnis gemeldet.</p>
+        {% endif %}
+      </article>
+  {% elif is_final_standings_page %}
+    <h4>Final Standings</h4>
+    <p class="muted">
+      Standings in Discord:
+      {% if final_standings_message_id %}
+        <a class="discord-link" href="https://discord.com/channels/{{ tournament.guild_id }}/{{ tournament.channel_id }}/{{ final_standings_message_id }}" target="_blank" rel="noopener noreferrer" aria-label="Discord-Standings-Nachricht {{ final_standings_message_id }} öffnen">
+          <span class="discord-icon" aria-hidden="true"><svg viewBox="0 0 127.14 96.36"><path d="M107.7 8.07A105.15 105.15 0 0 0 81.47 0a72.06 72.06 0 0 0-3.36 6.83 97.68 97.68 0 0 0-29.11 0A72.37 72.37 0 0 0 45.64 0 105.89 105.89 0 0 0 19.39 8.09C2.79 32.65-1.71 56.6.54 80.2h.04a105.73 105.73 0 0 0 32.17 16.16 77.7 77.7 0 0 0 6.89-11.11 68.42 68.42 0 0 1-10.84-5.18c.91-.66 1.8-1.34 2.66-2.04a75.57 75.57 0 0 0 64.32 0c.87.71 1.76 1.39 2.66 2.04a68.68 68.68 0 0 1-10.86 5.19 77 77 0 0 0 6.89 11.1 105.25 105.25 0 0 0 32.19-16.16h.04c2.64-27.29-4.51-50.98-18.95-72.13ZM42.45 65.69C36.18 65.69 31 59.98 31 52.96s5.05-12.74 11.43-12.74c6.43 0 11.56 5.76 11.43 12.74 0 7.02-5.05 12.73-11.43 12.73Zm42.24 0c-6.27 0-11.45-5.71-11.45-12.73S78.29 40.22 84.69 40.22c6.43 0 11.56 5.76 11.43 12.74 0 7.02-5.03 12.73-11.43 12.73Z"/></svg></span>
+          <span>{{ final_standings_message_id }}</span>
+        </a>
+      {% else %}
+        -
+      {% endif %}
+    </p>
+    <table>
+      <thead>
+        <tr><th>Rank</th><th>Player</th><th>Points</th><th>Match (W-L-D)</th><th>OMW</th><th>GW</th><th>OGW</th><th>Deck</th></tr>
+      </thead>
+      <tbody>
+        {% for standing in final_standings %}
+          <tr>
+            <td>{{ standing.rank }}</td>
+            <td title="{{ standing.player_id }}" class="{% if standing.dropped %}is-dropped{% endif %}">
+              {{ users.get(standing.player_id, standing.player_id) }}
+              {% if standing.dropped %}
+                <span class="pill dropped">Dropped</span>
+              {% endif %}
+            </td>
+            <td>{{ standing.match_points }}</td>
+            <td>{{ standing.wins }}-{{ standing.losses }}{% if standing.draws != 0 %}-{{ standing.draws }}{% endif %}</td>
+            <td>{{ "%.1f"|format(standing.omw * 100) }}%</td>
+            <td>{{ "%.1f"|format(standing.gw * 100) }}%</td>
+            <td>{{ "%.1f"|format(standing.ogw * 100) }}%</td>
+            <td>
+              {% if standing.deck_link %}
+                <a href="{{ standing.deck_link }}" target="_blank" rel="noopener noreferrer">{{ standing.deck_archetype or "Deck" }}</a>
+              {% elif standing.deck_archetype %}
+                {{ standing.deck_archetype }}
+              {% else %}
+                -
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% elif rounds %}
+  {% else %}
+    <p class="empty">Keine Swiss-Daten für dieses Turnier.</p>
+  {% endif %}
+</section>
+
+{% if swiss_player_choices %}
+  <datalist id="swiss-player-options">
+    {% for player in swiss_player_choices %}
+      <option value="{{ player.label }}"></option>
+    {% endfor %}
+  </datalist>
+{% endif %}
+
+<script>
+  (function () {
+    if (window.location.hash === '#player-form') {
+      var input = document.getElementById('player-id-input');
+      if (input) {
+        input.focus();
+        input.value = '';
+      }
+    }
+    if (window.location.hash === '#match-form') {
+      var input = document.getElementById('player1-id-input');
+      if (input) {
+        input.focus();
+        input.value = '';
+      }
+    }
+
+    // Player autocomplete
+    var playerInput = document.getElementById('player-id-input');
+    var suggestionsDiv = document.getElementById('player-suggestions');
+    var searchTimeout;
+    var activeSuggestionIndex = -1;
+
+    function hideSuggestions() {
+      suggestionsDiv.style.display = 'none';
+      activeSuggestionIndex = -1;
+    }
+
+    function updateActiveSuggestion() {
+      var options = Array.from(suggestionsDiv.children);
+      options.forEach(function(option, index) {
+        option.classList.toggle('active', index === activeSuggestionIndex);
+      });
+    }
+
+    function selectSuggestion(element) {
+      playerInput.value = element.getAttribute('data-label') || '';
+      hideSuggestions();
+    }
+
+    function renderSuggestions(data) {
+      suggestionsDiv.innerHTML = '';
+      activeSuggestionIndex = -1;
+
+      if (!data.length) {
+        hideSuggestions();
+        return;
+      }
+
+      var fragment = document.createDocumentFragment();
+      data.forEach(function(item) {
+        var option = document.createElement('div');
+        option.className = 'autocomplete-suggestion';
+        option.setAttribute('data-id', item.id);
+        option.setAttribute('data-label', item.label);
+        option.textContent = item.label;
+
+        option.addEventListener('mouseenter', function() {
+          var options = Array.from(suggestionsDiv.children);
+          activeSuggestionIndex = options.indexOf(option);
+          updateActiveSuggestion();
+        });
+
+        option.addEventListener('click', function() {
+          selectSuggestion(option);
+        });
+
+        fragment.appendChild(option);
+      });
+
+      suggestionsDiv.appendChild(fragment);
+      suggestionsDiv.style.display = 'block';
+    }
+
+    if (playerInput) {
+      playerInput.addEventListener('input', function() {
+        clearTimeout(searchTimeout);
+        var query = this.value.trim();
+
+        if (query.length < 2) {
+          hideSuggestions();
+          return;
+        }
+
+        searchTimeout = setTimeout(function() {
+          fetch('{{ url_for("ui.tournament_player_search", tournament_id=tournament.id) }}' + '?q=' + encodeURIComponent(query))
+            .then(response => response.json())
+            .then(data => {
+              renderSuggestions(Array.isArray(data) ? data : []);
+            })
+            .catch(error => console.error('Search error:', error));
+        }, 300);
+      });
+
+      playerInput.addEventListener('keydown', function(e) {
+        if (suggestionsDiv.style.display !== 'block') {
+          return;
+        }
+
+        var options = Array.from(suggestionsDiv.children);
+        if (!options.length) {
+          return;
+        }
+
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          activeSuggestionIndex = (activeSuggestionIndex + 1) % options.length;
+          updateActiveSuggestion();
+          return;
+        }
+
+        if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          activeSuggestionIndex = activeSuggestionIndex <= 0 ? options.length - 1 : activeSuggestionIndex - 1;
+          updateActiveSuggestion();
+          return;
+        }
+
+        if (e.key === 'Enter' && activeSuggestionIndex >= 0) {
+          e.preventDefault();
+          selectSuggestion(options[activeSuggestionIndex]);
+          return;
+        }
+
+        if (e.key === 'Escape') {
+          hideSuggestions();
+        }
+      });
+
+      // Hide suggestions when clicking outside
+      document.addEventListener('click', function(e) {
+        if (e.target !== playerInput && !suggestionsDiv.contains(e.target)) {
+          hideSuggestions();
+        }
+      });
+    }
+  })();
+</script>
+
+{% if users %}
+  <datalist id="all-user-options">
+    {% for user_id, display_name in users|dictsort(false, 'value') %}
+      <option value="{{ display_name }} ({{ user_id }})"></option>
+    {% endfor %}
+  </datalist>
+{% endif %}
+{% endblock %}
