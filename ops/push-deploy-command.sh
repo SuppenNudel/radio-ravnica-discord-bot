@@ -7,7 +7,6 @@ if [[ "${SSH_ORIGINAL_COMMAND:-}" != "deploy" ]]; then
 fi
 
 WORK_TREE=/home/discord/radio-ravnica
-WEB_ROOT=/home/discord/rr-tournaments-web
 LOCK_FILE=/tmp/rr-production-deploy.lock
 STASH_OID=""
 
@@ -55,17 +54,7 @@ if [[ -n "$STASH_OID" ]]; then
     STASH_OID=""
 fi
 
-rsync -a --delete \
-    --exclude='/.git/' \
-    --exclude='/venv/' \
-    --exclude='/data/' \
-    --exclude='/tmp/' \
-    --exclude='/.env' \
-    --exclude='/config.env' \
-    "$WORK_TREE/admin_web/" "$WEB_ROOT/"
-
 "$WORK_TREE/venv/bin/pip" install --upgrade -r "$WORK_TREE/requirements.txt"
-"$WEB_ROOT/venv/bin/pip" install --upgrade -r "$WEB_ROOT/requirements.txt"
 
-sudo -n /usr/bin/systemctl restart rr-discord-bot.service rr-tournaments-web.service
+sudo -n /usr/bin/systemctl restart rr-discord-bot.service
 echo "Deployed RR commit $(git rev-parse --short HEAD)."

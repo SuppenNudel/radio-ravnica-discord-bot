@@ -1,4 +1,4 @@
-name: Deploy RR bot and admin web
+name: Deploy RR bot
 
 on:
   push:

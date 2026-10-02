@@ -1,1 +1,1 @@
-discord ALL=(root) NOPASSWD: /usr/bin/systemctl restart rr-discord-bot.service rr-tournaments-web.service
+discord ALL=(root) NOPASSWD: /usr/bin/systemctl restart rr-discord-bot.service
