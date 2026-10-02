@@ -8,7 +8,7 @@ fi
 
 WORK_TREE=/home/discord/radio-ravnica
 WEB_ROOT=/home/discord/rr-tournaments-web
-LOCK_FILE=/home/discord/.rr-production-deploy.lock
+LOCK_FILE=/tmp/rr-production-deploy.lock
 STASH_OID=""
 
 exec 9>"$LOCK_FILE"
