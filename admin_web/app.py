@@ -10,13 +10,13 @@ import sqlite3
 import subprocess
 import sys
 import uuid
+from http.client import HTTPConnection, HTTPException
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 from flask import Blueprint, Flask, abort, flash, jsonify, redirect, render_template, request, send_from_directory, session, url_for
 from markupsafe import Markup, escape
-from werkzeug.security import check_password_hash
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 RR_DISCORD_BOT_DIR = Path(os.getenv("RR_DISCORD_BOT_DIR", str(BASE_DIR / "rr-discord-bot"))).resolve()
@@ -28,6 +28,7 @@ TOURNAMENT_JSON_DIR = RR_DISCORD_BOT_DIR / "tournaments"
 DEFAULT_LOG_LINES = 120
 MIN_LOG_LINES = 20
 MAX_LOG_LINES = 500
+DASHBOARD_SESSION_CHECK_PATH = "/discord-tools/api/session"
 
 BOT_LOG_SOURCES: tuple[dict[str, str], ...] = (
     {
@@ -63,8 +64,6 @@ app.config.update(
     SESSION_COOKIE_SAMESITE="Lax",
     PERMANENT_SESSION_LIFETIME=timedelta(hours=8),
 )
-ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
-ADMIN_PASSWORD_HASH = os.getenv("ADMIN_PASSWORD_HASH", "")
 HOME_PANELS_PATH = Path(__file__).resolve().parent / "data" / "home_panels.json"
 HOME_PANEL_ICONS: dict[str, str] = {
     "link": "🔗",
@@ -144,16 +143,39 @@ def validate_csrf_token() -> None:
         abort(400, "Invalid CSRF token")
 
 
+def dashboard_session_authenticated() -> bool:
+    cookie_header = request.headers.get("Cookie", "")
+    if "blacky_tools_session=" not in cookie_header:
+        return False
+
+    connection = HTTPConnection("127.0.0.1", 9003, timeout=2)
+    try:
+        connection.request(
+            "GET",
+            DASHBOARD_SESSION_CHECK_PATH,
+            headers={"Cookie": cookie_header, "Connection": "close"},
+        )
+        return connection.getresponse().status == 204
+    except (OSError, HTTPException):
+        return False
+    finally:
+        connection.close()
+
+
+def dashboard_login_redirect(target: str | None) -> Any:
+    safe_target = safe_next_url(target)
+    query = urlencode({"next": safe_target})
+    return redirect(f"/discord-tools/?{query}")
+
+
 @ui.before_request
 def require_admin_login() -> Any:
     if request.endpoint == "ui.admin_login":
-        if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
-            validate_csrf_token()
         return None
 
-    if not session.get("admin_authenticated"):
+    if not dashboard_session_authenticated():
         next_url = request.full_path.rstrip("?")
-        return redirect(url_for("ui.admin_login", next=next_url))
+        return dashboard_login_redirect(next_url)
 
     if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
         validate_csrf_token()
@@ -172,38 +194,16 @@ def safe_next_url(target: str | None) -> str:
 
 
 @ui.route("/login", methods=["GET", "POST"])
-def admin_login() -> str | Any:
-    if session.get("admin_authenticated"):
+def admin_login() -> Any:
+    if dashboard_session_authenticated():
         return redirect(url_for("ui.index"))
-
-    error = None
-    if request.method == "POST":
-        submitted_username = request.form.get("username", "")
-        submitted_password = request.form.get("password", "")
-        try:
-            password_matches = bool(ADMIN_PASSWORD_HASH) and check_password_hash(
-                ADMIN_PASSWORD_HASH,
-                submitted_password,
-            )
-        except ValueError:
-            password_matches = False
-
-        if hmac.compare_digest(submitted_username, ADMIN_USERNAME) and password_matches:
-            session.clear()
-            session.permanent = True
-            session["admin_authenticated"] = True
-            session["_csrf_token"] = secrets.token_urlsafe(32)
-            return redirect(safe_next_url(request.form.get("next")))
-
-        error = "Anmeldung fehlgeschlagen. Bitte Zugangsdaten prüfen."
-
-    return render_template("login.html", error=error, next_url=safe_next_url(request.values.get("next")))
+    return dashboard_login_redirect(request.values.get("next"))
 
 
 @ui.route("/logout", methods=["POST"])
 def admin_logout() -> Any:
     session.clear()
-    return redirect(url_for("ui.admin_login"))
+    return redirect("/discord-tools/")
 
 TOURNAMENT_FORM_FIELDS: tuple[str, ...] = (
     "name",
