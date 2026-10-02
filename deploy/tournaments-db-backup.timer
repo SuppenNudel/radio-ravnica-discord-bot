@@ -1,0 +1,12 @@
+[Unit]
+Description=Run tournaments.db backup every 6 hours
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=6h
+RandomizedDelaySec=5min
+Unit=tournaments-db-backup.service
+Persistent=true
+
+[Install]
+WantedBy=timers.target

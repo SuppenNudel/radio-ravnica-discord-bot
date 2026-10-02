@@ -181,8 +181,13 @@ hall_of_fame/
 data/
 scripts/
 
-# Raspi deployment files (not shared to repo)
+# Server deployment files
 deploy/
+!deploy/
+deploy/*
+!deploy/backup_tournaments_db.sh
+!deploy/tournaments-db-backup.service
+!deploy/tournaments-db-backup.timer
 .last_requirements_hash
 .vscode/
 web/

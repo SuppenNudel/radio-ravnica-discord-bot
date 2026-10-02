@@ -1,0 +1,12 @@
+[Unit]
+Description=Backup tournaments.db database
+After=network.target
+
+[Service]
+Type=oneshot
+User=discord
+Group=discord
+WorkingDirectory=/home/discord/radio-ravnica
+ExecStart=/home/discord/radio-ravnica/deploy/backup_tournaments_db.sh
+StandardOutput=journal
+StandardError=journal
