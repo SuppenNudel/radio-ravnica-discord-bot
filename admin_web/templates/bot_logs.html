@@ -207,7 +207,6 @@
         const minLogLines = {{ min_log_lines }};
         const maxLogLines = {{ max_log_lines }};
         const initialLogs = {{ bot_logs | tojson }};
-        const logsApiUrl = {{ url_for("ui.bot_logs_api") | tojson }};
         const lineCountInput = document.getElementById("lineCount");
         const botSelect = document.getElementById("botSelect");
         const refreshIntervalSelect = document.getElementById("refreshInterval");
@@ -310,7 +309,7 @@
           manualRefreshButton.disabled = true;
           logsMeta.textContent = "Refreshing logs...";
           try {
-            const response = await fetch(`${logsApiUrl}?lines=${state.lineCount}`, {
+            const response = await fetch(`/api/bot-logs?lines=${state.lineCount}`, {
               headers: { "Accept": "application/json" },
               cache: "no-store",
             });
