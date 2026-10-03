@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Callable, Sequence
 import asyncio
+import json
 import os
 import re
 import xml.etree.ElementTree as ET
@@ -44,6 +45,11 @@ class YoutubeChannel:
 
 class BaseYoutube(commands.Cog):
     feed_config: YoutubeFeedConfig | None = None
+
+    youtube_headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36",
+        "Cookie": "SOCS=CAI",
+    }
 
     def __init__(self, bot: Bot):
         if self.feed_config is None:
@@ -112,7 +118,7 @@ class BaseYoutube(commands.Cog):
         response = requests.get(
             f"https://www.youtube.com/@{channel.handle}",
             timeout=10,
-            headers={"User-Agent": "Mozilla/5.0"},
+            headers=self.youtube_headers,
         )
         response.raise_for_status()
 
@@ -179,6 +185,80 @@ class BaseYoutube(commands.Cog):
 
         return videos
 
+    def fetch_recent_videos_from_page(
+        self, channel: YoutubeChannel, max_entries: int = 10
+    ) -> list[dict]:
+        response = requests.get(
+            f"https://www.youtube.com/@{channel.handle}/videos?hl=en&gl=US",
+            timeout=10,
+            headers=self.youtube_headers,
+        )
+        response.raise_for_status()
+
+        marker = "var ytInitialData = "
+        marker_index = response.text.find(marker)
+        if marker_index == -1:
+            raise ValueError(f"YouTube page data is missing for @{channel.handle}")
+
+        page_data, _ = json.JSONDecoder().raw_decode(
+            response.text[marker_index + len(marker):]
+        )
+
+        def iter_lockups(value):
+            if isinstance(value, dict):
+                lockup = value.get("lockupViewModel")
+                if lockup:
+                    yield lockup
+                    return
+                for child in value.values():
+                    yield from iter_lockups(child)
+            elif isinstance(value, list):
+                for child in value:
+                    yield from iter_lockups(child)
+
+        videos = []
+        for lockup in iter_lockups(page_data):
+            video_id = lockup.get("contentId")
+            if lockup.get("contentType") != "LOCKUP_CONTENT_TYPE_VIDEO" or not re.fullmatch(
+                r"[\w-]{11}", video_id or ""
+            ):
+                continue
+
+            metadata = lockup.get("metadata", {}).get("lockupMetadataViewModel", {})
+            metadata_rows = (
+                metadata.get("metadata", {})
+                .get("contentMetadataViewModel", {})
+                .get("metadataRows", [])
+            )
+            if any(row.get("badges") for row in metadata_rows):
+                continue
+
+            videos.append(
+                {
+                    "videoId": video_id,
+                    "title": metadata.get("title", {}).get("content", ""),
+                    "published": "",
+                }
+            )
+            if len(videos) == max_entries:
+                break
+
+        return videos
+
+    def fetch_recent_videos(
+        self, channel: YoutubeChannel, max_entries: int = 10
+    ) -> list[dict] | None:
+        try:
+            return self.fetch_recent_videos_from_feed(channel, max_entries)
+        except requests.HTTPError as error:
+            if error.response is None or error.response.status_code != 404:
+                raise
+            log.warning(
+                "YouTube RSS is unavailable for @%s; falling back to the public videos page.",
+                channel.handle,
+            )
+            return self.fetch_recent_videos_from_page(channel, max_entries)
+
     async def ensure_channel_id(self, channel: YoutubeChannel) -> bool:
         if channel.channel_id:
             return True
@@ -209,7 +289,7 @@ class BaseYoutube(commands.Cog):
         max_retries = 4
         for attempt in range(max_retries + 1):
             try:
-                contents = await loop.run_in_executor(None, self.fetch_recent_videos_from_feed, channel)
+                contents = await loop.run_in_executor(None, self.fetch_recent_videos, channel)
                 if contents is None:
                     log.debug(f"No changes in YouTube RSS feed for @{channel.handle} (304 Not Modified)")
                     return None, False, True

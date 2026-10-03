@@ -237,6 +237,46 @@ class YoutubeCogParsingTestCase(unittest.TestCase):
         self.assertIsNone(recent)
         self.assertEqual(requests_get.call_args.kwargs["headers"]["If-None-Match"], '"etag-1"')
 
+    def test_fetch_recent_videos_falls_back_to_page_on_feed_404(self):
+        channel = YoutubeChannel("GameRii", 99, "UCabc123")
+        expected = [{"videoId": "video123", "title": "Video", "published": ""}]
+        error = requests.HTTPError(response=SimpleNamespace(status_code=404))
+
+        with patch.object(self.cog, "fetch_recent_videos_from_feed", side_effect=error), \
+             patch.object(self.cog, "fetch_recent_videos_from_page", return_value=expected) as fetch_page:
+            recent = self.cog.fetch_recent_videos(channel)
+
+        self.assertEqual(recent, expected)
+        fetch_page.assert_called_once_with(channel, 10)
+
+    def test_fetch_recent_videos_from_page_parses_unbadged_videos(self):
+        channel = YoutubeChannel("GameRii", 99, "UCabc123")
+        response = DummyResponse(
+            """
+            <script>var ytInitialData = {"contents":[
+                {"lockupViewModel":{
+                    "contentId":"video123456","contentType":"LOCKUP_CONTENT_TYPE_VIDEO",
+                    "metadata":{"lockupMetadataViewModel":{"title":{"content":"Public video"},
+                        "metadata":{"contentMetadataViewModel":{"metadataRows":[]}}}}
+                }},
+                {"lockupViewModel":{
+                    "contentId":"member123456","contentType":"LOCKUP_CONTENT_TYPE_VIDEO",
+                    "metadata":{"lockupMetadataViewModel":{"title":{"content":"Members first"},
+                        "metadata":{"contentMetadataViewModel":{"metadataRows":[{"badges":[{}]}]}}}}
+                }}
+            ]};</script>
+            """
+        )
+
+        with patch("discord_bot_shared.youtube_feed.requests.get", return_value=response) as requests_get:
+            recent = self.cog.fetch_recent_videos_from_page(channel)
+
+        self.assertEqual(
+            recent,
+            [{"videoId": "video123456", "title": "Public video", "published": ""}],
+        )
+        self.assertEqual(requests_get.call_args.kwargs["headers"]["Cookie"], "SOCS=CAI")
+
     def test_fetch_recent_videos_from_feed_skips_shorts(self):
         channel = YoutubeChannel("GameRii", 99, "UCabc123")
         response = DummyResponse(
