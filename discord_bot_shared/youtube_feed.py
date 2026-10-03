@@ -253,10 +253,6 @@ class BaseYoutube(commands.Cog):
         except requests.HTTPError as error:
             if error.response is None or error.response.status_code != 404:
                 raise
-            log.warning(
-                "YouTube RSS is unavailable for @%s; falling back to the public videos page.",
-                channel.handle,
-            )
             return self.fetch_recent_videos_from_page(channel, max_entries)
 
     async def ensure_channel_id(self, channel: YoutubeChannel) -> bool:
