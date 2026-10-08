@@ -5,11 +5,14 @@ import discord.ext.tasks
 from modules import bluesky
 import os
 import logging
+import re
 
 link_log = logging.getLogger("link_logger")
 
 BSKY_ARENA_DAILY_DEALS_HANDLE = "notarenadailydeals.bsky.social"  # The user you want to monitor
 CHANNEL_ID_ARENA = int(os.getenv("CHANNEL_ID_ARENA"))
+ROLE_ID_ARENA_DEALS = 1557669813227233310
+DEAL_HASHTAG_PATTERN = re.compile(r"(?<!\w)#(?:gold|draftToken)\b", re.IGNORECASE)
 
 class ArenaDailyDeals(Cog):
     def __init__(self, bot:Bot):
@@ -55,6 +58,9 @@ class ArenaDailyDeals(Cog):
                 embed = getattr(latest_post, "embed", None)
                 images = getattr(embed, "images", None) if embed else None
                 image_urls = [image.fullsize for image in images if getattr(image, "fullsize", None)] if images else []
+                record = getattr(latest_post, "record", None)
+                post_text = getattr(record, "text", "") or ""
+                notify_role = DEAL_HASHTAG_PATTERN.search(post_text) is not None
 
                 if not image_urls:
                     log.warning(
@@ -62,8 +68,18 @@ class ArenaDailyDeals(Cog):
                         BSKY_ARENA_DAILY_DEALS_HANDLE,
                         getattr(latest_post, "uri", "unknown"),
                     )
-                else:
+                if image_urls or notify_role:
                     channel:discord.TextChannel = await discord.utils.get_or_fetch(self.bot, "channel", CHANNEL_ID_ARENA)
+                    if notify_role:
+                        await channel.send(
+                            f"<@&{ROLE_ID_ARENA_DEALS}>",
+                            allowed_mentions=discord.AllowedMentions(
+                                roles=[discord.Object(id=ROLE_ID_ARENA_DEALS)],
+                                users=False,
+                                everyone=False,
+                                replied_user=False,
+                            ),
+                        )
                     for image_url in image_urls:
                         await channel.send(image_url) #embeds=embeds)
 
