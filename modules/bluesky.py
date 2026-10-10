@@ -23,12 +23,14 @@ def get_target_did(user_handle):
 def check_for_new_post(target_did):
     if not client.me:
         init()
-    # Fetch the latest posts from the user
-    timeline = client.app.bsky.feed.get_author_feed({'actor': target_did, 'limit': 1})
+    # Fetch recent feed entries and ignore posts authored by other accounts.
+    timeline = client.app.bsky.feed.get_author_feed({'actor': target_did, 'limit': 100})
     
     if timeline.feed:
-        latest_post = timeline.feed[0].post
-        return latest_post        
+        for feed_item in timeline.feed:
+            post = feed_item.post
+            if post.author.did == target_did:
+                return post
 
 def check_for_new_posts(user_handle):
     if not client.me:
