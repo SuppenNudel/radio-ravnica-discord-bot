@@ -999,10 +999,12 @@ class DeleteEventView(discord.ui.View):
         cancel_event_timers(thread.id)
 
         content = "Event gelöscht. Es werden keine weiteren Wiederholungen mehr erstellt."
+        thread_deleted = False
         try:
             await thread.delete()
+            thread_deleted = True
         except discord.NotFound:
-            pass
+            thread_deleted = True
         except discord.HTTPException:
             log.exception(f"Failed to delete paper event thread {thread.id}")
             content = (
@@ -1011,7 +1013,10 @@ class DeleteEventView(discord.ui.View):
             )
 
         self.stop()
-        await interaction.edit_original_response(content=content, embeds=[], attachments=[], view=None)
+        if thread_deleted:
+            await interaction.followup.send(content, ephemeral=True)
+        else:
+            await interaction.edit_original_response(content=content, embeds=[], attachments=[], view=None)
         try:
             await update_paper_events_calendar(interaction.client, self.event.guild)
         except Exception:
