@@ -135,13 +135,12 @@ class PaperEventsStatusMonitor(Cog):
         if not self.guild:
             return
 
-        await self._create_next_recurring_event(thread_id)
-            
         try:
             thread = await self.guild.fetch_channel(thread_id)
             if isinstance(thread, discord.Thread) and not thread.archived:
                 try:
                     message = await thread.fetch_message(thread.id)
+                    await self._create_next_recurring_event(thread_id)
                     await message.edit(view=None)
                 except discord.errors.NotFound:
                     await self._delete_event_entry(thread_id, "starter post not found during archive")
@@ -592,6 +591,12 @@ class PaperEventsStatusMonitor(Cog):
                 del _active_timers[thread_id]
 
 
+def cancel_event_timers(thread_id: int) -> None:
+    for task in _active_timers.pop(thread_id, {}).values():
+        if not task.done():
+            task.cancel()
+
+
 async def schedule_event_timers(bot: Bot, guild: discord.Guild, thread_id: int, event_start: datetime, event_end: datetime | None, is_recurring: bool = False):
     """
     Schedule timers to archive and delete event threads at appropriate times.
@@ -601,13 +606,8 @@ async def schedule_event_timers(bot: Bot, guild: discord.Guild, thread_id: int, 
     now = datetime.now(tz=date_to_compare.tzinfo)
     
     # Cancel any existing timers for this thread
-    if thread_id in _active_timers:
-        for task in _active_timers[thread_id].values():
-            if not task.done():
-                task.cancel()
-        _active_timers[thread_id].clear()
-    else:
-        _active_timers[thread_id] = {}
+    cancel_event_timers(thread_id)
+    _active_timers[thread_id] = {}
     
     # Get the cog instance
     cog: PaperEventsStatusMonitor | None = bot.get_cog("PaperEventsStatusMonitor")  # type: ignore

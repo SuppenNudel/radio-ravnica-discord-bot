@@ -54,6 +54,7 @@
 - Wenn mindestens die Pflichtfelder (⚠️) ausgefüllt sind (✅), kann das Turnier/Event gepostet werden.
 - Der Eintrag wird in eine öffentlich einsehbare [Datenbank](https://www.notion.so/f05d532cf91f4f9cbce38e27dc85b522?pvs=21) geschrieben.
 - Zusätzlich wird das Event im Kanal **[📅paper-turniere](https://discord.com/channels/783441128119730236/1207651082491142154)** gepostet.
+- Über **Bearbeiten → Event löschen** können Autor oder Moderatoren ein gepostetes Event nach Bestätigung löschen. Dabei werden der Discord-Post und der Datenbankeintrag entfernt und weitere Wiederholungen gestoppt.
 - Demonstration: https://www.youtube.com/watch?v=8Xzmw53KXm8
 
 ## Ask Us Anything

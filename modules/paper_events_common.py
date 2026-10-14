@@ -968,6 +968,73 @@ class SubmitButton(discord.ui.Button):
                 attachments=[]
             )
 
+class DeleteEventView(discord.ui.View):
+    def __init__(self, event:"PaperEvent"):
+        super().__init__(timeout=120)
+        self.event = event
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        user = interaction.user
+        if user and (
+            (self.event.author and self.event.author.id == user.id)
+            or any(role.name == "Moderator" for role in getattr(user, "roles", []))
+        ):
+            return True
+        await interaction.response.send_message("Du bist nicht Autor dieses Posts!", ephemeral=True)
+        return False
+
+    @discord.ui.button(label="Endgültig löschen", style=discord.ButtonStyle.danger, emoji="🗑️")
+    async def confirm_callback(self, button: discord.ui.Button, interaction: discord.Interaction):
+        if not await self.interaction_check(interaction):
+            return
+        await interaction.response.defer()
+        from cogs.paper_events.paper_events_status_monitor import cancel_event_timers
+
+        thread = self.event.thread
+        conn = paper_events_db.connect()
+        try:
+            paper_events_db.delete_event_by_thread_id(conn, thread.id)
+        finally:
+            conn.close()
+        cancel_event_timers(thread.id)
+
+        content = "Event gelöscht. Es werden keine weiteren Wiederholungen mehr erstellt."
+        try:
+            await thread.delete()
+        except discord.NotFound:
+            pass
+        except discord.HTTPException:
+            log.exception(f"Failed to delete paper event thread {thread.id}")
+            content = (
+                "Event aus der Datenbank entfernt. Es werden keine weiteren Wiederholungen mehr erstellt. "
+                "Der Discord-Post konnte nicht gelöscht werden. Bitte lösche ihn manuell."
+            )
+
+        self.stop()
+        await interaction.edit_original_response(content=content, embeds=[], attachments=[], view=None)
+        try:
+            await update_paper_events_calendar(interaction.client, self.event.guild)
+        except Exception:
+            log.exception(f"Failed to refresh calendar after deleting paper event {thread.id}")
+            await interaction.followup.send(
+                "Der Kalender konnte nicht aktualisiert werden. Das Event bleibt gelöscht.", ephemeral=True
+            )
+
+    @discord.ui.button(label="Abbrechen", style=discord.ButtonStyle.secondary)
+    async def cancel_callback(self, button: discord.ui.Button, interaction: discord.Interaction):
+        embeds = [self.event.construct_event_embed()]
+        gmaps_embed = self.event.construct_gmaps_embed()
+        if gmaps_embed:
+            embeds.append(gmaps_embed)
+        await interaction.response.edit_message(
+            content=self.event.construct_content(preview=True),
+            embeds=embeds,
+            files=self.event.get_files(),
+            view=EditTourneyView(self.event),
+        )
+        self.stop()
+
+
 class EditTourneyView(discord.ui.View):
     def __init__(self, event:"PaperEvent"):
         super().__init__(timeout=None)
@@ -1070,6 +1137,25 @@ class EditTourneyView(discord.ui.View):
         self.submit_button.row = 4
         self.add_item(self.submit_button)
         self.add_cancel_button(self)
+        if self.event.thread:
+            delete_button = discord.ui.Button(label="Event löschen", style=discord.ButtonStyle.danger, emoji="🗑️", row=4)
+            delete_button.callback = self.delete_callback
+            self.add_item(delete_button)
+
+    async def delete_callback(self, interaction: discord.Interaction):
+        view = DeleteEventView(self.event)
+        if not await view.interaction_check(interaction):
+            return
+        await interaction.response.edit_message(
+            content=(
+                "Dieses Event und den Discord-Post endgültig löschen? "
+                "Auch bei wiederkehrenden Events werden danach keine weiteren Wiederholungen mehr erstellt."
+            ),
+            embeds=[],
+            attachments=[],
+            view=view,
+        )
+        self.stop()
 
     def add_cancel_button(self, view: discord.ui.View):
         cancel_button = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.red, row=4)
