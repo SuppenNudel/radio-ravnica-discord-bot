@@ -12,7 +12,7 @@ link_log = logging.getLogger("link_logger")
 
 DEBUG = env.DEBUG
 
-SPIKE_ART_CROP = "https://cards.scryfall.io/art_crop/front/b/0/b0e90b22-6f43-4e9a-a236-f33191768813.jpg"
+SPIKE_ART_CROP = "https://cards.scryfall.io/art/front/b/0/b0e90b22-6f43-4e9a-a236-f33191768813.webp"
 
 def check_factory(user):
     def check(m:discord.Message|discord.Interaction):

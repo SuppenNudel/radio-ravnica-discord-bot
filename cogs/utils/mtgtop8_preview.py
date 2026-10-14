@@ -55,11 +55,12 @@ class Card:
             data = response.json()
             data = data['data'][0]
             if 'image_uris' in data:
-                self.image_url = data['image_uris']['large']
+                self.image_url = data['image_uris'].get('display') or data['image_uris'].get('grid')
             else:
                 if 'card_faces' in data:
                     # If the card has multiple faces, we can choose the first one
-                    self.image_url = data['card_faces'][0]['image_uris']['large']
+                    image_uris = data['card_faces'][0].get('image_uris', {})
+                    self.image_url = image_uris.get('display') or image_uris.get('grid')
                 else:
                     log.error(f"No image found for {self.name}")
         else:
@@ -88,7 +89,7 @@ def shrink_image_if_needed(image_path, output_path, max_size_mb=10):
             f.write(buffer.getvalue())
     
 async def request_scryfall_card_images(deck_list: list[Card]):
-    IMAGE_TYPE = "border_crop"
+    IMAGE_TYPE = "crop"
 
     def card_name_variants(name: str) -> list[str]:
         raw = (name or "").strip()
@@ -120,11 +121,13 @@ async def request_scryfall_card_images(deck_list: list[Card]):
 
     def extract_image_url(card_data: dict):
         if "image_uris" in card_data:
-            return card_data["image_uris"].get(IMAGE_TYPE) or card_data["image_uris"].get("large")
+            image_uris = card_data["image_uris"]
+            return image_uris.get(IMAGE_TYPE) or image_uris.get("display") or image_uris.get("grid")
         if "card_faces" in card_data and card_data["card_faces"]:
             first_face = card_data["card_faces"][0]
             if "image_uris" in first_face:
-                return first_face["image_uris"].get(IMAGE_TYPE) or first_face["image_uris"].get("large")
+                image_uris = first_face["image_uris"]
+                return image_uris.get(IMAGE_TYPE) or image_uris.get("display") or image_uris.get("grid")
         return None
 
     # Prepare identifiers (with normalized split-card variants)
