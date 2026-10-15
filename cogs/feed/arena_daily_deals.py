@@ -1,3 +1,4 @@
+import asyncio
 from ezcord import log, Cog
 from discord.ext.commands import slash_command, has_role, has_permissions
 from discord import ApplicationContext, Bot, default_permissions, InteractionContextType, IntegrationType
@@ -37,7 +38,7 @@ class ArenaDailyDeals(Cog):
 
     async def get_latest_post(self):
         try:
-            latest_post = bluesky.check_for_new_post(self.author_did)
+            latest_post = await asyncio.to_thread(bluesky.check_for_new_post, self.author_did)
             return latest_post
         except Exception:
             log.exception(
