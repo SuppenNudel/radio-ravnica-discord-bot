@@ -1,6 +1,7 @@
 import os
 import sys
 import unittest
+from atproto_client.exceptions import NetworkError
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -43,6 +44,59 @@ class BlueskyFeedTestCase(unittest.TestCase):
 
 
 class ArenaDailyDealsTestCase(unittest.IsolatedAsyncioTestCase):
+    async def test_on_ready_starts_polling_without_resolving_author(self):
+        cog = ArenaDailyDeals(MagicMock())
+        loop = MagicMock()
+        loop.is_running.return_value = False
+        with patch.object(cog, "check_bsky_posts", loop), \
+             patch.object(bluesky, "get_target_did") as get_target_did:
+            await cog.on_ready()
+            loop.is_running.return_value = True
+            await cog.on_ready()
+
+        loop.start.assert_called_once_with()
+        get_target_did.assert_not_called()
+        self.assertIsNone(cog.author_did)
+
+    async def test_startup_failure_is_retried_on_next_poll(self):
+        cog = ArenaDailyDeals(MagicMock())
+        post = SimpleNamespace(uri="initial")
+        with patch.object(bluesky, "get_target_did", side_effect=[
+            NetworkError("502 Bad Gateway"), "target-did"
+        ]) as get_target_did, \
+             patch.object(bluesky, "check_for_new_post", return_value=post) as check_for_new_post, \
+             patch("cogs.feed.arena_daily_deals.log") as log:
+            await ArenaDailyDeals.check_bsky_posts.coro(cog)
+            self.assertIsNone(cog.author_did)
+            self.assertIsNone(cog.latest_post)
+            check_for_new_post.assert_not_called()
+            log.exception.assert_called_once()
+
+            await ArenaDailyDeals.check_bsky_posts.coro(cog)
+            await ArenaDailyDeals.check_bsky_posts.coro(cog)
+
+        self.assertEqual(get_target_did.call_count, 2)
+        self.assertEqual(check_for_new_post.call_count, 2)
+        check_for_new_post.assert_called_with("target-did")
+        self.assertEqual(cog.author_did, "target-did")
+        self.assertIs(cog.latest_post, post)
+
+    async def test_get_latest_post_resolves_author_in_thread(self):
+        cog = ArenaDailyDeals(MagicMock())
+        post = MagicMock()
+        with patch("cogs.feed.arena_daily_deals.asyncio.to_thread",
+                   AsyncMock(side_effect=["target-did", post])) as to_thread:
+            result = await cog.get_latest_post()
+
+        self.assertIs(result, post)
+        self.assertEqual(to_thread.await_count, 2)
+        self.assertEqual(to_thread.await_args_list[0].args, (
+            bluesky.get_target_did, "notarenadailydeals.bsky.social"
+        ))
+        self.assertEqual(to_thread.await_args_list[1].args, (
+            bluesky.check_for_new_post, "target-did"
+        ))
+
     async def test_get_latest_post_runs_bluesky_request_in_thread(self):
         cog = ArenaDailyDeals(MagicMock())
         cog.author_did = "target-did"
@@ -52,6 +106,26 @@ class ArenaDailyDealsTestCase(unittest.IsolatedAsyncioTestCase):
 
         self.assertIs(result, post)
         to_thread.assert_awaited_once_with(bluesky.check_for_new_post, "target-did")
+
+    async def test_feed_failure_preserves_state_and_retries(self):
+        cog = ArenaDailyDeals(MagicMock())
+        cog.author_did = "target-did"
+        post = SimpleNamespace(uri="previous")
+        cog.latest_post = post
+        with patch.object(bluesky, "get_target_did") as get_target_did, \
+             patch.object(bluesky, "check_for_new_post",
+                          side_effect=[NetworkError("502 Bad Gateway"), post]) as check_for_new_post, \
+             patch("cogs.feed.arena_daily_deals.log") as log:
+            await ArenaDailyDeals.check_bsky_posts.coro(cog)
+            self.assertIs(cog.latest_post, post)
+            self.assertEqual(cog.author_did, "target-did")
+            log.exception.assert_called_once()
+
+            await ArenaDailyDeals.check_bsky_posts.coro(cog)
+
+        self.assertIs(cog.latest_post, post)
+        self.assertEqual(check_for_new_post.call_count, 2)
+        get_target_did.assert_not_called()
 
     async def check_post(self, text, image_urls=(), previous_uri: str | None = "old"):
         cog = ArenaDailyDeals(MagicMock())

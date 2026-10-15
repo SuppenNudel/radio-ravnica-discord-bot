@@ -72,4 +72,5 @@
 ## Arena Daily Deals
 
 - Der Bot prüft alle 15 Minuten, ob auf https://bsky.app/profile/arenadailydeals.bsky.social ein neuer Beitrag veröffentlicht wurde.
+- Bluesky-Anmeldung und Profilauflösung laufen im Hintergrund. Bei Fehlern (z. B. HTTP 502) wird der Fehler protokolliert und beim nächsten 15-Minuten-Durchlauf erneut versucht, auch wenn Bluesky beim Bot-Start nicht erreichbar ist.
 - Wenn ein neuer Beitrag vorhanden ist, wird der Link im Kanal [🏟mtg-arena](https://discord.com/channels/783441128119730236/783636261189582869) geteilt.

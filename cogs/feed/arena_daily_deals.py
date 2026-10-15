@@ -19,6 +19,7 @@ class ArenaDailyDeals(Cog):
     def __init__(self, bot:Bot):
         self.bot = bot
         self.latest_post = None
+        self.author_did: str | None = None
 
     @Cog.listener()
     async def on_ready(self):
@@ -29,8 +30,6 @@ class ArenaDailyDeals(Cog):
         #         link_log.info(f"Owner: {guild.owner.mention}\nIcon: {guild.icon.url if guild.icon else 'No icon'}")
         # log.info(guilds_str)
         
-        self.author_did = bluesky.get_target_did(BSKY_ARENA_DAILY_DEALS_HANDLE)
-
         if not self.check_bsky_posts.is_running():
             self.check_bsky_posts.start()
             
@@ -38,6 +37,10 @@ class ArenaDailyDeals(Cog):
 
     async def get_latest_post(self):
         try:
+            if self.author_did is None:
+                self.author_did = await asyncio.to_thread(
+                    bluesky.get_target_did, BSKY_ARENA_DAILY_DEALS_HANDLE
+                )
             latest_post = await asyncio.to_thread(bluesky.check_for_new_post, self.author_did)
             return latest_post
         except Exception:
