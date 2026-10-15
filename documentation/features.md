@@ -1,5 +1,11 @@
 # Feature Overview
 
+## Discord log notifications
+
+- Log messages below ERROR are sent silently, without user, role or everyone pings.
+- ERROR/CRITICAL logs and command, event, button and modal error reports mention the user configured with `ERROR_NOTIFY_USER_ID` in `.env`. This variable must contain a positive Discord user ID; invalid or missing values fail at startup. Other mentions in log text are disabled.
+- Set the log channel's notification setting to **Only @mentions**. Do not enable **Suppress All @mentions** for that channel/server if error pings should notify you.
+
 ## Erstelle Turnier
 
 `/erstelle_turnier`

@@ -21,9 +21,12 @@ from ezcord import log, Bot
 import platform
 from modules import env
 from modules.db import init_db
+from modules.discord_logging import NotificationBot, install_discord_log_notifications
 
 LOG_WEBHOOK = env.LOG_WEBHOOK
 IS_DEBUG = env.DEBUG
+
+install_discord_log_notifications()
 
 ezcord.set_log(
     log_level=logging.DEBUG,
@@ -126,7 +129,7 @@ intents.message_content = True
 
 debug_guilds = [env.GUILD_ID, os.getenv("DEBUG_GUILD2_ID")] if IS_DEBUG else []
 
-bot:Bot = Bot(
+bot:Bot = NotificationBot(
     intents=intents,
     error_webhook_url=os.getenv("ERROR_WEBHOOK"),
     language="de",
