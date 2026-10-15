@@ -1,7 +1,8 @@
 import os
 import sys
 import unittest
-from atproto_client.exceptions import NetworkError
+from atproto_client.exceptions import InvokeTimeoutError, NetworkError
+from atproto_client.request import Response
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -62,7 +63,7 @@ class ArenaDailyDealsTestCase(unittest.IsolatedAsyncioTestCase):
         cog = ArenaDailyDeals(MagicMock())
         post = SimpleNamespace(uri="initial")
         with patch.object(bluesky, "get_target_did", side_effect=[
-            NetworkError("502 Bad Gateway"), "target-did"
+            NetworkError(Response(False, 502, b"<html>502 Bad Gateway</html>", {})), "target-did"
         ]) as get_target_did, \
              patch.object(bluesky, "check_for_new_post", return_value=post) as check_for_new_post, \
              patch("cogs.feed.arena_daily_deals.log") as log:
@@ -70,7 +71,10 @@ class ArenaDailyDealsTestCase(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(cog.author_did)
             self.assertIsNone(cog.latest_post)
             check_for_new_post.assert_not_called()
-            log.exception.assert_called_once()
+            log.warning.assert_called_once()
+            log.exception.assert_not_called()
+            self.assertEqual(log.warning.call_args.args[-1], 502)
+            self.assertIn("15 minutes", log.warning.call_args.args[0])
 
             await ArenaDailyDeals.check_bsky_posts.coro(cog)
             await ArenaDailyDeals.check_bsky_posts.coro(cog)
@@ -114,18 +118,40 @@ class ArenaDailyDealsTestCase(unittest.IsolatedAsyncioTestCase):
         cog.latest_post = post
         with patch.object(bluesky, "get_target_did") as get_target_did, \
              patch.object(bluesky, "check_for_new_post",
-                          side_effect=[NetworkError("502 Bad Gateway"), post]) as check_for_new_post, \
+                          side_effect=[NetworkError(), post]) as check_for_new_post, \
              patch("cogs.feed.arena_daily_deals.log") as log:
             await ArenaDailyDeals.check_bsky_posts.coro(cog)
             self.assertIs(cog.latest_post, post)
             self.assertEqual(cog.author_did, "target-did")
-            log.exception.assert_called_once()
+            log.warning.assert_called_once()
+            log.exception.assert_not_called()
 
             await ArenaDailyDeals.check_bsky_posts.coro(cog)
 
         self.assertIs(cog.latest_post, post)
         self.assertEqual(check_for_new_post.call_count, 2)
         get_target_did.assert_not_called()
+
+    async def test_timeout_logs_warning_without_traceback(self):
+        cog = ArenaDailyDeals(MagicMock())
+        with patch.object(bluesky, "get_target_did", side_effect=InvokeTimeoutError()), \
+             patch("cogs.feed.arena_daily_deals.log") as log:
+            result = await cog.get_latest_post()
+
+        self.assertIsNone(result)
+        log.warning.assert_called_once()
+        log.exception.assert_not_called()
+        self.assertEqual(log.warning.call_args.args[-2:], ("InvokeTimeoutError", None))
+
+    async def test_unexpected_failure_keeps_traceback(self):
+        cog = ArenaDailyDeals(MagicMock())
+        with patch.object(bluesky, "get_target_did", side_effect=ValueError("invalid profile")), \
+             patch("cogs.feed.arena_daily_deals.log") as log:
+            result = await cog.get_latest_post()
+
+        self.assertIsNone(result)
+        log.exception.assert_called_once()
+        log.warning.assert_not_called()
 
     async def check_post(self, text, image_urls=(), previous_uri: str | None = "old"):
         cog = ArenaDailyDeals(MagicMock())

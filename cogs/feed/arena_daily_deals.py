@@ -1,4 +1,5 @@
 import asyncio
+from atproto_client.exceptions import NetworkError
 from ezcord import log, Cog
 from discord.ext.commands import slash_command, has_role, has_permissions
 from discord import ApplicationContext, Bot, default_permissions, InteractionContextType, IntegrationType
@@ -43,6 +44,16 @@ class ArenaDailyDeals(Cog):
                 )
             latest_post = await asyncio.to_thread(bluesky.check_for_new_post, self.author_did)
             return latest_post
+        except NetworkError as error:
+            log.warning(
+                "Bluesky network request failed (handle=%s, did=%s, error=%s, status=%s); "
+                "retrying on the next poll in 15 minutes",
+                BSKY_ARENA_DAILY_DEALS_HANDLE,
+                self.author_did,
+                type(error).__name__,
+                error.response.status_code if error.response is not None else None,
+            )
+            return None
         except Exception:
             log.exception(
                 "Failed latest-post check (source=bluesky, handle=%s, did=%s)",
