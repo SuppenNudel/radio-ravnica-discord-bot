@@ -9,6 +9,8 @@ from modules import swiss_mtg
 from modules import env
 import logging
 import asyncio
+from contextlib import closing
+from pathlib import Path
 
 from discord.ext import tasks
 from datetime import datetime, time, timezone
@@ -426,10 +428,7 @@ class SpelltableTournamentManager(Cog):
             )
         ]
 
-        # Pre-populate the member cache for all players across all rounds before
-        # processing rounds concurrently. Without this, the same user can be looked
-        # up multiple times simultaneously (once per round they appear in) because
-        # the cache hasn't been updated yet when the second concurrent lookup starts.
+        # Resolve each player once before rendering historical rounds.
         all_player_ids: set[int] = set()
         for round_obj in rounds_to_refresh:
             for match in round_obj.matches:
@@ -440,28 +439,51 @@ class SpelltableTournamentManager(Cog):
         if all_player_ids:
             await asyncio.gather(*[tournament.get_member(uid) for uid in all_player_ids])
 
-        async def _refresh_one(round_obj):
-            pairings_message = await tournament.get_message(round_obj.message_id_pairings)
-            if not pairings_message:
-                return
-            if isinstance(pairings_message.channel, discord.Thread) and pairings_message.channel.archived:
-                await pairings_message.channel.edit(archived=False)
+        for round_obj in rounds_to_refresh:
+            message_reference = f"ID {round_obj.message_id_pairings}"
             try:
+                pairings_message = await tournament.get_message(round_obj.message_id_pairings)
+                if not pairings_message:
+                    continue
+                message_reference = pairings_message.jump_url
                 pairings_image = await tournament.pairings_to_image(round_obj)
-                pairings_file = discord.File(pairings_image, filename=pairings_image)
-                await pairings_message.edit(attachments=[], file=pairings_file, view=None)
+                image_unchanged = (
+                    len(pairings_message.attachments) == 1
+                    and await pairings_message.attachments[0].read() == Path(pairings_image).read_bytes()
+                )
+                if image_unchanged and not pairings_message.components:
+                    continue
+
+                if isinstance(pairings_message.channel, discord.Thread) and pairings_message.channel.archived:
+                    await pairings_message.channel.edit(archived=False)
+                if image_unchanged:
+                    await pairings_message.edit(view=None)
+                else:
+                    with closing(discord.File(pairings_image, filename=pairings_image)) as pairings_file:
+                        await pairings_message.edit(attachments=[], file=pairings_file, view=None)
             except discord.errors.Forbidden as e:
                 log.warning(
-                    f"Cannot reconcile historical pairings message {pairings_message.jump_url} for tournament '{tournament.title}' "
+                    f"Cannot reconcile historical pairings message {message_reference} for tournament '{tournament.title}' "
                     f"(round {round_obj.round_number}): missing permissions. Error: {e}"
+                )
+            except discord.HTTPException as e:
+                if e.code == 30046:
+                    log.warning(
+                        f"Stopping historical pairings reconciliation for tournament '{tournament.title}' "
+                        f"at message {message_reference} (round {round_obj.round_number}): "
+                        f"Discord's edit limit for messages older than one hour was reached (30046). "
+                        f"Remaining historical rounds will be left unchanged until a later startup."
+                    )
+                    break
+                log.warning(
+                    f"Failed to reconcile historical pairings message {message_reference} for tournament '{tournament.title}' "
+                    f"(round {round_obj.round_number}): {e}"
                 )
             except Exception as e:
                 log.warning(
-                    f"Failed to reconcile historical pairings message {pairings_message.jump_url} for tournament '{tournament.title}' "
+                    f"Failed to reconcile historical pairings message {message_reference} for tournament '{tournament.title}' "
                     f"(round {round_obj.round_number}): {e}"
                 )
-
-        await asyncio.gather(*[_refresh_one(r) for r in rounds_to_refresh], return_exceptions=True)
 
     async def _resolve_discord_user(self, guild: discord.Guild, user_id: int) -> discord.abc.User | None:
         member = guild.get_member(user_id)

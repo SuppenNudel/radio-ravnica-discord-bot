@@ -11,6 +11,7 @@ This cog provides the Discord bot commands and user interface for managing Spell
 - **Swiss Tournament Start**: Automatically initializes Swiss tournaments and handles round progression.
 - **Participation Management**: Users can set their participation status (Participate, Tentative, Decline) and organizers can manage participants.
 - **Automated Updates**: Periodically updates the tournament overview message.
+- **Historical Pairings Reconciliation**: On startup/reconnect, compares historical pairings images with the posted attachments and skips messages that already match and have no buttons. Stale buttons are removed without re-uploading an unchanged image. If Discord reports the old-message edit limit (error `30046`), the bot logs a warning and stops processing the remaining historical rounds for that tournament. Existing messages are kept; pending corrections are checked again on a later startup/reconnect. Active-round updates are unaffected.
 
 
 ## Key Classes and Functions
