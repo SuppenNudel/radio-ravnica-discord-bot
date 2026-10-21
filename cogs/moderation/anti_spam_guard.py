@@ -99,15 +99,15 @@ class BanSuggestionView(discord.ui.View):
 
         if not self._is_moderator(interaction.user, guild):
             await interaction.response.send_message(
-                "Nur Moderator:innen mit Bann-Rechten duerfen diese Aktion ausfuehren.",
+                "Nur Moderator:innen mit Bann-Rechten dürfen diese Aktion ausführen.",
                 ephemeral=True,
             )
             return
 
         target_member = guild.get_member(self.target_user_id)
         ban_reason = (
-            f"Ban bestaetigt durch Anti-Spam-Vorschlag. "
-            f"Ausgeloest von {interaction.user} ({interaction.user.id})."
+            f"Ban bestätigt durch Anti-Spam-Vorschlag. "
+            f"Ausgelöst von {interaction.user} ({interaction.user.id})."
         )
 
         try:
@@ -139,7 +139,7 @@ class BanSuggestionView(discord.ui.View):
         await interaction.response.send_message(
             (
                 f"Nutzer <@{self.target_user_id}> wurde gebannt. "
-                f"{deleted_count} ausloesende Spam-Nachricht(en) wurden geloescht."
+                f"{deleted_count} auslösende Spam-Nachricht(en) wurden gelöscht."
             ),
             ephemeral=True,
         )
@@ -351,13 +351,13 @@ class AntiSpamGuard(Cog):
         embed = discord.Embed(
             title="Verdacht auf Bot/Spam-Verhalten",
             description=(
-                f"rr-bot empfiehlt einen Bann fuer {member.mention} ({member.id}).\n\n"
+                f"rr-bot empfiehlt einen Bann für {member.mention} ({member.id}).\n\n"
                 f"**Erkannte Signale:**\n{summary}\n\n"
                 f"**Bot-Aktionen bisher:**\n"
                 f"- Timeout (24h) angewendet: {timeout_status}\n"
-                f"- Markierte Ausloeser-Nachrichten (👍): {trigger_message_count}\n"
-                f"- Bei Bann-Button: Diese Nachrichten werden geloescht\n\n"
-                f"**Ausloesende Nachricht:** [Zum Kontext springen]({message.jump_url})"
+                f"- Markierte Auslöser-Nachrichten (👍): {trigger_message_count}\n"
+                f"- Bei Bann-Button: Diese Nachrichten werden gelöscht\n\n"
+                f"**Auslösende Nachricht:** [Zum Kontext springen]({message.jump_url})"
             ),
             color=discord.Color.orange(),
             timestamp=discord.utils.utcnow(),
@@ -402,7 +402,7 @@ class AntiSpamGuard(Cog):
 
         if not can_view:
             await ctx.respond(
-                "Nur Moderator:innen oder Admins duerfen diese Einstellungen einsehen.",
+                "Nur Moderator:innen oder Admins dürfen diese Einstellungen einsehen.",
                 ephemeral=True,
             )
             return
@@ -443,8 +443,8 @@ class AntiSpamGuard(Cog):
             value=(
                 f"MODERATOR_ROLE_ID: {configured_role}\n"
                 f"MOD_ALERT_CHANNEL_ID: {configured_channel}\n"
-                f"Aufgeloeste Mod-Rolle: {resolved_role}\n"
-                f"Aufgeloester Alert-Kanal: {resolved_channel}"
+                f"Aufgelöste Mod-Rolle: {resolved_role}\n"
+                f"Aufgelöster Alert-Kanal: {resolved_channel}"
             ),
             inline=False,
         )

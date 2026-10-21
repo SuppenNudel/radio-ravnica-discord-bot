@@ -120,7 +120,7 @@ def _build_swiss_json(db, swiss_t_row: SwissTournamentRecord) -> dict:
         for m_row in match_rows:
             if m_row.player2_id == m_row.player1_id:
                 raise ValueError(
-                    f"Datenkorrektur erforderlich: Ungueltiges Self-Match in der Turnier-DB "
+                    f"Datenkorrektur erforderlich: Ungültiges Self-Match in der Turnier-DB "
                     f"(match_id={m_row.id}, round_id={r_row.id}, player_id={m_row.player1_id})."
                 )
             
@@ -168,6 +168,7 @@ def _build_swiss_json(db, swiss_t_row: SwissTournamentRecord) -> dict:
         "winner": winner,
         "cooldown_percentage": swiss_t_row.tournament.league_cooldown_percentage,
         "count_repeat_opponents": bool(swiss_t_row.tournament.league_count_repeat_opponents),
+        "matches_before_cooldown": swiss_t_row.tournament.league_matches_before_cooldown,
     }
 
 
@@ -210,6 +211,7 @@ async def load_tournaments(bot) -> dict[str, "SpelltableTournament"]:
                 tournament.end_time = _normalize_tournament_datetime(t_row.end_time)
                 tournament.league_cooldown_percentage = t_row.league_cooldown_percentage
                 tournament.league_count_repeat_opponents = bool(t_row.league_count_repeat_opponents)
+                tournament.league_matches_before_cooldown = t_row.league_matches_before_cooldown
                 tournament.message_id = int(t_row.message_id)
                 tournament.channel_id = int(t_row.channel_id)
                 tournament.max_participants = t_row.max_participants
@@ -615,6 +617,7 @@ class SpelltableTournament(Serializable):
         self.end_time:datetime | None = None
         self.league_cooldown_percentage = 50
         self.league_count_repeat_opponents = True
+        self.league_matches_before_cooldown = 1
         self.organizer_id = organizer_id
         self.users:dict[int,ParticipationState] = {} 
         self.message_id:int = None
@@ -658,7 +661,7 @@ class SpelltableTournament(Serializable):
             raise ValueError("Bitte eine Startzeit angeben.")
         if self.is_league:
             swiss_mtg.LeagueTournament.validate_cooldown_settings(
-                self.league_cooldown_percentage, self.league_count_repeat_opponents
+                self.league_cooldown_percentage, self.league_count_repeat_opponents, self.league_matches_before_cooldown
             )
             end_time = _normalize_tournament_datetime(self.end_time)
             if end_time is None or end_time <= start_time:
@@ -669,7 +672,7 @@ class SpelltableTournament(Serializable):
         if not self.is_league or not isinstance(self.swiss_tournament, swiss_mtg.LeagueTournament):
             raise ValueError("Die Liga wurde noch nicht gestartet.")
         if self.cancelled or self.league_has_ended:
-            raise ValueError("Die Liga ist beendet. Ergebnisse koennen nicht mehr gemeldet werden.")
+            raise ValueError("Die Liga ist beendet. Ergebnisse können nicht mehr gemeldet werden.")
         if datetime.now(dt_timezone.utc) < _normalize_tournament_datetime(self.time):
             raise ValueError("Die Liga hat noch nicht begonnen.")
         return self.swiss_tournament.report_match(player1_id, player2_id, player1_wins, player2_wins, draws)
@@ -783,6 +786,7 @@ class SpelltableTournament(Serializable):
         tournament.tournament_style = TournamentStyle(data.get("tournament_style", "swiss"))
         tournament.league_cooldown_percentage = data.get("league_cooldown_percentage", 50)
         tournament.league_count_repeat_opponents = data.get("league_count_repeat_opponents", True)
+        tournament.league_matches_before_cooldown = data.get("league_matches_before_cooldown", 1)
         if data.get("end_time"):
             tournament.end_time = _normalize_tournament_datetime(datetime.fromisoformat(data["end_time"]))
         if "time" in data and data["time"]:
@@ -805,6 +809,7 @@ class SpelltableTournament(Serializable):
                 swiss_tournament_data = dict(
                     swiss_tournament_data, cooldown_percentage=tournament.league_cooldown_percentage,
                     count_repeat_opponents=tournament.league_count_repeat_opponents,
+                    matches_before_cooldown=tournament.league_matches_before_cooldown,
                 )
             competition_type = swiss_mtg.LeagueTournament if tournament.is_league else swiss_mtg.SwissTournament
             tournament.swiss_tournament = competition_type.deserialize(swiss_tournament_data)
@@ -825,6 +830,7 @@ class SpelltableTournament(Serializable):
             "end_time": self.end_time.isoformat() if self.end_time else None,
             "league_cooldown_percentage": self.league_cooldown_percentage,
             "league_count_repeat_opponents": self.league_count_repeat_opponents,
+            "league_matches_before_cooldown": self.league_matches_before_cooldown,
             "users": self.users,
             "waitlist": self.waitlist,
             "guild_id": message.guild.id,
@@ -929,6 +935,19 @@ class SpelltableTournament(Serializable):
         forced_by:int|None = None,
         forced_reason:str|None = None,
     ):
+        if self.is_league and isinstance(self.swiss_tournament, swiss_mtg.LeagueTournament):
+            async with self.league_lock:
+                return await self._user_state(userid, state, forced_by=forced_by, forced_reason=forced_reason)
+        return await self._user_state(userid, state, forced_by=forced_by, forced_reason=forced_reason)
+
+    async def _user_state(
+        self,
+        userid:int,
+        state:ParticipationState,
+        *,
+        forced_by:int|None = None,
+        forced_reason:str|None = None,
+    ):
         if not isinstance(userid, int):
             link_log.warning(
                 f"Skipping user_state update with invalid userid={userid!r} in tournament '{self.title}'."
@@ -955,6 +974,14 @@ class SpelltableTournament(Serializable):
                 until_text = f"\nGültig bis: <t:{int(ban.banned_until.replace(tzinfo=dt_timezone.utc).timestamp())}:F>" if ban.banned_until else ""
                 return f"Du wurdest von der Turnier-Teilnahme gesperrt und kannst dich nicht anmelden.{reason_text}{until_text}"
 
+        league = self.swiss_tournament if self.is_league and isinstance(self.swiss_tournament, swiss_mtg.LeagueTournament) else None
+        if self.is_league and state == ParticipationState.PARTICIPATE:
+            if self.cancelled or self.league_has_ended or (league and league.winner):
+                return "Die Liga ist beendet. Eine Teilnahme ist nicht mehr möglich."
+            player = league.player_by_id(userid) if league else None
+            if player and not player.dropped:
+                return "Du nimmst bereits an dieser Liga teil."
+
         # Build the new state in-memory copy first, then persist to DB.
         # Only after successful DB commit do we update the live in-memory tournament state.
         next_users = dict(self.users)
@@ -977,7 +1004,39 @@ class SpelltableTournament(Serializable):
         promoted_user_ids = self._promote_waitlist_to_capacity(next_users, next_waitlist)
 
         # DB is source of truth: if this fails, self.users/self.waitlist remain unchanged.
-        await self.save_participation_state(next_users, next_waitlist)
+        if league:
+            previous_users, previous_waitlist = self.users, self.waitlist
+            previous_players = list(league.players)
+            previous_states = [(player, player.dropped, player.ready_to_play, player.ready_until) for player in league.players]
+            previous_suppression = self.suppress_overview_update
+            self.users, self.waitlist = next_users, next_waitlist
+            self.suppress_overview_update = True
+            for user_id in [userid] + promoted_user_ids:
+                player = league.player_by_id(user_id)
+                if next_users.get(user_id) == ParticipationState.PARTICIPATE:
+                    if player is None:
+                        league.players.append(swiss_mtg.Player(user_id))
+                    else:
+                        if player.dropped:
+                            player.ready_to_play = False
+                            player.ready_until = None
+                        player.dropped = False
+                elif player:
+                    player.dropped = True
+                    player.ready_to_play = False
+                    player.ready_until = None
+            try:
+                await self.save_tournament(save_metadata=False)
+            except Exception:
+                self.users, self.waitlist = previous_users, previous_waitlist
+                league.players = previous_players
+                for player, dropped, ready, ready_until in previous_states:
+                    player.dropped, player.ready_to_play, player.ready_until = dropped, ready, ready_until
+                raise
+            finally:
+                self.suppress_overview_update = previous_suppression
+        else:
+            await self.save_participation_state(next_users, next_waitlist)
 
         # DB commit succeeded -> update in-memory state.
         self.users = next_users
@@ -988,9 +1047,13 @@ class SpelltableTournament(Serializable):
 
         message = await self.message
         if message:
-            embed = await self.to_embed()
-            participants_content = await self.get_participants_message()
-            await message.edit(content=participants_content, embed=embed)
+            if league:
+                from modules.spelltable.common_views import update_league_message
+                await update_league_message(self)
+            else:
+                embed = await self.to_embed()
+                participants_content = await self.get_participants_message()
+                await message.edit(content=participants_content, embed=embed)
             if forced_by is None:
                 link_log.info(f"Benutzer <@{userid}> hat den Status auf {state.name} für das Turnier {message.jump_url} gesetzt")
             else:
@@ -1098,10 +1161,10 @@ class SpelltableTournament(Serializable):
         if self.is_league:
             if self.end_time:
                 embed.add_field(name="Ende", value=discord.utils.format_dt(self.end_time, "F")+"\n"+discord.utils.format_dt(self.end_time, "R"), inline=True)
-            counting = "Jedes Match zaehlt" if self.league_count_repeat_opponents else "Nur unterschiedliche Gegner zaehlen"
+            counting = "Jedes Match zählt" if self.league_count_repeat_opponents else "Nur unterschiedliche Gegner zählen"
             embed.add_field(
                 name="Rematch-Cooldown",
-                value=f"{self.league_cooldown_percentage}% der anderen aktiven Spieler (aufgerundet)\n{counting}",
+                value=f"{self.league_matches_before_cooldown} Matches pro Paar vor dem Cooldown\n{self.league_cooldown_percentage}% der anderen aktiven Spieler (aufgerundet)\n{counting}",
                 inline=False,
             )
         else:
@@ -1239,6 +1302,7 @@ class SpelltableTournament(Serializable):
                 t_row.end_time = _normalize_tournament_datetime(self.end_time).replace(tzinfo=None) if self.end_time else None
                 t_row.league_cooldown_percentage = self.league_cooldown_percentage
                 t_row.league_count_repeat_opponents = self.league_count_repeat_opponents
+                t_row.league_matches_before_cooldown = self.league_matches_before_cooldown
                 t_row.guild_id = self.guild.id
                 t_row.channel_id = self.channel_id
                 t_row.message_id = self.message_id

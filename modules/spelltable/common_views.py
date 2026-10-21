@@ -354,7 +354,7 @@ class LeagueReportModal(discord.ui.DesignerModal):
                 if self.submitted:
                     raise ValueError("Dieses Ergebnis wurde bereits gemeldet.")
                 if not self.opponent_select.values or any(not select.values for select in self.score_selects):
-                    raise ValueError("Bitte Gegner und Ergebnis auswaehlen.")
+                    raise ValueError("Bitte Gegner und Ergebnis auswählen.")
                 opponent_id = int(self.opponent_select.values[0])
                 scores = [int(select.values[0]) for select in self.score_selects]
                 match = self.tournament.report_league_match(self.reporter_id, opponent_id, *scores)
@@ -450,7 +450,7 @@ class ReadyDurationModal(discord.ui.Modal):
 
     async def callback(self, interaction: discord.Interaction):
         if interaction.user is None or interaction.user.id != self.user_id:
-            await interaction.response.send_message("Du kannst nur deinen eigenen Status aendern.", ephemeral=True)
+            await interaction.response.send_message("Du kannst nur deinen eigenen Status ändern.", ephemeral=True)
             return
         try:
             minutes = int(self.duration_input.value or "")
@@ -472,6 +472,7 @@ class LeagueView(discord.ui.View):
         self.participant_page = participant_page
         self.report_button.disabled = tournament.league_has_ended or bool(tournament.cancelled)
         self.cancel_button.disabled = tournament.league_has_ended
+        self.join_button.disabled = self.report_button.disabled
         self.ready_button.disabled = self.report_button.disabled
         self.unready_button.disabled = self.report_button.disabled
         if participant_page_count <= 1:
@@ -496,7 +497,7 @@ class LeagueView(discord.ui.View):
                 await interaction.followup.send("Die Liga ist beendet.", ephemeral=True)
                 return
             if ready and (ready_until is None or ready_until <= datetime.now(timezone.utc)):
-                await interaction.followup.send("Die Bereitschaftsdauer ist bereits abgelaufen. Bitte erneut auswaehlen.", ephemeral=True)
+                await interaction.followup.send("Die Bereitschaftsdauer ist bereits abgelaufen. Bitte erneut auswählen.", ephemeral=True)
                 return
             previous_ready = player.ready_to_play
             previous_deadline = player.ready_until
@@ -525,6 +526,16 @@ class LeagueView(discord.ui.View):
                 if ready and ready_until else "Du bist jetzt nicht bereit."
             )
             await interaction.followup.send(confirmation, ephemeral=True)
+
+    @discord.ui.button(label="Teilnehmen", style=discord.ButtonStyle.success, custom_id="league:join")
+    async def join_button(self, button: discord.ui.Button, interaction: discord.Interaction):
+        user = interaction.user
+        if user is None:
+            await interaction.response.send_message("Dein Benutzer konnte nicht ermittelt werden.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        result = await self.tournament.user_state(user.id, ParticipationState.PARTICIPATE)
+        await interaction.followup.send(result or "Du nimmst jetzt an der Liga teil.", ephemeral=True)
 
     @discord.ui.button(label="Bereit", style=discord.ButtonStyle.success, custom_id="league:ready")
     async def ready_button(self, button: discord.ui.Button, interaction: discord.Interaction):

@@ -50,6 +50,7 @@ class Tournament(Base):
     end_time = Column(DateTime, nullable=True)
     league_cooldown_percentage = Column(Integer, nullable=False, default=50, server_default="50")
     league_count_repeat_opponents = Column(Boolean, nullable=False, default=True, server_default="1")
+    league_matches_before_cooldown = Column(Integer, nullable=False, default=1, server_default="1")
     
     # Status
     cancelled = Column(Boolean, default=False)
@@ -418,6 +419,8 @@ def _migrate_add_league_columns():
             connection.execute(text("ALTER TABLE tournaments ADD COLUMN league_cooldown_percentage INTEGER NOT NULL DEFAULT 50"))
         if "league_count_repeat_opponents" not in col_types:
             connection.execute(text("ALTER TABLE tournaments ADD COLUMN league_count_repeat_opponents BOOLEAN NOT NULL DEFAULT 1"))
+        if "league_matches_before_cooldown" not in col_types:
+            connection.execute(text("ALTER TABLE tournaments ADD COLUMN league_matches_before_cooldown INTEGER NOT NULL DEFAULT 1"))
 
 
 def _migrate_add_player_readiness_column():

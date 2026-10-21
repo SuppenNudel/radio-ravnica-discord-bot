@@ -205,7 +205,7 @@ class Match(Serializable):
 
         if len(player_items) != 2:
             raise ValueError(
-                f"Datenkorrektur erforderlich: Ungueltige Match-Daten in Runde {round_number} "
+                f"Datenkorrektur erforderlich: Ungültige Match-Daten in Runde {round_number} "
                 f"(erwartet 2 Spieler-Eintraege, erhalten: {player_items})."
             )
 
@@ -216,7 +216,7 @@ class Match(Serializable):
             p2, p1 = p1, p2
         if p1[0] == 'null':
             raise ValueError(
-                f"Datenkorrektur erforderlich: Ungueltige Match-Daten in Runde {round_number} "
+                f"Datenkorrektur erforderlich: Ungültige Match-Daten in Runde {round_number} "
                 f"(kein primaerer Spieler in {player_items})."
             )
         if p2[0] == 'null':
@@ -228,7 +228,7 @@ class Match(Serializable):
             match = Match(player1, player2, round_number, allow_rematch=allow_rematch)
         except ValueError as exc:
             raise ValueError(
-                f"Datenkorrektur erforderlich: Ungueltige Paarung in Runde {round_number} "
+                f"Datenkorrektur erforderlich: Ungültige Paarung in Runde {round_number} "
                 f"({player1.player_id} vs {player2.player_id if player2 else 'BYE'}): {exc}"
             ) from exc
         if p2 and (p1[1] or p2[1] or draws):
@@ -538,23 +538,27 @@ class SwissTournament(Serializable):
 class LeagueTournament(SwissTournament):
     allow_rematches = True
 
-    def __init__(self, players:list[Player], cooldown_percentage=50, count_repeat_opponents=True):
+    def __init__(self, players:list[Player], cooldown_percentage=50, count_repeat_opponents=True, matches_before_cooldown=1):
         super().__init__(players, max_rounds=0)
-        self.validate_cooldown_settings(cooldown_percentage, count_repeat_opponents)
+        self.validate_cooldown_settings(cooldown_percentage, count_repeat_opponents, matches_before_cooldown)
         self.cooldown_percentage = cooldown_percentage
         self.count_repeat_opponents = count_repeat_opponents
+        self.matches_before_cooldown = matches_before_cooldown
 
     @staticmethod
-    def validate_cooldown_settings(cooldown_percentage, count_repeat_opponents):
+    def validate_cooldown_settings(cooldown_percentage, count_repeat_opponents, matches_before_cooldown=1):
         if type(cooldown_percentage) is not int or not 0 <= cooldown_percentage <= 100:
             raise ValueError("Der Rematch-Cooldown muss zwischen 0 und 100 Prozent liegen.")
         if type(count_repeat_opponents) is not bool:
-            raise ValueError("Bitte eine gueltige Zaehlweise fuer den Rematch-Cooldown auswaehlen.")
+            raise ValueError("Bitte eine gültige Zählweise für den Rematch-Cooldown auswählen.")
+        if type(matches_before_cooldown) is not int or matches_before_cooldown < 1:
+            raise ValueError("Vor dem Cooldown muss mindestens ein Match erlaubt sein.")
 
     def serialize(self):
         return dict(
             super().serialize(), cooldown_percentage=self.cooldown_percentage,
             count_repeat_opponents=self.count_repeat_opponents,
+            matches_before_cooldown=self.matches_before_cooldown,
         )
 
     @classmethod
@@ -562,7 +566,10 @@ class LeagueTournament(SwissTournament):
         tournament = super().deserialize(data)
         tournament.cooldown_percentage = data.get("cooldown_percentage", 50)
         tournament.count_repeat_opponents = data.get("count_repeat_opponents", True)
-        cls.validate_cooldown_settings(tournament.cooldown_percentage, tournament.count_repeat_opponents)
+        tournament.matches_before_cooldown = data.get("matches_before_cooldown", 1)
+        cls.validate_cooldown_settings(
+            tournament.cooldown_percentage, tournament.count_repeat_opponents, tournament.matches_before_cooldown
+        )
         return tournament
 
     def pair_players(self):
@@ -572,12 +579,14 @@ class LeagueTournament(SwissTournament):
         player1 = self.player_by_id(player1_id)
         player2 = self.player_by_id(player2_id)
         if player1 is None or player2 is None or player1 is player2:
-            raise ValueError("Bitte zwei unterschiedliche Teilnehmer der Liga auswaehlen.")
+            raise ValueError("Bitte zwei unterschiedliche Teilnehmer der Liga auswählen.")
         previous_matches = [
             match for match in player1.get_finished_non_bye_matches()
             if match.get_opponent_of(player1) is player2
         ]
         if not previous_matches:
+            return 0, 0
+        if len(previous_matches) % self.matches_before_cooldown:
             return 0, 0
         last_meeting = max(match.round_number for match in previous_matches)
         other_players = {
@@ -605,12 +614,12 @@ class LeagueTournament(SwissTournament):
         player1 = self.player_by_id(player1_id)
         player2 = self.player_by_id(player2_id)
         if player1 is None or player2 is None or player1.dropped or player2.dropped:
-            raise ValueError("Beide Spieler muessen aktive Teilnehmer der Liga sein.")
+            raise ValueError("Beide Spieler müssen aktive Teilnehmer der Liga sein.")
         if player1 is player2:
             raise ValueError("Du kannst nicht gegen dich selbst spielen.")
         scores = (player1_wins, player2_wins, draws)
         if any(type(score) is not int or score < 0 for score in scores) or not any(scores):
-            raise ValueError("Bitte ein gueltiges, nicht leeres Ergebnis eingeben.")
+            raise ValueError("Bitte ein gültiges, nicht leeres Ergebnis eingeben.")
         remaining1, remaining2 = self.rematch_cooldown(player1_id, player2_id)
         if remaining1 or remaining2:
             counting_unit = "Matches gegen andere aktive Teilnehmer" if self.count_repeat_opponents else "unterschiedliche andere aktive Gegner"

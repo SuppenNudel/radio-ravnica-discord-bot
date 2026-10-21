@@ -85,6 +85,32 @@ class LeagueScoringTests(unittest.TestCase):
                 league.report_match(1, 2, 2, 0)
                 self.assertEqual(league.rematch_cooldown(1, 2), (required, required))
 
+    def test_configurable_match_blocks_before_cooldown(self):
+        league = swiss_mtg.LeagueTournament(
+            [swiss_mtg.Player(player_id) for player_id in range(1, 5)], matches_before_cooldown=2
+        )
+        league.report_match(1, 2, 2, 0)
+        self.assertEqual(league.rematch_cooldown(1, 2), (0, 0))
+        league.report_match(2, 1, 2, 0)
+        self.assertEqual(league.rematch_cooldown(1, 2), (1, 1))
+        with self.assertRaises(ValueError):
+            league.report_match(1, 2, 2, 0)
+        league.report_match(1, 3, 2, 0)
+        league.report_match(2, 4, 2, 0)
+        league.report_match(1, 2, 2, 0)
+        self.assertEqual(league.rematch_cooldown(1, 2), (0, 0))
+        league.report_match(1, 2, 2, 0)
+        self.assertEqual(league.rematch_cooldown(1, 2), (1, 1))
+
+    def test_matches_before_cooldown_survive_reload(self):
+        league = swiss_mtg.LeagueTournament(self.league.players, matches_before_cooldown=2)
+        league.report_match(1, 2, 2, 0)
+        data = json.loads(json.dumps(league, default=lambda value: value.serialize()))
+        restored = swiss_mtg.LeagueTournament.deserialize(data)
+        self.assertEqual(restored.matches_before_cooldown, 2)
+        restored.report_match(1, 2, 2, 0)
+        self.assertEqual(restored.rematch_cooldown(1, 2), (1, 1))
+
     def test_invalid_cooldown_settings_are_rejected(self):
         invalid_percentages: list[Any] = [-1, 101, 12.5, True]
         for percentage in invalid_percentages:
@@ -257,10 +283,12 @@ class LeagueTournamentTests(unittest.IsolatedAsyncioTestCase):
     async def test_custom_league_rules_survive_database_roundtrip(self):
         self.tournament.league_cooldown_percentage = 75
         self.tournament.league_count_repeat_opponents = False
+        self.tournament.league_matches_before_cooldown = 2
         self.tournament.swiss_tournament = swiss_mtg.LeagueTournament(
             [swiss_mtg.Player(player_id) for player_id in range(1, 7)],
-            cooldown_percentage=75, count_repeat_opponents=False,
+            cooldown_percentage=75, count_repeat_opponents=False, matches_before_cooldown=2,
         )
+        self.tournament.report_league_match(1, 2, 2, 0)
         self.tournament.report_league_match(1, 2, 2, 0)
         await self.tournament.save_tournament()
         loaded = await model.load_tournaments(self.bot)
@@ -271,6 +299,8 @@ class LeagueTournamentTests(unittest.IsolatedAsyncioTestCase):
         assert isinstance(competition, swiss_mtg.LeagueTournament)
         self.assertEqual(competition.cooldown_percentage, 75)
         self.assertFalse(competition.count_repeat_opponents)
+        self.assertEqual(restored.league_matches_before_cooldown, 2)
+        self.assertEqual(competition.matches_before_cooldown, 2)
         self.assertEqual(competition.rematch_cooldown(1, 2), (3, 3))
 
     async def test_unstarted_league_rules_survive_database_roundtrip(self):
@@ -281,6 +311,112 @@ class LeagueTournamentTests(unittest.IsolatedAsyncioTestCase):
         loaded = await model.load_tournaments(self.bot)
         self.assertEqual(loaded["123/789/456"].league_cooldown_percentage, 0)
         self.assertFalse(loaded["123/789/456"].league_count_repeat_opponents)
+
+    async def test_player_can_join_started_league_and_reload(self):
+        await self.tournament.save_tournament()
+        self.tournament._message = SimpleNamespace(jump_url="https://discord.com/channels/123/789/456")
+        with patch.object(common_views, "update_league_message", AsyncMock()) as refresh:
+            result = await self.tournament.user_state(4, model.ParticipationState.PARTICIPATE)
+        self.assertIsNone(result)
+        self.assertIsNotNone(self.tournament.swiss_tournament.player_by_id(4))
+        self.assertEqual(self.tournament.users[4], model.ParticipationState.PARTICIPATE)
+        refresh.assert_awaited_once_with(self.tournament)
+        loaded = await model.load_tournaments(self.bot)
+        self.assertIsNotNone(loaded["123/789/456"].swiss_tournament.player_by_id(4))
+        self.assertEqual({option.value for option in common_views._league_opponent_options(self.tournament, 1)}, {"2", "3", "4"})
+
+    async def test_joining_twice_does_not_duplicate_player(self):
+        await self.tournament.save_tournament()
+        with patch.object(common_views, "update_league_message", AsyncMock()):
+            result = await self.tournament.user_state(1, model.ParticipationState.PARTICIPATE)
+        self.assertIn("bereits", result)
+        self.assertEqual(len(self.tournament.swiss_tournament.players), 3)
+
+    async def test_late_join_respects_capacity_and_waitlist(self):
+        self.tournament.max_participants = 3
+        await self.tournament.save_tournament()
+        self.tournament._message = SimpleNamespace(jump_url="https://discord.com/channels/123/789/456")
+        with patch.object(common_views, "update_league_message", AsyncMock()):
+            result = await self.tournament.user_state(4, model.ParticipationState.PARTICIPATE)
+        self.assertIn("voll", result)
+        self.assertIn(4, self.tournament.waitlist)
+        self.assertIsNone(self.tournament.swiss_tournament.player_by_id(4))
+
+    async def test_late_join_rejects_banned_player(self):
+        await self.tournament.save_tournament()
+        with self.session_factory() as session:
+            session.add(db.BannedUser(user_id="4", reason="Test ban"))
+            session.commit()
+        result = await self.tournament.user_state(4, model.ParticipationState.PARTICIPATE)
+        self.assertIn("gesperrt", result)
+        self.assertIsNone(self.tournament.swiss_tournament.player_by_id(4))
+
+    async def test_late_join_rejects_ended_or_cancelled_league(self):
+        self.tournament.end_time = datetime.now(timezone.utc) - timedelta(seconds=1)
+        result = await self.tournament.user_state(4, model.ParticipationState.PARTICIPATE)
+        self.assertIn("beendet", result)
+        self.assertTrue(common_views.LeagueView(self.tournament).join_button.disabled)
+        self.tournament.end_time = datetime.now(timezone.utc) + timedelta(days=1)
+        self.tournament.cancelled = True
+        result = await self.tournament.user_state(4, model.ParticipationState.PARTICIPATE)
+        self.assertIn("beendet", result)
+        self.assertIsNone(self.tournament.swiss_tournament.player_by_id(4))
+
+    async def test_late_join_failed_save_restores_roster(self):
+        self.tournament.save_tournament = AsyncMock(side_effect=RuntimeError("Database unavailable"))
+        with self.assertRaises(RuntimeError):
+            await self.tournament.user_state(4, model.ParticipationState.PARTICIPATE)
+        self.assertNotIn(4, self.tournament.users)
+        self.assertIsNone(self.tournament.swiss_tournament.player_by_id(4))
+
+    async def test_join_button_acknowledges_and_joins_league(self):
+        _, interaction = self.make_report(reporter_id=4)
+        self.tournament.user_state = AsyncMock(return_value=None)
+        view = common_views.LeagueView(self.tournament)
+        await view.join_button.callback(interaction)
+        interaction.response.defer.assert_awaited_once_with(ephemeral=True)
+        self.tournament.user_state.assert_awaited_once_with(4, model.ParticipationState.PARTICIPATE)
+
+    async def test_late_waitlist_promotion_adds_player_to_started_league(self):
+        self.tournament.max_participants = 3
+        await self.tournament.save_tournament()
+        self.tournament._message = SimpleNamespace(jump_url="https://discord.com/channels/123/789/456")
+        self.tournament._notify_waitlist_promotion = AsyncMock()
+        with patch.object(common_views, "update_league_message", AsyncMock()):
+            await self.tournament.user_state(4, model.ParticipationState.PARTICIPATE)
+            await self.tournament.user_state(2, model.ParticipationState.DECLINE)
+        self.assertNotIn(4, self.tournament.waitlist)
+        self.assertEqual(self.tournament.users[4], model.ParticipationState.PARTICIPATE)
+        self.assertIsNotNone(self.tournament.swiss_tournament.player_by_id(4))
+        self.assertTrue(self.tournament.swiss_tournament.player_by_id(2).dropped)
+        self.tournament._notify_waitlist_promotion.assert_awaited_once_with(4)
+
+    async def test_rejoining_league_preserves_existing_match_history(self):
+        self.tournament.report_league_match(3, 1, 2, 0)
+        original_player = self.tournament.swiss_tournament.player_by_id(3)
+        await self.tournament.save_tournament()
+        self.tournament._message = SimpleNamespace(jump_url="https://discord.com/channels/123/789/456")
+        with patch.object(common_views, "update_league_message", AsyncMock()):
+            await self.tournament.user_state(3, model.ParticipationState.DECLINE)
+            await self.tournament.user_state(3, model.ParticipationState.PARTICIPATE)
+        self.assertIs(self.tournament.swiss_tournament.player_by_id(3), original_player)
+        self.assertFalse(original_player.dropped)
+        self.assertFalse(original_player.ready_to_play)
+        self.assertEqual(len(original_player.match_history), 1)
+        self.assertEqual(len(self.tournament.swiss_tournament.players), 3)
+
+    async def test_rules_modal_rejects_nonpositive_match_allowance(self):
+        self.tournament.swiss_tournament = None
+        view = await cog.EditTournamentView.create(self.tournament, Mock(spec=discord.TextChannel))
+        modal = cog.LeagueRulesModal(self.tournament, view)
+        modal.matches_input = Mock(spec=discord.ui.InputText, value="0")
+        modal.counting_select = Mock(spec=discord.ui.StringSelect, values=["matches"])
+        interaction = Mock(spec=discord.Interaction)
+        interaction.response = SimpleNamespace(send_message=AsyncMock(), edit_message=AsyncMock())
+        await modal.callback(interaction)
+        self.assertEqual(self.tournament.league_matches_before_cooldown, 1)
+        interaction.response.send_message.assert_awaited_once()
+        interaction.response.edit_message.assert_not_awaited()
 
     async def test_deadline_and_start_are_enforced(self):
         self.tournament.end_time = datetime.now(timezone.utc) - timedelta(seconds=1)
@@ -313,9 +449,9 @@ class LeagueTournamentTests(unittest.IsolatedAsyncioTestCase):
             db._migrate_add_league_columns()
         with self.engine.connect() as connection:
             row = connection.execute(text("SELECT tournament_style, end_time FROM tournaments")).one()
-            rules = connection.execute(text("SELECT league_cooldown_percentage, league_count_repeat_opponents FROM tournaments")).one()
+            rules = connection.execute(text("SELECT league_cooldown_percentage, league_count_repeat_opponents, league_matches_before_cooldown FROM tournaments")).one()
         self.assertEqual(tuple(row), ("swiss", None))
-        self.assertEqual(tuple(rules), (50, 1))
+        self.assertEqual(tuple(rules), (50, 1, 1))
 
     async def test_creation_requires_league_end_time(self):
         self.tournament.end_time = None
@@ -349,9 +485,12 @@ class LeagueTournamentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(modal.percentage_input.value, "50")
         self.assertEqual([option.value for option in modal.counting_select.options if option.default], ["matches"])
         modal.percentage_input = Mock(spec=discord.ui.InputText, value="75")
+        self.assertEqual(modal.matches_input.value, "1")
+        modal.matches_input = Mock(spec=discord.ui.InputText, value="2")
         modal.counting_select = Mock(spec=discord.ui.StringSelect, values=["distinct"])
         await modal.callback(interaction)
         self.assertEqual(self.tournament.league_cooldown_percentage, 75)
+        self.assertEqual(self.tournament.league_matches_before_cooldown, 2)
         self.assertFalse(self.tournament.league_count_repeat_opponents)
         interaction.response.edit_message.assert_awaited_once_with(embed=self.tournament.to_embed.return_value, view=view)
 

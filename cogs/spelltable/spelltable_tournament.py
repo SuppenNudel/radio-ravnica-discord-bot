@@ -158,6 +158,7 @@ class ParticipationView(discord.ui.View):
                 [swiss_mtg.Player(user_id) for user_id in participants],
                 cooldown_percentage=self.tournament.league_cooldown_percentage,
                 count_repeat_opponents=self.tournament.league_count_repeat_opponents,
+                matches_before_cooldown=self.tournament.league_matches_before_cooldown,
             )
             try:
                 await self.tournament.save_tournament_swiss()
@@ -277,6 +278,10 @@ class LeagueRulesModal(discord.ui.DesignerModal):
             required=True, min_length=1, max_length=3,
         )
         self.add_item(discord.ui.Label("Cooldown in Prozent (0-100)", self.percentage_input))
+        self.matches_input = discord.ui.InputText(
+            value=str(tournament.league_matches_before_cooldown), required=True, min_length=1, max_length=4,
+        )
+        self.add_item(discord.ui.Label("Matches vor Cooldown (mindestens 1)", self.matches_input))
         self.counting_select = discord.ui.StringSelect(
             options=[
                 discord.SelectOption(label="Jedes Match zählt", value="matches", default=tournament.league_count_repeat_opponents),
@@ -292,15 +297,17 @@ class LeagueRulesModal(discord.ui.DesignerModal):
             return
         try:
             percentage = int(self.percentage_input.value or "")
+            matches_before_cooldown = int(self.matches_input.value or "")
             if not self.counting_select.values or self.counting_select.values[0] not in ("matches", "distinct"):
                 raise ValueError("Bitte eine Zählweise auswählen.")
             count_repeats = self.counting_select.values[0] == "matches"
-            swiss_mtg.LeagueTournament.validate_cooldown_settings(percentage, count_repeats)
+            swiss_mtg.LeagueTournament.validate_cooldown_settings(percentage, count_repeats, matches_before_cooldown)
         except ValueError as error:
-            await interaction.response.send_message(f"Ungueltige Rematch-Regeln: {error}", ephemeral=True)
+            await interaction.response.send_message(f"Ungültige Rematch-Regeln: {error}", ephemeral=True)
             return
         self.tournament.league_cooldown_percentage = percentage
         self.tournament.league_count_repeat_opponents = count_repeats
+        self.tournament.league_matches_before_cooldown = matches_before_cooldown
         self.view._refresh_mandatory_field_labels()
         await interaction.response.edit_message(embed=await self.tournament.to_embed(), view=self.view)
 
@@ -918,7 +925,7 @@ class SpelltableTournamentManager(Cog):
             await ctx.respond("Dieser Befehl kann nur in einem Turnier-Thread ausgeführt werden.", ephemeral=True)
             return
         if not isinstance(ctx.author, discord.Member):
-            await ctx.respond("Dieser Befehl kann nur in einem Server ausgefuehrt werden.", ephemeral=True)
+            await ctx.respond("Dieser Befehl kann nur in einem Server ausgeführt werden.", ephemeral=True)
             return
         
         this_tournament = None
@@ -976,7 +983,7 @@ class SpelltableTournamentManager(Cog):
             await ctx.respond("Dieser Befehl kann nur in einem Turnier-Thread ausgeführt werden.", ephemeral=True)
             return
         if not isinstance(ctx.author, discord.Member):
-            await ctx.respond("Dieser Befehl kann nur in einem Server ausgefuehrt werden.", ephemeral=True)
+            await ctx.respond("Dieser Befehl kann nur in einem Server ausgeführt werden.", ephemeral=True)
             return
         
         this_tournament = None
