@@ -46,6 +46,10 @@ class Tournament(Base):
     max_participants = Column(Integer, nullable=True)
     max_rounds = Column(Integer, nullable=True)
     days_per_match = Column(Integer, default=7)
+    tournament_style = Column(String, nullable=False, default="swiss", server_default="swiss")
+    end_time = Column(DateTime, nullable=True)
+    league_cooldown_percentage = Column(Integer, nullable=False, default=50, server_default="50")
+    league_count_repeat_opponents = Column(Boolean, nullable=False, default=True, server_default="1")
     
     # Status
     cancelled = Column(Boolean, default=False)
@@ -106,6 +110,8 @@ class SwissPlayer(Base):
     swiss_tournament_id = Column(Integer, ForeignKey("swiss_tournaments.tournament_id"), index=True)
     player_id = Column(DISCORD_ID_TYPE, index=True)
     dropped = Column(Boolean, default=False)
+    ready_to_play = Column(Boolean, nullable=False, default=False, server_default="0")
+    ready_until = Column(DateTime, nullable=True)
     deck_link = Column(Text, nullable=True)
     deck_archetype = Column(String, nullable=True)
 
@@ -401,6 +407,28 @@ def _migrate_add_format_name_column():
             connection.execute(text("ALTER TABLE tournaments ADD COLUMN format_name VARCHAR"))
 
 
+def _migrate_add_league_columns():
+    with engine.begin() as connection:
+        col_types = {row[1] for row in connection.execute(text("PRAGMA table_info(tournaments)"))}
+        if "tournament_style" not in col_types:
+            connection.execute(text("ALTER TABLE tournaments ADD COLUMN tournament_style VARCHAR NOT NULL DEFAULT 'swiss'"))
+        if "end_time" not in col_types:
+            connection.execute(text("ALTER TABLE tournaments ADD COLUMN end_time DATETIME"))
+        if "league_cooldown_percentage" not in col_types:
+            connection.execute(text("ALTER TABLE tournaments ADD COLUMN league_cooldown_percentage INTEGER NOT NULL DEFAULT 50"))
+        if "league_count_repeat_opponents" not in col_types:
+            connection.execute(text("ALTER TABLE tournaments ADD COLUMN league_count_repeat_opponents BOOLEAN NOT NULL DEFAULT 1"))
+
+
+def _migrate_add_player_readiness_column():
+    with engine.begin() as connection:
+        columns = {row[1] for row in connection.execute(text("PRAGMA table_info(swiss_players)"))}
+        if "ready_to_play" not in columns:
+            connection.execute(text("ALTER TABLE swiss_players ADD COLUMN ready_to_play BOOLEAN NOT NULL DEFAULT 0"))
+        if "ready_until" not in columns:
+            connection.execute(text("ALTER TABLE swiss_players ADD COLUMN ready_until DATETIME"))
+
+
 def _ensure_banned_users_table():
     """Create banned_users table if it does not exist."""
     with engine.begin() as connection:
@@ -428,6 +456,8 @@ def init_db():
     """Create all tables in the database"""
     Base.metadata.create_all(bind=engine)
     _migrate_add_format_name_column()
+    _migrate_add_league_columns()
+    _migrate_add_player_readiness_column()
     _ensure_banned_users_table()
     _migrate_add_banned_until_column()
     print("✅ Database tables created")

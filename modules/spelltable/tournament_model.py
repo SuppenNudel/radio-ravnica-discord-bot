@@ -29,6 +29,11 @@ import json
 
 tz_berlin = pytz.timezone("Europe/Berlin")
 
+class TournamentStyle(StrEnum):
+    SWISS = "swiss"
+    LEAGUE = "league"
+
+
 class ParticipationState(StrEnum):
     PARTICIPATE = auto()
     TENTATIVE = auto()
@@ -95,6 +100,8 @@ def _build_swiss_json(db, swiss_t_row: SwissTournamentRecord) -> dict:
         if p_row.deck_link or p_row.deck_archetype:
             deck_dict = {"link": p_row.deck_link, "archetype": p_row.deck_archetype}
         player_dict: dict = {"player_id": int(p_row.player_id), "deck": deck_dict}
+        player_dict["ready_to_play"] = bool(p_row.ready_to_play)
+        player_dict["ready_until"] = p_row.ready_until.replace(tzinfo=dt_timezone.utc).isoformat() if p_row.ready_until else None
         if p_row.dropped:
             player_dict["dropped"] = True
         players.append(player_dict)
@@ -159,6 +166,8 @@ def _build_swiss_json(db, swiss_t_row: SwissTournamentRecord) -> dict:
         "players": players,
         "rounds": rounds,
         "winner": winner,
+        "cooldown_percentage": swiss_t_row.tournament.league_cooldown_percentage,
+        "count_repeat_opponents": bool(swiss_t_row.tournament.league_count_repeat_opponents),
     }
 
 
@@ -197,6 +206,10 @@ async def load_tournaments(bot) -> dict[str, "SpelltableTournament"]:
                 tournament = SpelltableTournament(guild, t_row.name, organizer_id_int, bot)
                 tournament.description = t_row.description
                 tournament.time = _normalize_tournament_datetime(t_row.start_time)
+                tournament.tournament_style = TournamentStyle(t_row.tournament_style or "swiss")
+                tournament.end_time = _normalize_tournament_datetime(t_row.end_time)
+                tournament.league_cooldown_percentage = t_row.league_cooldown_percentage
+                tournament.league_count_repeat_opponents = bool(t_row.league_count_repeat_opponents)
                 tournament.message_id = int(t_row.message_id)
                 tournament.channel_id = int(t_row.channel_id)
                 tournament.max_participants = t_row.max_participants
@@ -230,7 +243,8 @@ async def load_tournaments(bot) -> dict[str, "SpelltableTournament"]:
                 )
                 if swiss_t_row:
                     swiss_json = _build_swiss_json(db, swiss_t_row)
-                    tournament.swiss_tournament = swiss_mtg.SwissTournament.deserialize(swiss_json)
+                    competition_type = swiss_mtg.LeagueTournament if tournament.is_league else swiss_mtg.SwissTournament
+                    tournament.swiss_tournament = competition_type.deserialize(swiss_json)
 
                 # Sync users table on load: add missing IDs and refresh known names
                 tracked_user_ids = set(tournament.users.keys()) | set(tournament.waitlist) | {tournament.organizer_id}
@@ -369,7 +383,8 @@ async def update_tournament_message(bot:discord.Bot, trigger_guild:discord.Guild
     # Remove concluded or cancelled tournaments from rr_tournaments
     rr_tournaments = [
         tourney for tourney in rr_tournaments
-        if not (tourney.swiss_tournament and (tourney.swiss_tournament.winner or tourney.cancelled))
+        if not tourney.cancelled and not tourney.league_has_ended
+        and not (tourney.swiss_tournament and tourney.swiss_tournament.winner)
     ]
     tourney_list_message = await generate_tournament_message(rr_tournaments)
     calendar_img = generate_calendar(rr_tournaments)
@@ -596,6 +611,10 @@ class SpelltableTournament(Serializable):
         self.title = title
         self.description = None
         self.time:datetime = None
+        self.tournament_style = TournamentStyle.SWISS
+        self.end_time:datetime | None = None
+        self.league_cooldown_percentage = 50
+        self.league_count_repeat_opponents = True
         self.organizer_id = organizer_id
         self.users:dict[int,ParticipationState] = {} 
         self.message_id:int = None
@@ -620,6 +639,40 @@ class SpelltableTournament(Serializable):
 
         self.members:dict[int, discord.Member] = {}
         self.missing_member_ids:set[int] = set()
+        self.league_lock = asyncio.Lock()
+        self._league_end_announced = False
+        self._readiness_refresh_pending = False
+
+    @property
+    def is_league(self):
+        return self.tournament_style == TournamentStyle.LEAGUE
+
+    @property
+    def league_has_ended(self):
+        end_time = _normalize_tournament_datetime(self.end_time)
+        return bool(self.is_league and end_time and datetime.now(dt_timezone.utc) >= end_time)
+
+    def validate_configuration(self):
+        start_time = _normalize_tournament_datetime(self.time)
+        if start_time is None:
+            raise ValueError("Bitte eine Startzeit angeben.")
+        if self.is_league:
+            swiss_mtg.LeagueTournament.validate_cooldown_settings(
+                self.league_cooldown_percentage, self.league_count_repeat_opponents
+            )
+            end_time = _normalize_tournament_datetime(self.end_time)
+            if end_time is None or end_time <= start_time:
+                raise ValueError("Die Liga braucht eine feste Endzeit nach der Startzeit.")
+
+    def report_league_match(self, player1_id, player2_id, player1_wins, player2_wins, draws=0):
+        self.validate_configuration()
+        if not self.is_league or not isinstance(self.swiss_tournament, swiss_mtg.LeagueTournament):
+            raise ValueError("Die Liga wurde noch nicht gestartet.")
+        if self.cancelled or self.league_has_ended:
+            raise ValueError("Die Liga ist beendet. Ergebnisse koennen nicht mehr gemeldet werden.")
+        if datetime.now(dt_timezone.utc) < _normalize_tournament_datetime(self.time):
+            raise ValueError("Die Liga hat noch nicht begonnen.")
+        return self.swiss_tournament.report_match(player1_id, player2_id, player1_wins, player2_wins, draws)
 
     async def get_member(self, user_id) -> discord.Member|discord.User|None:
         try:
@@ -727,6 +780,11 @@ class SpelltableTournament(Serializable):
 
         tournament = cls(guild, data["name"], organizer_id, bot)
         tournament.description = data["description"]
+        tournament.tournament_style = TournamentStyle(data.get("tournament_style", "swiss"))
+        tournament.league_cooldown_percentage = data.get("league_cooldown_percentage", 50)
+        tournament.league_count_repeat_opponents = data.get("league_count_repeat_opponents", True)
+        if data.get("end_time"):
+            tournament.end_time = _normalize_tournament_datetime(datetime.fromisoformat(data["end_time"]))
         if "time" in data and data["time"]:
             tournament.time = _normalize_tournament_datetime(datetime.fromisoformat(data["time"]))
 
@@ -743,7 +801,13 @@ class SpelltableTournament(Serializable):
 
         if "tournament" in data and data["tournament"]:
             swiss_tournament_data = data['tournament']
-            tournament.swiss_tournament = swiss_mtg.SwissTournament.deserialize(swiss_tournament_data)
+            if tournament.is_league:
+                swiss_tournament_data = dict(
+                    swiss_tournament_data, cooldown_percentage=tournament.league_cooldown_percentage,
+                    count_repeat_opponents=tournament.league_count_repeat_opponents,
+                )
+            competition_type = swiss_mtg.LeagueTournament if tournament.is_league else swiss_mtg.SwissTournament
+            tournament.swiss_tournament = competition_type.deserialize(swiss_tournament_data)
 
         tournament.cancelled = data.get("cancelled", False)
 
@@ -757,6 +821,10 @@ class SpelltableTournament(Serializable):
             "organizer_id": organizer.id,
             "description": self.description,
             "time": self.time.isoformat() if self.time else None,
+            "tournament_style": self.tournament_style,
+            "end_time": self.end_time.isoformat() if self.end_time else None,
+            "league_cooldown_percentage": self.league_cooldown_percentage,
+            "league_count_repeat_opponents": self.league_count_repeat_opponents,
             "users": self.users,
             "waitlist": self.waitlist,
             "guild_id": message.guild.id,
@@ -936,6 +1004,8 @@ class SpelltableTournament(Serializable):
         return message_str
 
     def calc_round_count_and_text(self):
+        if self.is_league:
+            return 0, "Freie Gegnerwahl"
         if self.swiss_tournament:
             fixed_rounds = self.swiss_tournament.rounds_count
             return fixed_rounds, f"Beim Start festgelegt: {fixed_rounds}"
@@ -949,6 +1019,8 @@ class SpelltableTournament(Serializable):
             return rec_round_count, f"Abhängig von der Spielerzahl.\nAktuell: {rec_round_count}"
 
     def calc_end(self):
+        if self.is_league:
+            return self.end_time
         start = self.time
         days_per_match = self.days_per_match
         if days_per_match:
@@ -1019,13 +1091,23 @@ class SpelltableTournament(Serializable):
         if organizer:
             embed.set_author(name=organizer.display_name, icon_url=organizer.avatar.url if organizer.avatar else None)
         if self.time:
-            date_format_character = "D" if self.days_per_match else "F"
+            date_format_character = "D" if self.days_per_match and not self.is_league else "F"
             embed.add_field(name="Start", value=discord.utils.format_dt(self.time, date_format_character)+"\n"+discord.utils.format_dt(self.time, 'R'), inline=True)
 
-        round_count, text = self.calc_round_count_and_text()
-        embed.add_field(name="Anzahl Runden", value=text, inline=True)
-        
-        embed.add_field(name=f"Tage pro Runde", value=f"{self.days_per_match if self.days_per_match > 0 else 'Wird am Stück gespielt'}", inline=True)
+        embed.add_field(name="Turnierart", value="Liga" if self.is_league else "Swiss", inline=True)
+        if self.is_league:
+            if self.end_time:
+                embed.add_field(name="Ende", value=discord.utils.format_dt(self.end_time, "F")+"\n"+discord.utils.format_dt(self.end_time, "R"), inline=True)
+            counting = "Jedes Match zaehlt" if self.league_count_repeat_opponents else "Nur unterschiedliche Gegner zaehlen"
+            embed.add_field(
+                name="Rematch-Cooldown",
+                value=f"{self.league_cooldown_percentage}% der anderen aktiven Spieler (aufgerundet)\n{counting}",
+                inline=False,
+            )
+        else:
+            round_count, text = self.calc_round_count_and_text()
+            embed.add_field(name="Anzahl Runden", value=text, inline=True)
+            embed.add_field(name=f"Tage pro Runde", value=f"{self.days_per_match if self.days_per_match > 0 else 'Wird am Stück gespielt'}", inline=True)
 
         if self.format_name:
             embed.add_field(name="Format", value=self.format_name, inline=True)
@@ -1153,6 +1235,10 @@ class SpelltableTournament(Serializable):
                 t_row.organizer_id = self.organizer_id
                 t_row.description = self.description
                 t_row.start_time = self.time
+                t_row.tournament_style = self.tournament_style
+                t_row.end_time = _normalize_tournament_datetime(self.end_time).replace(tzinfo=None) if self.end_time else None
+                t_row.league_cooldown_percentage = self.league_cooldown_percentage
+                t_row.league_count_repeat_opponents = self.league_count_repeat_opponents
                 t_row.guild_id = self.guild.id
                 t_row.channel_id = self.channel_id
                 t_row.message_id = self.message_id
@@ -1288,6 +1374,8 @@ class SpelltableTournament(Serializable):
                         swiss_tournament_id=swiss_t_row.tournament_id,
                         player_id=player.player_id,
                         dropped=player.dropped,
+                        ready_to_play=player.ready_to_play,
+                        ready_until=player.ready_until.astimezone(dt_timezone.utc).replace(tzinfo=None) if player.ready_until else None,
                         deck_link=deck.link if deck else None,
                         deck_archetype=deck.archetype if deck else None,
                     ))
@@ -1396,7 +1484,7 @@ class SpelltableTournament(Serializable):
             data["headers"].append("Deck")
 
         id = await self.get_id()
-        filename = f'tmp/{id.replace("/", "_")}_standings_round_{round.round_number}.png'
+        filename = f'tmp/{id.replace("/", "_")}_standings_round_{round.round_number if round else 0}.png'
         table_to_image.generate_image(data, filename, "assets/beleren.ttf")
 
         return filename

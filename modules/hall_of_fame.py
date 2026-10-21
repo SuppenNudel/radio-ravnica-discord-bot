@@ -197,7 +197,11 @@ class HallOfFame:
                             continue
 
                     swiss_json = _build_swiss_json(db, swiss_row)
-                    swiss_tournament = swiss_mtg.SwissTournament.deserialize(swiss_json)
+                    competition_type = (
+                        swiss_mtg.LeagueTournament if tournament_row.tournament_style == "league"
+                        else swiss_mtg.SwissTournament
+                    )
+                    swiss_tournament = competition_type.deserialize(swiss_json)
                     swiss_mtg.sort_players_by_standings(swiss_tournament.players)
                 except Exception as exc:
                     log.warning(
@@ -216,6 +220,8 @@ class HallOfFame:
                     standings_url = (
                         f"https://discord.com/channels/{guild_id}/{channel_id}/{latest_round.message_id_standings}"
                     )
+                elif tournament_row.tournament_style == "league":
+                    standings_url = f"https://discord.com/channels/{guild_id}/{channel_id}/{message_id}"
 
                 start_date = (
                     tournament_row.start_time.isoformat()

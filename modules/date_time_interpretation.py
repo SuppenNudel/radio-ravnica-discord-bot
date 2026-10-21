@@ -1,6 +1,7 @@
 import dateparser
 from datetime import datetime, timedelta
 import os
+import re
 from dateutil.relativedelta import relativedelta
 from babel.dates import format_timedelta
 import pytz
@@ -11,6 +12,7 @@ settings = {
     'RETURN_AS_TIMEZONE_AWARE': True,
     'PREFER_DAY_OF_MONTH': 'first',
     'PREFER_DATES_FROM': 'future',
+    'DATE_ORDER': 'DMY',
     'TIMEZONE': 'Europe/Berlin'
     # 'RELATIVE_BASE': None,
 }
@@ -18,7 +20,24 @@ settings = {
 timezone = pytz.timezone("Europe/Berlin")
 
 def parse_date(user_time_input) -> datetime | None:
-    parsed_date = dateparser.parse(user_time_input, settings=cast(Any, settings), languages=["de"])
+    normalized_input = user_time_input.strip().lower()
+    normalized_input = re.sub(r"\bam\s+(?=\d{1,2}\.)", "", normalized_input)
+    normalized_input = re.sub(
+        r"\b([01]?\d|2[0-3])(?::([0-5]\d))?\s*uhr\b",
+        lambda match: f"{int(match.group(1)):02d}:{match.group(2) or '00'}",
+        normalized_input,
+    )
+    explicit_time = re.search(r"\b(?:[01]?\d|2[0-3]):[0-5]\d\b", normalized_input)
+    normalized_input = re.sub(
+        r"\b(?:am\s+)?abend(?:s)?\b",
+        "" if explicit_time else "18:00",
+        normalized_input,
+    )
+    normalized_input = " ".join(normalized_input.split())
+    try:
+        parsed_date = datetime.fromisoformat(normalized_input.upper())
+    except ValueError:
+        parsed_date = dateparser.parse(normalized_input, settings=cast(Any, settings), languages=["de"])
     if parsed_date:
         if parsed_date.tzinfo is None:
             parsed_date = timezone.localize(parsed_date)

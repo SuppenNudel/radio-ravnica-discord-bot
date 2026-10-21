@@ -1,6 +1,8 @@
 import discord
 import logging
 import asyncio
+from contextlib import closing
+from datetime import datetime, timedelta, timezone
 from modules import swiss_mtg
 from modules.spelltable.tournament_model import SpelltableTournament, use_custom_try, ParticipationState
 from modules import env
@@ -188,8 +190,411 @@ class SubmitDeckModal(discord.ui.DesignerModal):
         
         player.deck = swiss_mtg.Deck.deserialize({"link": decklist, "archetype": archetype})
         await self.tournament.save_tournament_swiss()
-        await self.tournament.update_metagame(include_embed=True)
+        if self.tournament.is_league:
+            async with self.tournament.league_lock:
+                await update_league_message(self.tournament)
+        else:
+            await self.tournament.update_metagame(include_embed=True)
         await interaction.followup.send("Deine Deckliste wurde erfolgreich eingereicht!", ephemeral=True)
+
+async def _league_participant_pages(tournament: SpelltableTournament, header: str):
+    players = sorted(tournament.swiss_tournament.players, key=lambda player: player.player_id)
+    members = await asyncio.gather(*(tournament.get_member(player.player_id) for player in players))
+    pages = []
+    lines = []
+    page_length = 0
+    page_budget = 2000 - len(header.encode("utf-16-le")) // 2 - 80
+    for player, member in zip(players, members):
+        if player.dropped:
+            icon = "⛔"
+        elif tournament.league_has_ended or tournament.cancelled:
+            icon = "⚪"
+        else:
+            icon = "🟢" if player.ready_to_play else "🔴"
+        display_name = member.display_name if member else f"User({player.player_id})"
+        display_name = discord.utils.escape_markdown(discord.utils.escape_mentions(" ".join(display_name.split())))
+        line = f"{icon} <@{player.player_id}> [{display_name}]"
+        if player.ready_to_play and player.ready_until and not tournament.league_has_ended:
+            line += f" (bis {discord.utils.format_dt(player.ready_until, 't')})"
+        line_length = len(line.encode("utf-16-le")) // 2 + 1
+        if lines and page_length + line_length > page_budget:
+            pages.append("\n".join(lines))
+            lines = []
+            page_length = 0
+        lines.append(line)
+        page_length += line_length
+    if lines:
+        pages.append("\n".join(lines))
+    return pages or [""]
+
+
+async def update_league_message(tournament: SpelltableTournament, *, participant_page=0, refresh_standings=True):
+    message = await tournament.message
+    if not message or tournament.cancelled:
+        return
+    if isinstance(message.channel, discord.Thread) and message.channel.archived:
+        await message.channel.edit(archived=False)
+    competition = tournament.swiss_tournament
+    if tournament.league_has_ended and not tournament._league_end_announced:
+        if competition.winner is None:
+            swiss_mtg.sort_players_by_standings(competition.players)
+            competition.winner = next(
+                (player for player in competition.players if not player.dropped and player.match_history), None
+            )
+        await tournament.save_tournament_swiss()
+    content = "## Liga abgeschlossen" if tournament.league_has_ended else "## Liga"
+    if competition.winner:
+        content += f"\nGewonnen: <@{competition.winner.player_id}>"
+    content += "\n\n### Teilnehmer\n🟢 Bereit · 🔴 Nicht bereit · ⛔ Ausgestiegen · ⚪ Liga beendet\n\n"
+    embed = await tournament.to_embed()
+    pages = await _league_participant_pages(tournament, content)
+    participant_page = min(max(participant_page, 0), len(pages) - 1)
+    content += pages[participant_page]
+    if len(pages) > 1:
+        content += f"\nTeilnehmer: Seite {participant_page + 1}/{len(pages)}"
+    edit_kwargs = {
+        "content": content,
+        "embed": embed,
+        "view": LeagueView(tournament, participant_page, len(pages)),
+        "allowed_mentions": discord.AllowedMentions.none(),
+    }
+    if refresh_standings:
+        image = await tournament.standings_to_image(include_metagame=True)
+        with closing(discord.File(image, filename="league_standings.png")) as standings_file:
+            await message.edit(**edit_kwargs, attachments=[], file=standings_file)
+    else:
+        await message.edit(**edit_kwargs)
+    tournament._league_end_announced = tournament.league_has_ended
+
+
+async def expire_league_readiness(tournament: SpelltableTournament):
+    async with tournament.league_lock:
+        expired = [
+            (player, player.ready_until) for player in tournament.swiss_tournament.players
+            if player.ready_until and player.ready_until <= datetime.now(timezone.utc)
+        ]
+        if expired:
+            previous_suppression = tournament.suppress_overview_update
+            tournament.suppress_overview_update = True
+            for player, _ in expired:
+                player.ready_to_play = False
+                player.ready_until = None
+            try:
+                await tournament.save_tournament_swiss()
+            except Exception:
+                for player, deadline in expired:
+                    player.ready_to_play = True
+                    player.ready_until = deadline
+                raise
+            finally:
+                tournament.suppress_overview_update = previous_suppression
+            tournament._readiness_refresh_pending = True
+        if tournament._readiness_refresh_pending:
+            await update_league_message(tournament, refresh_standings=False)
+            tournament._readiness_refresh_pending = False
+
+
+def _league_opponent_options(tournament: SpelltableTournament, reporter_id: int):
+    competition = tournament.swiss_tournament
+    if not isinstance(competition, swiss_mtg.LeagueTournament):
+        return []
+    options = []
+    for player in competition.get_active_players():
+        if player.player_id == reporter_id:
+            continue
+        member = tournament.members.get(player.player_id) or tournament.guild.get_member(player.player_id)
+        display_name = member.display_name if member else f"User({player.player_id})"
+        remaining_reporter, remaining_opponent = competition.rematch_cooldown(reporter_id, player.player_id)
+        on_cooldown = bool(remaining_reporter or remaining_opponent)
+        counting_unit = "Matches gegen andere Spieler" if competition.count_repeat_opponents else "unterschiedliche Gegner"
+        description = (
+            f"Cooldown: du {remaining_reporter}, Gegner {remaining_opponent} {counting_unit}"
+            if on_cooldown else f"Spielbar · {player.player_id}"
+        )
+        options.append(discord.SelectOption(
+            label=display_name[:100], value=str(player.player_id), description=description,
+            emoji="⏳" if on_cooldown else "✅",
+        ))
+    return sorted(options, key=lambda option: (option.label.casefold(), option.value))
+
+
+class LeagueReportModal(discord.ui.DesignerModal):
+    def __init__(self, tournament: SpelltableTournament, reporter_id: int, opponent_options=None):
+        super().__init__(title="Liga-Ergebnis melden")
+        self.tournament = tournament
+        self.reporter_id = reporter_id
+        self.submitted = False
+        self.opponent_select = discord.ui.StringSelect(
+            options=opponent_options if opponent_options is not None else _league_opponent_options(tournament, reporter_id),
+            min_values=1, max_values=1, required=True,
+        )
+        self.add_item(discord.ui.Label(
+            "Gegner", self.opponent_select,
+            description=(
+                "⏳ Cooldown: weitere Matches für dich / deinen Gegner. ✅ Spielbar."
+                if tournament.league_count_repeat_opponents
+                else "⏳ Cooldown: unterschiedliche Gegner für dich / deinen Gegner. ✅ Spielbar."
+            ),
+        ))
+        self.score_selects = []
+        for label in ("Deine Siege", "Siege des Gegners", "Unentschiedene Spiele"):
+            score_select = discord.ui.StringSelect(
+                options=_score_select_options(0), min_values=1, max_values=1, required=True
+            )
+            self.score_selects.append(score_select)
+            self.add_item(discord.ui.Label(label, score_select))
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.reporter_id:
+            await interaction.response.send_message("Du kannst nur eigene Ergebnisse melden.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        async with self.tournament.league_lock:
+            try:
+                if self.submitted:
+                    raise ValueError("Dieses Ergebnis wurde bereits gemeldet.")
+                if not self.opponent_select.values or any(not select.values for select in self.score_selects):
+                    raise ValueError("Bitte Gegner und Ergebnis auswaehlen.")
+                opponent_id = int(self.opponent_select.values[0])
+                scores = [int(select.values[0]) for select in self.score_selects]
+                match = self.tournament.report_league_match(self.reporter_id, opponent_id, *scores)
+                previous_suppression = self.tournament.suppress_overview_update
+                self.tournament.suppress_overview_update = True
+                try:
+                    await self.tournament.save_tournament_swiss()
+                except Exception:
+                    self.tournament.swiss_tournament.rounds.pop()
+                    match.player1.match_history.remove(match)
+                    match.player2.match_history.remove(match)
+                    raise
+                finally:
+                    self.tournament.suppress_overview_update = previous_suppression
+                self.submitted = True
+            except ValueError as error:
+                await interaction.followup.send(str(error), ephemeral=True)
+                return
+            except Exception:
+                link_log.exception("Failed to save league result for '%s'", self.tournament.title)
+                await interaction.followup.send("Das Ergebnis konnte nicht gespeichert werden.", ephemeral=True)
+                return
+            await interaction.followup.send("Dein Ergebnis wurde gespeichert.", ephemeral=True)
+            try:
+                await update_league_message(self.tournament)
+            except Exception:
+                link_log.exception("Failed to refresh league standings for '%s'", self.tournament.title)
+            try:
+                message = await self.tournament.message
+                await message.channel.send(
+                    f"<@{self.reporter_id}> {scores[0]} - {scores[1]} <@{opponent_id}> ({scores[2]} Unentschieden)"
+                )
+            except Exception:
+                link_log.exception("Failed to announce saved league result for '%s'", self.tournament.title)
+
+
+class LeagueOpponentView(discord.ui.View):
+    def __init__(self, tournament: SpelltableTournament, reporter_id: int, options, page=0):
+        super().__init__(timeout=120)
+        self.tournament = tournament
+        self.reporter_id = reporter_id
+        self.options = options
+        self.page = page
+        self.opponent_select.options = options[page * 25:(page + 1) * 25]
+        self.opponent_select.placeholder = f"Gegner auswählen (Seite {page + 1})"
+        self.previous_button.disabled = page == 0
+        self.next_button.disabled = (page + 1) * 25 >= len(options)
+
+    async def interaction_check(self, interaction: discord.Interaction):
+        if interaction.user is None or interaction.user.id != self.reporter_id:
+            await interaction.response.send_message("Du kannst nur eigene Ergebnisse melden.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.select(placeholder="Gegner auswählen", min_values=1, max_values=1)
+    async def opponent_select(self, select, interaction: discord.Interaction):
+        if not select.values:
+            await interaction.response.send_message("Bitte einen Gegner auswählen.", ephemeral=True)
+            return
+        selected_id = select.values[0]
+        options = [
+            discord.SelectOption(
+                label=option.label, value=option.value, default=option.value == selected_id,
+                description=option.description, emoji=option.emoji,
+            )
+            for option in self.opponent_select.options
+        ]
+        await interaction.response.send_modal(LeagueReportModal(self.tournament, self.reporter_id, options))
+
+    @discord.ui.button(emoji="⬅️", style=discord.ButtonStyle.secondary)
+    async def previous_button(self, button: discord.ui.Button, interaction: discord.Interaction):
+        await interaction.response.edit_message(view=LeagueOpponentView(
+            self.tournament, self.reporter_id, self.options, self.page - 1
+        ))
+
+    @discord.ui.button(emoji="➡️", style=discord.ButtonStyle.secondary)
+    async def next_button(self, button: discord.ui.Button, interaction: discord.Interaction):
+        await interaction.response.edit_message(view=LeagueOpponentView(
+            self.tournament, self.reporter_id, self.options, self.page + 1
+        ))
+
+
+class ReadyDurationModal(discord.ui.Modal):
+    def __init__(self, view: "LeagueView", user_id: int):
+        super().__init__(title="Wie lange bist du bereit?")
+        self.view = view
+        self.user_id = user_id
+        self.duration_input = discord.ui.InputText(
+            label="Dauer in Minuten", placeholder="z.B. 30, 60 oder 120",
+            value="60", required=True, min_length=1, max_length=6,
+        )
+        self.add_item(self.duration_input)
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user is None or interaction.user.id != self.user_id:
+            await interaction.response.send_message("Du kannst nur deinen eigenen Status aendern.", ephemeral=True)
+            return
+        try:
+            minutes = int(self.duration_input.value or "")
+            if minutes <= 0:
+                raise ValueError
+            ready_until = datetime.now(timezone.utc) + timedelta(minutes=minutes)
+        except (ValueError, OverflowError):
+            await interaction.response.send_message("Bitte eine positive Anzahl Minuten eingeben.", ephemeral=True)
+            return
+        if self.view.tournament.end_time:
+            ready_until = min(ready_until, self.view.tournament.end_time)
+        await self.view._set_ready(interaction, True, ready_until=ready_until)
+
+
+class LeagueView(discord.ui.View):
+    def __init__(self, tournament: SpelltableTournament, participant_page=0, participant_page_count=1):
+        super().__init__(timeout=None)
+        self.tournament = tournament
+        self.participant_page = participant_page
+        self.report_button.disabled = tournament.league_has_ended or bool(tournament.cancelled)
+        self.cancel_button.disabled = tournament.league_has_ended
+        self.ready_button.disabled = self.report_button.disabled
+        self.unready_button.disabled = self.report_button.disabled
+        if participant_page_count <= 1:
+            self.remove_item(self.previous_participants_button)
+            self.remove_item(self.next_participants_button)
+        else:
+            self.previous_participants_button.disabled = participant_page == 0
+            self.next_participants_button.disabled = participant_page >= participant_page_count - 1
+
+    async def _set_ready(self, interaction: discord.Interaction, ready: bool, *, ready_until: datetime | None = None):
+        user = interaction.user
+        if user is None:
+            await interaction.response.send_message("Dein Benutzer konnte nicht ermittelt werden.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        async with self.tournament.league_lock:
+            player = self.tournament.swiss_tournament.player_by_id(user.id)
+            if player is None or player.dropped:
+                await interaction.followup.send("Du bist kein aktiver Teilnehmer dieser Liga.", ephemeral=True)
+                return
+            if self.tournament.league_has_ended or self.tournament.cancelled:
+                await interaction.followup.send("Die Liga ist beendet.", ephemeral=True)
+                return
+            if ready and (ready_until is None or ready_until <= datetime.now(timezone.utc)):
+                await interaction.followup.send("Die Bereitschaftsdauer ist bereits abgelaufen. Bitte erneut auswaehlen.", ephemeral=True)
+                return
+            previous_ready = player.ready_to_play
+            previous_deadline = player.ready_until
+            previous_suppression = self.tournament.suppress_overview_update
+            player.ready_to_play = ready
+            player.ready_until = ready_until if ready else None
+            self.tournament.suppress_overview_update = True
+            try:
+                await self.tournament.save_tournament_swiss()
+            except Exception:
+                player.ready_to_play = previous_ready
+                player.ready_until = previous_deadline
+                link_log.exception("Failed to save league readiness for '%s'", self.tournament.title)
+                await interaction.followup.send("Dein Status konnte nicht gespeichert werden.", ephemeral=True)
+                return
+            finally:
+                self.tournament.suppress_overview_update = previous_suppression
+            try:
+                await update_league_message(self.tournament, participant_page=self.participant_page, refresh_standings=False)
+            except Exception:
+                link_log.exception("Failed to refresh league readiness for '%s'", self.tournament.title)
+                await interaction.followup.send("Dein Status wurde gespeichert, aber die Anzeige konnte nicht aktualisiert werden.", ephemeral=True)
+                return
+            confirmation = (
+                f"Du bist bis {discord.utils.format_dt(ready_until, 't')} bereit."
+                if ready and ready_until else "Du bist jetzt nicht bereit."
+            )
+            await interaction.followup.send(confirmation, ephemeral=True)
+
+    @discord.ui.button(label="Bereit", style=discord.ButtonStyle.success, custom_id="league:ready")
+    async def ready_button(self, button: discord.ui.Button, interaction: discord.Interaction):
+        user = interaction.user
+        if user is None:
+            await interaction.response.send_message("Dein Benutzer konnte nicht ermittelt werden.", ephemeral=True)
+            return
+        player = self.tournament.swiss_tournament.player_by_id(user.id)
+        if player is None or player.dropped:
+            await interaction.response.send_message("Du bist kein aktiver Teilnehmer dieser Liga.", ephemeral=True)
+            return
+        if self.tournament.league_has_ended or self.tournament.cancelled:
+            await interaction.response.send_message("Die Liga ist beendet.", ephemeral=True)
+            return
+        await interaction.response.send_modal(ReadyDurationModal(self, user.id))
+
+    @discord.ui.button(label="Nicht bereit", style=discord.ButtonStyle.secondary, custom_id="league:unready")
+    async def unready_button(self, button: discord.ui.Button, interaction: discord.Interaction):
+        await self._set_ready(interaction, False)
+
+    async def _show_participants(self, interaction: discord.Interaction, page: int):
+        await interaction.response.defer()
+        async with self.tournament.league_lock:
+            await update_league_message(self.tournament, participant_page=page, refresh_standings=False)
+
+    @discord.ui.button(emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="league:participants_previous", row=1)
+    async def previous_participants_button(self, button: discord.ui.Button, interaction: discord.Interaction):
+        await self._show_participants(interaction, self.participant_page - 1)
+
+    @discord.ui.button(emoji="➡️", style=discord.ButtonStyle.secondary, custom_id="league:participants_next", row=1)
+    async def next_participants_button(self, button: discord.ui.Button, interaction: discord.Interaction):
+        await self._show_participants(interaction, self.participant_page + 1)
+
+    @discord.ui.button(label="Ergebnis melden", style=discord.ButtonStyle.primary, custom_id="league:report")
+    async def report_button(self, button: discord.ui.Button, interaction: discord.Interaction):
+        user = interaction.user
+        if user is None:
+            await interaction.response.send_message("Dein Benutzer konnte nicht ermittelt werden.", ephemeral=True)
+            return
+        player = self.tournament.swiss_tournament.player_by_id(user.id)
+        if player is None or player.dropped:
+            await interaction.response.send_message("Du bist kein aktiver Teilnehmer dieser Liga.", ephemeral=True)
+            return
+        if self.tournament.league_has_ended or self.tournament.cancelled:
+            await interaction.response.send_message("Die Liga ist beendet.", ephemeral=True)
+            return
+        options = _league_opponent_options(self.tournament, user.id)
+        if not options:
+            await interaction.response.send_message("Es gibt keine anderen aktiven Teilnehmer in dieser Liga.", ephemeral=True)
+            return
+        if len(options) > 25:
+            await interaction.response.send_message(
+                "Gegner auswählen", view=LeagueOpponentView(self.tournament, user.id, options), ephemeral=True
+            )
+            return
+        await interaction.response.send_modal(LeagueReportModal(self.tournament, user.id, options))
+
+    @discord.ui.button(label="Deckliste einreichen", style=discord.ButtonStyle.primary, custom_id="league:deck")
+    async def submit_deck_button(self, button: discord.ui.Button, interaction: discord.Interaction):
+        await _open_submit_deck_modal(self.tournament, interaction)
+
+    @discord.ui.button(label="Liga abbrechen", style=discord.ButtonStyle.danger, custom_id="league:cancel")
+    async def cancel_button(self, button: discord.ui.Button, interaction: discord.Interaction):
+        if interaction.user.id != self.tournament.organizer_id and not any(
+            role.name == "Moderator" for role in getattr(interaction.user, "roles", [])
+        ):
+            await interaction.response.send_message("Nur die Organisation darf dies tun.", ephemeral=True)
+            return
+        await interaction.response.send_modal(CancelTournamentModal(self.tournament))
+
 
 class FinishTournamentView(discord.ui.View):
     def __init__(self):

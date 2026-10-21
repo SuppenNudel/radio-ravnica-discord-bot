@@ -7,8 +7,9 @@ This module provides the core logic and data structures for managing Spelltable 
 - **Tournament Management**: Create, save, load, and update tournaments.
 - **Participant Handling**: Track participation status (Participate, Tentative, Decline), waitlists, and organizers.
 - **Swiss Tournament Integration**: Supports Swiss pairing logic and standings.
+- **League Integration**: Supports player-selected opponents, independent result reports, rematches, and a mandatory fixed end time. League standings reuse existing points and tiebreakers.
 - **Discord Integration**: Updates Discord messages and embeds with tournament information.
-- **Persistence**: Serializes and deserializes tournaments to JSON files for persistence.
+- **Persistence**: Saves tournament metadata, participants, players, and matches in SQLite; legacy JSON serialization remains supported.
 - **Calendar Generation**: Generates a visual calendar of upcoming and ongoing tournaments.
 
 ## Key Classes and Functions
@@ -34,10 +35,13 @@ Main class representing a tournament. Key methods:
 - `generate_tournament_message(tournaments)`: Create a summary message for all tournaments.
 - `update_tournament_message(bot, trigger_guild)`: Update the main tournament overview message in Discord.
 
-## File Structure
+## Persistence
 
-- Tournament data is stored in the `tournaments/` folder as JSON files.
-- Concluded tournaments are moved to `tournaments/concluded/`.
+- Tournament data is stored in `data/tournaments.db`.
+- `tournament_style` distinguishes Swiss tournaments from leagues; existing records default to `swiss`.
+- League `end_time` values are persisted in Europe/Berlin local time and restored as timezone-aware datetimes.
+- Leagues reuse the normalized player and match tables. Each independent league match occupies its own storage round; these are not scheduled rounds and do not impose opponent or timing constraints.
+- `LeagueTournament` preserves rematches during reload; Swiss tournaments retain their existing rematch restriction.
 - Temporary images (standings, pairings) are saved in the `tmp/` folder.
 
 ## Usage

@@ -2,6 +2,7 @@ import random, re
 import networkx as nx
 from modules.serializable import Serializable
 import json
+from datetime import datetime, timezone
 
 # The following tiebreakers are used to determine how a player ranks in a tournament:
 # 1. Match points
@@ -49,18 +50,35 @@ class Player(Serializable):
         self.player_id:int = player_id
         self.match_history:list[Match] = []
         self.dropped = False
+        self.ready_to_play = False
+        self.ready_until: datetime | None = None
         self.deck:Deck|None = None
+
+    @property
+    def ready_to_play(self):
+        return self._ready_to_play and (self.ready_until is None or self.ready_until > datetime.now(timezone.utc))
+
+    @ready_to_play.setter
+    def ready_to_play(self, value: bool):
+        self._ready_to_play = value
 
     @classmethod
     def deserialize(cls, data) -> "Player":
         player = Player(data['player_id'])
         player.dropped = data['dropped'] if 'dropped' in data else False
+        player.ready_to_play = bool(data.get("ready_to_play", False))
+        if data.get("ready_until"):
+            player.ready_until = datetime.fromisoformat(data["ready_until"])
+            if player.ready_until.tzinfo is None:
+                player.ready_until = player.ready_until.replace(tzinfo=timezone.utc)
         player.deck = Deck.deserialize(data['deck']) if 'deck' in data else None
         return player
 
     def serialize(self):
         my_dict = {
             "player_id": self.player_id,
+            "ready_to_play": self.ready_to_play,
+            "ready_until": self.ready_until.isoformat() if self.ready_until else None,
             "deck": self.deck
         }
         if self.dropped:
@@ -156,7 +174,7 @@ class Player(Serializable):
         return normalize_percentage(max(ogwp, 0.33))
 
 class Match(Serializable):
-    def __init__(self, player1:Player, player2:Player|None, round_number:int):
+    def __init__(self, player1:Player, player2:Player|None, round_number:int, allow_rematch=False):
         self.round_number = round_number
         if player1 is None:
             raise ValueError("player1 can not be None.")
@@ -167,7 +185,7 @@ class Match(Serializable):
         if player2 is None: # is bye
             self.wins[player1] = 2
             player1.match_history.append(self)
-        elif not player1.has_played_against(player2) and not player2.has_played_against(player1):
+        elif allow_rematch or (not player1.has_played_against(player2) and not player2.has_played_against(player1)):
             player1.match_history.append(self)
             player2.match_history.append(self)
         else:
@@ -180,7 +198,7 @@ class Match(Serializable):
         }
     
     @classmethod
-    def deserialize(cls, match_data, players:dict[int, Player], round_number:int):#
+    def deserialize(cls, match_data, players:dict[int, Player], round_number:int, allow_rematch=False):#
         wins:dict[str, int] = dict(match_data['wins'])
         draws:int = wins.pop('draws', 0)
         player_items:list[tuple[str, int]] = list(wins.items())
@@ -207,7 +225,7 @@ class Match(Serializable):
         player1 = players[int(p1[0])]
         player2 = players[int(p2[0])] if p2 else None
         try:
-            match = Match(player1, player2, round_number)
+            match = Match(player1, player2, round_number, allow_rematch=allow_rematch)
         except ValueError as exc:
             raise ValueError(
                 f"Datenkorrektur erforderlich: Ungueltige Paarung in Runde {round_number} "
@@ -291,9 +309,9 @@ class Round(Serializable):
         return obj
     
     @classmethod
-    def deserialize(cls, round_data, players:dict[int, Player]):
+    def deserialize(cls, round_data, players:dict[int, Player], allow_rematch=False):
         round = Round(round_data['round_number'])
-        round.matches = [Match.deserialize(match, players, round.round_number) for match in round_data['matches']]
+        round.matches = [Match.deserialize(match, players, round.round_number, allow_rematch=allow_rematch) for match in round_data['matches']]
         if 'message_pairings' in round_data:
             message_id_str = round_data['message_pairings']
             if message_id_str is not None:
@@ -336,6 +354,8 @@ def recommended_rounds(num_players):
     return 10
 
 class SwissTournament(Serializable):
+    allow_rematches = False
+
     def __init__(self, players:list[Player], max_rounds:int|None=None):
         if max_rounds is None:
             rounds_count = recommended_rounds(len(players))
@@ -364,11 +384,11 @@ class SwissTournament(Serializable):
     def deserialize(cls, data):
         players = data['players']
         players:list[Player] = [Player.deserialize(player) for player in players]
-        tournament = SwissTournament(players)
+        tournament = cls(players)
         tournament.rounds_count = data['rounds_count']
         if 'rounds' in data:
             player_map = {player.player_id: player for player in players}
-            tournament.rounds = [Round.deserialize(round, player_map) for round in data['rounds']]
+            tournament.rounds = [Round.deserialize(round, player_map, allow_rematch=cls.allow_rematches) for round in data['rounds']]
         if 'winner' in data and isinstance(data['winner'], dict):
             tournament.winner = Player.deserialize(data['winner'])
         return tournament
@@ -514,6 +534,97 @@ class SwissTournament(Serializable):
         print(f"Parings for Round {round.round_number}:")
         for match in round.matches:
             print(f"{match.player1} vs {match.player2}")
+
+class LeagueTournament(SwissTournament):
+    allow_rematches = True
+
+    def __init__(self, players:list[Player], cooldown_percentage=50, count_repeat_opponents=True):
+        super().__init__(players, max_rounds=0)
+        self.validate_cooldown_settings(cooldown_percentage, count_repeat_opponents)
+        self.cooldown_percentage = cooldown_percentage
+        self.count_repeat_opponents = count_repeat_opponents
+
+    @staticmethod
+    def validate_cooldown_settings(cooldown_percentage, count_repeat_opponents):
+        if type(cooldown_percentage) is not int or not 0 <= cooldown_percentage <= 100:
+            raise ValueError("Der Rematch-Cooldown muss zwischen 0 und 100 Prozent liegen.")
+        if type(count_repeat_opponents) is not bool:
+            raise ValueError("Bitte eine gueltige Zaehlweise fuer den Rematch-Cooldown auswaehlen.")
+
+    def serialize(self):
+        return dict(
+            super().serialize(), cooldown_percentage=self.cooldown_percentage,
+            count_repeat_opponents=self.count_repeat_opponents,
+        )
+
+    @classmethod
+    def deserialize(cls, data):
+        tournament = super().deserialize(data)
+        tournament.cooldown_percentage = data.get("cooldown_percentage", 50)
+        tournament.count_repeat_opponents = data.get("count_repeat_opponents", True)
+        cls.validate_cooldown_settings(tournament.cooldown_percentage, tournament.count_repeat_opponents)
+        return tournament
+
+    def pair_players(self):
+        raise ValueError("League opponents are chosen by the players.")
+
+    def rematch_cooldown(self, player1_id, player2_id) -> tuple[int, int]:
+        player1 = self.player_by_id(player1_id)
+        player2 = self.player_by_id(player2_id)
+        if player1 is None or player2 is None or player1 is player2:
+            raise ValueError("Bitte zwei unterschiedliche Teilnehmer der Liga auswaehlen.")
+        previous_matches = [
+            match for match in player1.get_finished_non_bye_matches()
+            if match.get_opponent_of(player1) is player2
+        ]
+        if not previous_matches:
+            return 0, 0
+        last_meeting = max(match.round_number for match in previous_matches)
+        other_players = {
+            player.player_id for player in self.get_active_players()
+            if player not in (player1, player2)
+        }
+
+        required_matches = (len(other_players) * self.cooldown_percentage + 99) // 100
+
+        def remaining_matches(player):
+            opponents_since = [
+                match.get_opponent_of(player).player_id
+                for match in player.get_finished_non_bye_matches()
+                if match.round_number > last_meeting
+                and match.get_opponent_of(player).player_id in other_players
+            ]
+            played_since = len(opponents_since) if self.count_repeat_opponents else len(set(opponents_since))
+            return max(0, required_matches - played_since)
+
+        return remaining_matches(player1), remaining_matches(player2)
+
+    def report_match(self, player1_id, player2_id, player1_wins, player2_wins, draws=0):
+        if self.winner:
+            raise ValueError("Die Liga ist bereits beendet.")
+        player1 = self.player_by_id(player1_id)
+        player2 = self.player_by_id(player2_id)
+        if player1 is None or player2 is None or player1.dropped or player2.dropped:
+            raise ValueError("Beide Spieler muessen aktive Teilnehmer der Liga sein.")
+        if player1 is player2:
+            raise ValueError("Du kannst nicht gegen dich selbst spielen.")
+        scores = (player1_wins, player2_wins, draws)
+        if any(type(score) is not int or score < 0 for score in scores) or not any(scores):
+            raise ValueError("Bitte ein gueltiges, nicht leeres Ergebnis eingeben.")
+        remaining1, remaining2 = self.rematch_cooldown(player1_id, player2_id)
+        if remaining1 or remaining2:
+            counting_unit = "Matches gegen andere aktive Teilnehmer" if self.count_repeat_opponents else "unterschiedliche andere aktive Gegner"
+            raise ValueError(
+                f"Rematch-Cooldown: <@{player1_id}> braucht noch {remaining1}, "
+                f"<@{player2_id}> noch {remaining2} {counting_unit}."
+            )
+        match_round = Round(len(self.rounds) + 1)
+        match = Match(player1, player2, match_round.round_number, allow_rematch=True)
+        match.set_result(player1_wins, player2_wins, draws)
+        match_round.add_match(match)
+        self.rounds.append(match_round)
+        return match
+
 
 def simulate_remaining_matches(tournament:SwissTournament):
     outcomes = [

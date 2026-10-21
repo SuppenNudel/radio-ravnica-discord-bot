@@ -26,7 +26,7 @@ from modules.db import (
     DiscordUser,
 )
 from modules.db import BannedUser
-from modules.spelltable.tournament_model import SpelltableTournament, load_tournaments, active_tournaments, update_tournament_message
+from modules.spelltable.tournament_model import SpelltableTournament, TournamentStyle, load_tournaments, active_tournaments, update_tournament_message
 from modules.spelltable.common_views import SubmitDeckView, ParticipationState, next_round, update_hall_of_fame_batch
 from modules.spelltable import common_views
 from modules.hall_of_fame import FORMAT_CHOICES
@@ -137,15 +137,48 @@ class ParticipationView(discord.ui.View):
         if interaction.user.id != self.tournament.organizer_id and not any(role.name == "Moderator" for role in interaction.user.roles):
             await interaction.respond("Du bist nicht der Turnier-Organisator!", ephemeral=True)
             return
-        await interaction.response.defer(ephemeral=True)
-        progress_message = await interaction.followup.send("Starte Turnier...", ephemeral=True, wait=True)
+        await interaction.response.send_message(
+            "Starte Liga..." if self.tournament.is_league else "Starte Turnier...", ephemeral=True
+        )
+        if self.tournament.is_league:
+            if self.tournament.swiss_tournament:
+                await interaction.edit_original_response(content="Die Liga wurde bereits gestartet.")
+                return
+            try:
+                self.tournament.validate_configuration()
+                if self.tournament.league_has_ended:
+                    raise ValueError("Die Endzeit der Liga liegt bereits in der Vergangenheit.")
+                participants = self.tournament.get_users_by_state(ParticipationState.PARTICIPATE)
+                if len(participants) < 2:
+                    raise ValueError("Eine Liga braucht mindestens zwei Teilnehmer.")
+            except ValueError as error:
+                await interaction.edit_original_response(content=str(error))
+                return
+            self.tournament.swiss_tournament = swiss_mtg.LeagueTournament(
+                [swiss_mtg.Player(user_id) for user_id in participants],
+                cooldown_percentage=self.tournament.league_cooldown_percentage,
+                count_repeat_opponents=self.tournament.league_count_repeat_opponents,
+            )
+            try:
+                await self.tournament.save_tournament_swiss()
+            except Exception:
+                self.tournament.swiss_tournament = None
+                await interaction.edit_original_response(content="Die Liga konnte nicht gestartet werden.")
+                raise
+            try:
+                await common_views.update_league_message(self.tournament)
+            except Exception:
+                await interaction.edit_original_response(content="Die Liga wurde gestartet, aber die Anzeige konnte nicht aktualisiert werden.")
+                raise
+            await interaction.edit_original_response(content="Die Liga wurde gestartet.")
+            return
 
         try:
             message = await self.tournament.message
             if message:
                 await message.edit(view=None)
             else:
-                await interaction.followup.send("Turnier Nachricht nicht gefunden", ephemeral=True)
+                await interaction.edit_original_response(content="Turnier Nachricht nicht gefunden")
                 return
             
             players = []
@@ -166,12 +199,10 @@ class ParticipationView(discord.ui.View):
                 await self.tournament.get_member(user_id)
 
             await next_round(self.tournament, interaction)
-        finally:
-            try:
-                if progress_message and hasattr(progress_message, "delete"):
-                    await progress_message.delete()
-            except Exception:
-                pass
+        except Exception:
+            await interaction.edit_original_response(content="Beim Starten des Turniers ist ein Fehler aufgetreten.")
+            raise
+        await interaction.edit_original_response(content="Das Turnier wurde gestartet.")
     
     
     @discord.ui.button(label="Turnier abbrechen", style=discord.ButtonStyle.danger, emoji="🛑", row=1)
@@ -212,8 +243,67 @@ class EnterTextModal(discord.ui.Modal):
         setattr(self.tournament, self.key, new_value)
         
         self.view._refresh_mandatory_field_labels()
-        self.view.submit_button.disabled = not bool(self.tournament.time)
         await interaction.edit_original_response(embed=await self.tournament.to_embed(), view=self.view)
+
+class SelectFormatModal(discord.ui.DesignerModal):
+    def __init__(self, tournament: SpelltableTournament, view: "EditTournamentView"):
+        super().__init__(title="Turnierformat")
+        self.tournament = tournament
+        self.view = view
+        self.format_select = discord.ui.StringSelect(
+            placeholder="Format auswählen",
+            options=[
+                discord.SelectOption(label=format_name, value=format_name, default=(format_name == tournament.format_name))
+                for format_name in FORMAT_CHOICES
+            ],
+            min_values=0,
+            max_values=1,
+            required=False,
+        )
+        self.add_item(discord.ui.Label("Format", self.format_select))
+
+    async def callback(self, interaction: discord.Interaction):
+        self.tournament.format_name = self.format_select.values[0] if self.format_select.values else None
+        await interaction.response.edit_message(embed=await self.tournament.to_embed(), view=self.view)
+
+
+class LeagueRulesModal(discord.ui.DesignerModal):
+    def __init__(self, tournament: SpelltableTournament, view: "EditTournamentView"):
+        super().__init__(title="Rematch-Regeln")
+        self.tournament = tournament
+        self.view = view
+        self.percentage_input = discord.ui.InputText(
+            value=str(tournament.league_cooldown_percentage),
+            required=True, min_length=1, max_length=3,
+        )
+        self.add_item(discord.ui.Label("Cooldown in Prozent (0-100)", self.percentage_input))
+        self.counting_select = discord.ui.StringSelect(
+            options=[
+                discord.SelectOption(label="Jedes Match zaehlt", value="matches", default=tournament.league_count_repeat_opponents),
+                discord.SelectOption(label="Nur unterschiedliche Gegner", value="distinct", default=not tournament.league_count_repeat_opponents),
+            ],
+            min_values=1, max_values=1, required=True,
+        )
+        self.add_item(discord.ui.Label("Zaehlweise", self.counting_select))
+
+    async def callback(self, interaction: discord.Interaction):
+        if not self.tournament.is_league or self.tournament.swiss_tournament:
+            await interaction.response.send_message("Rematch-Regeln koennen nur vor dem Ligastart geaendert werden.", ephemeral=True)
+            return
+        try:
+            percentage = int(self.percentage_input.value or "")
+            if not self.counting_select.values or self.counting_select.values[0] not in ("matches", "distinct"):
+                raise ValueError("Bitte eine Zaehlweise auswaehlen.")
+            count_repeats = self.counting_select.values[0] == "matches"
+            swiss_mtg.LeagueTournament.validate_cooldown_settings(percentage, count_repeats)
+        except ValueError as error:
+            await interaction.response.send_message(f"Ungueltige Rematch-Regeln: {error}", ephemeral=True)
+            return
+        self.tournament.league_cooldown_percentage = percentage
+        self.tournament.league_count_repeat_opponents = count_repeats
+        self.view._refresh_mandatory_field_labels()
+        await interaction.response.edit_message(embed=await self.tournament.to_embed(), view=self.view)
+
 
 class EditTournamentView(discord.ui.View):
     def __init__(self):
@@ -227,8 +317,6 @@ class EditTournamentView(discord.ui.View):
         self._refresh_mandatory_field_labels()
 
         # Dynamically set the disabled state of the "Abschicken" button
-        self.submit_button.disabled = not bool(self.tournament.time)
-
         self.days_per_match_callback.label = (
             "Turnier am Stück spielen" if self.tournament.days_per_match else "Eine Woche pro Runde"
         )
@@ -236,6 +324,17 @@ class EditTournamentView(discord.ui.View):
     def _refresh_mandatory_field_labels(self):
         status = "✅" if self.tournament.time else "⚠️"
         self.time_callback.label = f"Startzeit/-datum* {status}"
+        self.end_time_callback.disabled = not self.tournament.is_league
+        self.end_time_callback.label = f"Endzeit/-datum* {'OK' if self.tournament.end_time else 'Pflicht'}"
+        self.round_count_callback.disabled = self.tournament.is_league
+        self.days_per_match_callback.disabled = self.tournament.is_league
+        self.league_rules_callback.disabled = not self.tournament.is_league or bool(self.tournament.swiss_tournament)
+        try:
+            self.tournament.validate_configuration()
+        except ValueError:
+            self.submit_button.disabled = True
+        else:
+            self.submit_button.disabled = False
 
     @classmethod
     async def create(cls, tournament: SpelltableTournament, channel: discord.abc.Messageable):
@@ -282,6 +381,18 @@ class EditTournamentView(discord.ui.View):
 
         await interaction.response.send_modal(EnterTextModal(input, "time", self.tournament, self, parse))
 
+    @discord.ui.button(label="Endzeit/-datum", style=discord.ButtonStyle.primary, emoji="📆")
+    async def end_time_callback(self, button:discord.ui.Button, interaction:discord.Interaction):
+        input = discord.ui.InputText(
+            label="Endzeit/-datum der Liga",
+            placeholder="z.B. am 31.12.2026 um 23:59 Uhr",
+            required=True,
+            value=str(self.tournament.end_time) if self.tournament.end_time else "",
+        )
+        await interaction.response.send_modal(EnterTextModal(
+            input, "end_time", self.tournament, self, date_time_interpretation.parse_date
+        ))
+
     @discord.ui.button(label="Max. Teilnehmer", style=discord.ButtonStyle.primary, emoji="🔢")
     async def max_player_callback(self, button:discord.ui.Button, interaction:discord.Interaction):
         input = discord.ui.InputText(
@@ -327,37 +438,26 @@ class EditTournamentView(discord.ui.View):
         view = await EditTournamentView.create(self.tournament, self.channel)
         await interaction.response.edit_message(embed=await self.tournament.to_embed(), view=view)
 
+    @discord.ui.button(label="Rematch-Regeln", style=discord.ButtonStyle.primary, emoji="⚙️")
+    async def league_rules_callback(self, button: discord.ui.Button, interaction: discord.Interaction):
+        if not self.tournament.is_league or self.tournament.swiss_tournament:
+            await interaction.response.send_message("Rematch-Regeln koennen nur vor dem Ligastart geaendert werden.", ephemeral=True)
+            return
+        await interaction.response.send_modal(LeagueRulesModal(self.tournament, self))
+
     @discord.ui.button(label="Format", style=discord.ButtonStyle.primary, emoji="🎴")
     async def format_callback(self, button:discord.ui.Button, interaction:discord.Interaction):
-        from modules.hall_of_fame import FORMAT_CHOICES
-        current = self.tournament.format_name or None
-        options = [
-            discord.SelectOption(label=f, value=f, default=(f == current))
-            for f in FORMAT_CHOICES
-        ]
-        select = discord.ui.StringSelect(
-            placeholder="Format auswählen",
-            options=options,
-            min_values=0,
-            max_values=1,
-        )
-        tournament = self.tournament
-        edit_view = self
-
-        async def on_select(select_interaction: discord.Interaction):
-            tournament.format_name = select.values[0] if select.values else None
-            await select_interaction.response.edit_message(
-                embed=await tournament.to_embed(),
-                view=edit_view,
-            )
-
-        select.callback = on_select
-        ephemeral_view = discord.ui.View(timeout=60)
-        ephemeral_view.add_item(select)
-        await interaction.response.send_message(view=ephemeral_view, ephemeral=True)
+        await interaction.response.send_modal(SelectFormatModal(self.tournament, self))
 
     @discord.ui.button(label="Abschicken", style=discord.ButtonStyle.success, emoji="✅")
     async def submit_button(self, button: discord.ui.Button, interaction: discord.Interaction):
+        try:
+            self.tournament.validate_configuration()
+            if self.tournament.is_league and self.tournament.league_has_ended:
+                raise ValueError("Die Endzeit der Liga liegt bereits in der Vergangenheit.")
+        except ValueError as error:
+            await interaction.response.send_message(str(error), ephemeral=True)
+            return
         await interaction.response.defer()
         self.disable_all_items()
         await interaction.edit(view=self)
@@ -408,7 +508,13 @@ class EditTournamentView(discord.ui.View):
 class SpelltableTournamentManager(Cog):
     def __init__(self, bot:Bot):
         self.bot = bot
+        self._tournaments_loaded = False
         self.schedule_midnight_update.start()
+        self.schedule_league_end.start()
+
+    def cog_unload(self):
+        self.schedule_midnight_update.cancel()
+        self.schedule_league_end.cancel()
 
     async def _refresh_historical_pairings_messages(
         self,
@@ -653,6 +759,7 @@ class SpelltableTournamentManager(Cog):
 
     @Cog.listener()
     async def on_ready(self):
+        self._tournaments_loaded = False
         loaded_tournaments = await load_tournaments(self.bot)
 
         global active_tournaments
@@ -686,6 +793,10 @@ class SpelltableTournamentManager(Cog):
                     embed = await tournament.to_embed()
                     await tournament_message.edit(content=participants_content, embed=embed, view=view)
                     return None
+
+                if tournament.is_league:
+                    await common_views.update_league_message(tournament)
+                    return tournament if tournament.swiss_tournament.winner else None
 
                 # tournament has been started
                 swiss_tournament = tournament.swiss_tournament
@@ -792,6 +903,7 @@ class SpelltableTournamentManager(Cog):
 
         await update_hall_of_fame_batch(concluded_tournaments_for_hof)
         await update_tournament_message(self.bot)
+        self._tournaments_loaded = True
 
         log.info(self.__class__.__name__ + " is ready")
 
@@ -831,6 +943,10 @@ class SpelltableTournamentManager(Cog):
 
         if not this_tournament.swiss_tournament:
             await ctx.respond("Dieser Befehl ist erst verfügbar, wenn das Turnier gestartet wurde.", ephemeral=True)
+            return
+
+        if this_tournament.is_league:
+            await ctx.respond("In einer Liga gibt es keine zugewiesenen Matches.", ephemeral=True)
             return
 
         current_round = this_tournament.swiss_tournament.current_round()
@@ -964,7 +1080,8 @@ class SpelltableTournamentManager(Cog):
     async def turnier_erstellen(
         self,
         ctx:ApplicationContext,
-        titel: Annotated[str, Option(str, description="Der Titel, den das Turnier tragen soll")]
+        titel: Annotated[str, Option(str, description="Der Titel, den das Turnier tragen soll")],
+        turnierart: Annotated[str, Option(str, description="Swiss-Turnier oder Liga", choices=["Swiss", "Liga"])]
     ):
         # Defer the interaction response to avoid timeout
         try:
@@ -1003,6 +1120,7 @@ class SpelltableTournamentManager(Cog):
             return
 
         tournament = SpelltableTournament(ctx.guild, titel, ctx.author.id, self.bot)
+        tournament.tournament_style = TournamentStyle.LEAGUE if turnierart == "Liga" else TournamentStyle.SWISS
         tournament.organizer = ctx.author
         # Auto-detect format from channel name
         detected_format = auto_detect_format_from_channel(ctx.channel)
@@ -1014,6 +1132,37 @@ class SpelltableTournamentManager(Cog):
             view=view,
             ephemeral=True
         )
+
+    @tasks.loop(seconds=30)
+    async def schedule_league_end(self):
+        if not self._tournaments_loaded:
+            return
+        completed = False
+        for tournament in list(active_tournaments.values()):
+            if not (
+                tournament.is_league and tournament.swiss_tournament
+                and not tournament.cancelled
+            ):
+                continue
+            try:
+                if not tournament.league_has_ended:
+                    await common_views.expire_league_readiness(tournament)
+                    continue
+                if tournament._league_end_announced:
+                    continue
+                async with tournament.league_lock:
+                    await common_views.update_league_message(tournament)
+                if tournament.swiss_tournament.winner:
+                    await common_views.update_hall_of_fame(tournament)
+                completed = True
+            except Exception:
+                log.exception(f"Failed to update league '{tournament.title}'")
+        if completed:
+            await update_tournament_message(self.bot)
+
+    @schedule_league_end.before_loop
+    async def before_league_end_task(self):
+        await self.bot.wait_until_ready()
 
     @tasks.loop(time=time(hour=0, minute=0, second=1, tzinfo=env.TIMEZONE))
     async def schedule_midnight_update(self):
