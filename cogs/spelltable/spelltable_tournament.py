@@ -106,7 +106,7 @@ class ParticipationView(discord.ui.View):
         message = await self.tournament.message
         if message:
             if not isinstance(message.channel, discord.Thread):
-                await interaction.respond("Bearbeiten ist nur in Threads moeglich.", ephemeral=True)
+                await interaction.respond("Bearbeiten ist nur in Threads möglich.", ephemeral=True)
                 return
             view = await EditTournamentView.create(self.tournament, message.channel)
             await interaction.respond(view=view, ephemeral=True)
@@ -279,21 +279,21 @@ class LeagueRulesModal(discord.ui.DesignerModal):
         self.add_item(discord.ui.Label("Cooldown in Prozent (0-100)", self.percentage_input))
         self.counting_select = discord.ui.StringSelect(
             options=[
-                discord.SelectOption(label="Jedes Match zaehlt", value="matches", default=tournament.league_count_repeat_opponents),
+                discord.SelectOption(label="Jedes Match zählt", value="matches", default=tournament.league_count_repeat_opponents),
                 discord.SelectOption(label="Nur unterschiedliche Gegner", value="distinct", default=not tournament.league_count_repeat_opponents),
             ],
             min_values=1, max_values=1, required=True,
         )
-        self.add_item(discord.ui.Label("Zaehlweise", self.counting_select))
+        self.add_item(discord.ui.Label("Zählweise", self.counting_select))
 
     async def callback(self, interaction: discord.Interaction):
         if not self.tournament.is_league or self.tournament.swiss_tournament:
-            await interaction.response.send_message("Rematch-Regeln koennen nur vor dem Ligastart geaendert werden.", ephemeral=True)
+            await interaction.response.send_message("Rematch-Regeln können nur vor dem Ligastart geändert werden.", ephemeral=True)
             return
         try:
             percentage = int(self.percentage_input.value or "")
             if not self.counting_select.values or self.counting_select.values[0] not in ("matches", "distinct"):
-                raise ValueError("Bitte eine Zaehlweise auswaehlen.")
+                raise ValueError("Bitte eine Zählweise auswählen.")
             count_repeats = self.counting_select.values[0] == "matches"
             swiss_mtg.LeagueTournament.validate_cooldown_settings(percentage, count_repeats)
         except ValueError as error:
@@ -441,7 +441,7 @@ class EditTournamentView(discord.ui.View):
     @discord.ui.button(label="Rematch-Regeln", style=discord.ButtonStyle.primary, emoji="⚙️")
     async def league_rules_callback(self, button: discord.ui.Button, interaction: discord.Interaction):
         if not self.tournament.is_league or self.tournament.swiss_tournament:
-            await interaction.response.send_message("Rematch-Regeln koennen nur vor dem Ligastart geaendert werden.", ephemeral=True)
+            await interaction.response.send_message("Rematch-Regeln können nur vor dem Ligastart geändert werden.", ephemeral=True)
             return
         await interaction.response.send_modal(LeagueRulesModal(self.tournament, self))
 
@@ -1083,12 +1083,21 @@ class SpelltableTournamentManager(Cog):
         titel: Annotated[str, Option(str, description="Der Titel, den das Turnier tragen soll")],
         turnierart: Annotated[str, Option(str, description="Swiss-Turnier oder Liga", choices=["Swiss", "Liga"])]
     ):
-        # Defer the interaction response to avoid timeout
+        acknowledgement_started = datetime.now(timezone.utc)
         try:
             await ctx.defer(ephemeral=True)
-        except discord.errors.NotFound:
-            # Interaction expired before we could defer - the bot can't respond
-            log.error("Interaction expired before defer could be called")
+        except discord.errors.NotFound as error:
+            interaction = ctx.interaction
+            interaction_age = (acknowledgement_started - interaction.created_at).total_seconds()
+            defer_duration = (datetime.now(timezone.utc) - acknowledgement_started).total_seconds()
+            log.exception(
+                "Failed to acknowledge /turnier_erstellen: "
+                "interaction_id=%s guild_id=%s channel_id=%s user_id=%s "
+                "age_before_defer=%.3fs defer_duration=%.3fs http_status=%s discord_code=%s. "
+                "Discord requires the initial acknowledgement within 3 seconds.",
+                interaction.id, getattr(ctx.guild, "id", None), getattr(ctx.channel, "id", None),
+                getattr(ctx.author, "id", None), interaction_age, defer_duration, error.status, error.code,
+            )
             return
         if type(ctx.channel) != discord.TextChannel:
             await ctx.followup.send("Dieser Befehl kann nur in einem Textkanal ausgeführt werden.", ephemeral=True)

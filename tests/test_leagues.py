@@ -216,6 +216,32 @@ class LeagueTournamentTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(restored.swiss_tournament.player_by_id(2).ready_to_play)
         self.assertEqual(restored.swiss_tournament.players[0].ready_until, ready_until)
 
+    async def test_expired_creation_logs_traceback_and_acknowledgement_timing(self):
+        error = discord.NotFound(
+            SimpleNamespace(status=404, reason="Not Found"), {"code": 10062, "message": "Unknown interaction"}
+        )
+        context = Mock(spec=discord.ApplicationContext)
+        context.defer = AsyncMock(side_effect=error)
+        context.interaction = SimpleNamespace(
+            id=999, created_at=datetime.now(timezone.utc) - timedelta(seconds=5)
+        )
+        context.guild = SimpleNamespace(id=123)
+        context.channel = SimpleNamespace(id=789)
+        context.author = SimpleNamespace(id=1)
+        context.followup = SimpleNamespace(send=AsyncMock())
+        manager = Mock(spec=cog.SpelltableTournamentManager)
+        with self.assertLogs(cog.log, level="ERROR") as captured:
+            await cog.SpelltableTournamentManager.turnier_erstellen.callback(manager, context, "Test", "Liga")
+        record = captured.records[0]
+        self.assertIsNotNone(record.exc_info)
+        self.assertIs(record.exc_info[1], error)
+        self.assertIn("age_before_defer=", record.getMessage())
+        self.assertIn("defer_duration=", record.getMessage())
+        self.assertIn("discord_code=10062", record.getMessage())
+        self.assertIn("interaction_id=999", record.getMessage())
+        self.assertGreaterEqual(record.args[4], 5)
+        context.followup.send.assert_not_awaited()
+
     async def test_readiness_migration_defaults_existing_players_to_unready(self):
         with self.engine.begin() as connection:
             connection.execute(text("DROP TABLE swiss_players"))
