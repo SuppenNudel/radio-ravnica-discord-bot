@@ -33,6 +33,8 @@
 
 Technisch nutzt der Bot dafür den öffentlichen YouTube-RSS-Feed des Kanals. Wenn YouTube den Feed mit HTTP 404 ablehnt, liest der Bot als Fallback die strukturierten Daten der öffentlichen Videos-Seite. Optional kann die Kanal-ID direkt über `YOUTUBE_CHANNEL_GAMERII_ID` gesetzt werden; wenn sie fehlt, löst der Bot sie einmalig über die öffentliche `@Handle`-Seite auf.
 
+Bereits bekannte Video-IDs werden pro Discord-Zielkanal und YouTube-Handle dauerhaft in `data/youtube_feed.db` gespeichert, damit wechselnde Feed-Inhalte nach einem Neustart keine erneuten Benachrichtigungen auslösen. Beim ersten Start ohne gespeicherten Verlauf wird der aktuelle Feed nur als Ausgangsstand erfasst und nicht gepostet. Bei späteren Neustarts werden neue Videos seit dem letzten Lauf nachgeholt, soweit sie noch im abgefragten Feed enthalten sind. Die Datenbank muss bei Deployments erhalten bleiben; bestehende Discord-Nachrichten werden nicht nachträglich eingelesen.
+
 Nur die YouTube-Cog-Tests laufen mit:
 
 ```bash

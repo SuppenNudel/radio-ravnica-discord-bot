@@ -1,5 +1,6 @@
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,6 +13,7 @@ if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
 from cogs.feed.youtube import ContentType, Youtube, YoutubeChannel
+from discord_bot_shared.youtube_feed import BaseYoutube
 
 
 class DummyResponse:
@@ -27,6 +29,13 @@ class DummyResponse:
 
 class YoutubeCogTestCase(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
+        temporary_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary_directory.cleanup)
+        state_path = patch.object(
+            BaseYoutube, "state_db_path", Path(temporary_directory.name) / "youtube_feed.db", create=True
+        )
+        state_path.start()
+        self.addCleanup(state_path.stop)
         self.previous_role = os.environ.get("ROLE_ANNOUNCEMENT")
         self.previous_channel = os.environ.get("CHANNEL_YOUTUBE")
         self.previous_yt_channel = os.environ.get("YOUTUBE_CHANNEL_GAMERII_ID")
@@ -136,6 +145,67 @@ class YoutubeCogTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(channel.content[ContentType.VIDEOS], feed_contents[0])
         self.assertTrue({"new1", "new2", "new3"}.issubset(channel.seen_video_ids))
 
+    async def test_check_channels_remembers_videos_missing_from_restart_snapshot(self):
+        original_contents = [{"videoId": "new123"}, {"videoId": "old123"}]
+        with patch.object(self.cog, "get_latest_content", AsyncMock(return_value=(original_contents, False, False))):
+            await Youtube.check_channels.coro(self.cog)
+
+        restarted_cog = Youtube(self.cog.bot)
+        with patch.object(restarted_cog, "get_latest_content", AsyncMock(side_effect=[
+            ([original_contents[0]], False, False),
+            (original_contents, False, False),
+        ])), patch.object(restarted_cog, "post_video", AsyncMock()) as post_video:
+            await Youtube.check_channels.coro(restarted_cog)
+            await Youtube.check_channels.coro(restarted_cog)
+
+        post_video.assert_not_awaited()
+
+    async def test_check_channels_persists_posts_and_catches_up_after_restart(self):
+        old_video = {"videoId": "old123"}
+        new_video = {"videoId": "new123"}
+        offline_video = {"videoId": "offline123"}
+        with patch.object(self.cog, "get_latest_content", AsyncMock(side_effect=[
+            ([old_video], False, False),
+            ([new_video, new_video, old_video], False, False),
+        ])), patch.object(self.cog, "post_video", AsyncMock()) as post_video:
+            await Youtube.check_channels.coro(self.cog)
+            await Youtube.check_channels.coro(self.cog)
+
+        post_video.assert_awaited_once_with(self.cog.channels[0], ContentType.VIDEOS, new_video)
+
+        restarted_cog = Youtube(self.cog.bot)
+        with patch.object(restarted_cog, "get_latest_content", AsyncMock(return_value=(
+            [offline_video, new_video, old_video], False, False
+        ))), patch.object(restarted_cog, "post_video", AsyncMock()) as post_video:
+            await Youtube.check_channels.coro(restarted_cog)
+
+        post_video.assert_awaited_once_with(restarted_cog.channels[0], ContentType.VIDEOS, offline_video)
+
+    async def test_check_channels_does_not_remember_failed_posts(self):
+        old_video = {"videoId": "old123"}
+        new_video = {"videoId": "new123"}
+        with patch.object(self.cog, "get_latest_content", AsyncMock(side_effect=[
+            ([old_video], False, False),
+            ([new_video, old_video], False, False),
+        ])), patch.object(self.cog, "post_video", AsyncMock(side_effect=RuntimeError("send failed"))):
+            await Youtube.check_channels.coro(self.cog)
+            with self.assertRaisesRegex(RuntimeError, "send failed"):
+                await Youtube.check_channels.coro(self.cog)
+
+        restarted_cog = Youtube(self.cog.bot)
+        self.assertEqual(restarted_cog.channels[0].seen_video_ids, {"old123"})
+
+    async def test_seen_videos_are_scoped_to_destination_and_handle(self):
+        self.cog.remember_videos(self.cog.channels[0], [{"videoId": "old123"}])
+
+        with patch.dict(os.environ, {"CHANNEL_YOUTUBE": "9876543210"}):
+            other_destination = Youtube(self.cog.bot)
+        self.assertEqual(other_destination.channels[0].seen_video_ids, set())
+
+        self.cog.remember_videos(YoutubeChannel("OtherCreator", 100), [{"videoId": "other123"}])
+        restarted_cog = Youtube(self.cog.bot)
+        self.assertEqual(restarted_cog.channels[0].seen_video_ids, {"old123"})
+
     async def test_check_channels_does_not_post_initial_snapshot(self):
         channel = self.cog.channels[0]
         feed_contents = [
@@ -154,6 +224,13 @@ class YoutubeCogTestCase(unittest.IsolatedAsyncioTestCase):
 
 class YoutubeCogParsingTestCase(unittest.TestCase):
     def setUp(self):
+        temporary_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary_directory.cleanup)
+        state_path = patch.object(
+            BaseYoutube, "state_db_path", Path(temporary_directory.name) / "youtube_feed.db", create=True
+        )
+        state_path.start()
+        self.addCleanup(state_path.stop)
         os.environ["CHANNEL_YOUTUBE"] = "1234567890"
         self.cog = Youtube(SimpleNamespace())
 

@@ -1,10 +1,13 @@
 from dataclasses import dataclass
+from contextlib import closing
 from enum import Enum
+from pathlib import Path
 from typing import Callable, Sequence
 import asyncio
 import json
 import os
 import re
+import sqlite3
 import xml.etree.ElementTree as ET
 
 import discord
@@ -45,6 +48,7 @@ class YoutubeChannel:
 
 class BaseYoutube(commands.Cog):
     feed_config: YoutubeFeedConfig | None = None
+    state_db_path = Path(__file__).resolve().parents[1] / "data" / "youtube_feed.db"
 
     youtube_headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36",
@@ -75,6 +79,31 @@ class BaseYoutube(commands.Cog):
                     "The environment variable '%s' is not a valid integer.",
                     self.feed_config.notification_channel_env,
                 )
+
+        if self.channel_id is not None:
+            self.state_db_path.parent.mkdir(parents=True, exist_ok=True)
+            with closing(sqlite3.connect(self.state_db_path)) as connection, connection:
+                connection.execute(
+                    "CREATE TABLE IF NOT EXISTS seen_videos ("
+                    "discord_channel_id TEXT NOT NULL, handle TEXT NOT NULL, video_id TEXT NOT NULL, "
+                    "PRIMARY KEY (discord_channel_id, handle, video_id))"
+                )
+                for channel in self.channels:
+                    channel.seen_video_ids.update(
+                        row[0] for row in connection.execute(
+                            "SELECT video_id FROM seen_videos WHERE discord_channel_id = ? AND handle = ?",
+                            (str(self.channel_id), channel.handle.casefold()),
+                        )
+                    )
+
+    def remember_videos(self, channel: YoutubeChannel, contents: Sequence[dict]):
+        video_ids = {content["videoId"] for content in contents}
+        with closing(sqlite3.connect(self.state_db_path)) as connection, connection:
+            connection.executemany(
+                "INSERT OR IGNORE INTO seen_videos (discord_channel_id, handle, video_id) VALUES (?, ?, ?)",
+                [(str(self.channel_id), channel.handle.casefold(), video_id) for video_id in video_ids],
+            )
+        channel.seen_video_ids.update(video_ids)
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -342,21 +371,16 @@ class BaseYoutube(commands.Cog):
             newest_content = recent_contents[0]
 
             if not yt_channel.seen_video_ids:
-                for content in recent_contents:
-                    yt_channel.seen_video_ids.add(content["videoId"])
+                self.remember_videos(yt_channel, recent_contents)
                 self.update_latest_content(yt_channel, newest_content)
                 continue
 
-            unseen_contents = [
-                content
-                for content in reversed(recent_contents)
-                if content["videoId"] not in yt_channel.seen_video_ids
-            ]
-
-            for content in unseen_contents:
+            for content in reversed(recent_contents):
+                if content["videoId"] in yt_channel.seen_video_ids:
+                    continue
                 log.info(f"going to post https://www.youtube.com/watch?v={content['videoId']}")
                 await self.post_video(yt_channel, ContentType.VIDEOS, content)
-                yt_channel.seen_video_ids.add(content["videoId"])
+                self.remember_videos(yt_channel, [content])
 
             self.update_latest_content(yt_channel, newest_content)
 
