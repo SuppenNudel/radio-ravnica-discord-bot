@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone as dt_timezone
+from contextlib import closing
 from ezcord import log
 import logging
 import traceback
@@ -390,9 +391,6 @@ async def update_tournament_message(bot:discord.Bot, trigger_guild:discord.Guild
     ]
     tourney_list_message = await generate_tournament_message(rr_tournaments)
     calendar_img = generate_calendar(rr_tournaments)
-    calendar_file = None
-    if calendar_img:
-        calendar_file = discord.File(calendar_img, filename=calendar_img)
     calendar_message = None
     if env.SPELLTABLE_CALENDAR_MESSAGE_ID:
         channel:discord.TextChannel = guild.get_channel(env.SPELLTABLE_CALENDAR_CHANNEL_ID)
@@ -402,18 +400,38 @@ async def update_tournament_message(bot:discord.Bot, trigger_guild:discord.Guild
             log.warning("Calendar message not found, creating a new one")
 
     if calendar_message:
-        if calendar_file:
-            await calendar_message.edit(content=tourney_list_message, attachments=[], file=calendar_file, allowed_mentions=discord.AllowedMentions.none())
+        try:
+            image_unchanged = not calendar_img and not calendar_message.attachments
+            if calendar_img and len(calendar_message.attachments) == 1:
+                image_unchanged = (
+                    await calendar_message.attachments[0].read() == Path(calendar_img).read_bytes()
+                )
+            if not image_unchanged:
+                if calendar_img:
+                    with closing(discord.File(calendar_img, filename=calendar_img)) as calendar_file:
+                        await calendar_message.edit(content=tourney_list_message, attachments=[], file=calendar_file, allowed_mentions=discord.AllowedMentions.none())
+                else:
+                    await calendar_message.edit(content=tourney_list_message, attachments=[], allowed_mentions=discord.AllowedMentions.none())
+            elif calendar_message.content != tourney_list_message:
+                await calendar_message.edit(content=tourney_list_message, allowed_mentions=discord.AllowedMentions.none())
+        except discord.HTTPException as error:
+            if error.code != 30046:
+                raise
+            log.warning(
+                f"Calendar message {calendar_message.jump_url} left unchanged: Discord's edit limit "
+                f"for messages older than one hour was reached (30046). Will retry on a later overview update."
+            )
         else:
-            await calendar_message.edit(content=tourney_list_message, attachments=[], allowed_mentions=discord.AllowedMentions.none())
+            link_log.debug(f"Tournament Overview Message up to date: {calendar_message.jump_url}")
     else:
-        if calendar_file:
-            calendar_message = await guild.get_channel(env.SPELLTABLE_CALENDAR_CHANNEL_ID).send(tourney_list_message, file=calendar_file, allowed_mentions=discord.AllowedMentions.none())
+        if calendar_img:
+            with closing(discord.File(calendar_img, filename=calendar_img)) as calendar_file:
+                calendar_message = await guild.get_channel(env.SPELLTABLE_CALENDAR_CHANNEL_ID).send(tourney_list_message, file=calendar_file, allowed_mentions=discord.AllowedMentions.none())
         else:
             calendar_message = await guild.get_channel(env.SPELLTABLE_CALENDAR_CHANNEL_ID).send(tourney_list_message, allowed_mentions=discord.AllowedMentions.none())
         env.SPELLTABLE_CALENDAR_MESSAGE_ID = calendar_message.id
         env.save_to_env("SPELLTABLE_CALENDAR_MESSAGE_ID", calendar_message.id)
-    link_log.debug(f"Tournament Overview Message updated: {calendar_message.jump_url}")
+        link_log.debug(f"Tournament Overview Message created: {calendar_message.jump_url}")
 
     tournament_count = len(rr_tournaments)
     activity_name = f"Veranstaltet {tournament_count} Turnier{'e' if tournament_count != 1 else ''}"
@@ -568,7 +586,8 @@ async def update_format_overviews(bot: discord.Bot, trigger_guild: discord.Guild
                     current_id = message_ids[index]
                     try:
                         message = await channel.fetch_message(int(current_id))
-                        await message.edit(content=content, allowed_mentions=discord.AllowedMentions.none())
+                        if message.content != content:
+                            await message.edit(content=content, allowed_mentions=discord.AllowedMentions.none())
                         new_message_ids.append(str(message.id))
                     except discord.NotFound:
                         message = await channel.send(content, allowed_mentions=discord.AllowedMentions.none())

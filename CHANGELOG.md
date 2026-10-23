@@ -1,5 +1,12 @@
 # Changelog
 
+## 23. Oktober 2026
+
+### Behoben
+
+- Unveraenderte Turnierkalender und Format-Uebersichten werden nicht erneut bearbeitet.
+- Discord-Edit-Limit 30046 beim Turnierkalender wird protokolliert, ohne Teilnehmeraktionen abzubrechen; ein spaeteres Update versucht die Aktualisierung erneut.
+
 ## 20. April 2026
 
 ### Geändert
