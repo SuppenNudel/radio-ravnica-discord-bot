@@ -30,6 +30,16 @@ Im Dialog **Rematch-Regeln** kann vor dem Ligastart das Wertungssystem festgeleg
 
     Dabei ist $S$ das tatsächliche Ergebnis und $E$ die erwartete Punktzahl. Die Anzahl einzelner Spiele im Match beeinflusst Elo nicht; ausschlaggebend ist das Match-Ergebnis. Elo-Ranglisten sortieren nach Rating.
 
+### Rechenbeispiele
+
+Die Beispiele zeigen Ratings mit einer Nachkommastelle. Beide Änderungen werden aus den Ratings **vor** dem Match berechnet; dadurch bleibt die Summe der Ratings gleich.
+
+- **Gleichstand der Ratings:** A und B haben jeweils 1000 Elo. A gewinnt: Die Erwartung beträgt für beide 0,5. A erhält `32 × (1 − 0,5) = 16` Punkte und steht danach bei **1016**; B verliert 16 und steht bei **984**. Bei einem Unentschieden wäre das Ergebnis für beide 0,5, also blieben beide bei **1000**.
+- **Der Favorit gewinnt:** A hat 1200, B hat 1000. As erwartetes Ergebnis liegt bei ungefähr 0,7597. Gewinnt A, erhält A `32 × (1 − 0,7597) ≈ 7,7` Punkte: **1207,7 Elo**. B verliert dieselben 7,7 Punkte und fällt auf **992,3 Elo**.
+- **Der Außenseiter gewinnt:** A hat 1200, B hat 1000, aber B gewinnt. B hatte eine Erwartung von ungefähr 0,2403 und erhält daher `32 × (1 − 0,2403) ≈ 24,3` Punkte: **1024,3 Elo**. A verliert 24,3 Punkte und fällt auf **1175,7 Elo**. Ein unerwarteter Sieg verändert das Rating also stärker als ein erwarteter.
+
+Im Discord-Standsbild werden Elo-Ratings auf ganze Punkte gerundet angezeigt; intern bleiben die Nachkommastellen erhalten.
+
 ### Elo-Soft-Reset
 
 Für Elo kann die Organisation ein Reset-Intervall in Tagen festlegen; voreingestellt sind 30 Tage. Bei jedem fälligen Reset wird der Abstand jedes Ratings zum Startwert 1000 halbiert. Beispiele: 1200 wird zu 1100, 800 zu 900. Mehrere verpasste Intervalle, etwa während der Bot offline war, werden beim nächsten Lauf nacheinander angewendet. Mit `0` ist der Soft-Reset deaktiviert. Das Intervall und der Zeitpunkt des letzten Resets werden gespeichert und nach einem Neustart fortgesetzt.
