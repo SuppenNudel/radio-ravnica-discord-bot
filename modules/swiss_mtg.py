@@ -2,7 +2,7 @@ import random, re
 import networkx as nx
 from modules.serializable import Serializable
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 # The following tiebreakers are used to determine how a player ranks in a tournament:
 # 1. Match points
@@ -52,6 +52,7 @@ class Player(Serializable):
         self.dropped = False
         self.ready_to_play = False
         self.ready_until: datetime | None = None
+        self.elo_rating = 1000.0
         self.deck:Deck|None = None
 
     @property
@@ -72,6 +73,7 @@ class Player(Serializable):
             if player.ready_until.tzinfo is None:
                 player.ready_until = player.ready_until.replace(tzinfo=timezone.utc)
         player.deck = Deck.deserialize(data['deck']) if 'deck' in data else None
+        player.elo_rating = float(data.get("elo_rating", 1000.0))
         return player
 
     def serialize(self):
@@ -79,6 +81,7 @@ class Player(Serializable):
             "player_id": self.player_id,
             "ready_to_play": self.ready_to_play,
             "ready_until": self.ready_until.isoformat() if self.ready_until else None,
+            "elo_rating": self.elo_rating,
             "deck": self.deck
         }
         if self.dropped:
@@ -537,13 +540,70 @@ class SwissTournament(Serializable):
 
 class LeagueTournament(SwissTournament):
     allow_rematches = True
+    ELO_K_FACTOR = 32
+    ELO_BASELINE = 1000.0
 
-    def __init__(self, players:list[Player], cooldown_percentage=50, count_repeat_opponents=True, matches_before_cooldown=1):
+    @staticmethod
+    def _utc(value: datetime) -> datetime:
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
+    def __init__(
+        self,
+        players: list[Player],
+        cooldown_percentage=50,
+        count_repeat_opponents=True,
+        matches_before_cooldown=1,
+        scoring_mode="points",
+        elo_reset_days=30,
+        elo_last_reset_at: datetime | None = None,
+    ):
         super().__init__(players, max_rounds=0)
         self.validate_cooldown_settings(cooldown_percentage, count_repeat_opponents, matches_before_cooldown)
+        self.validate_elo_settings(scoring_mode, elo_reset_days)
         self.cooldown_percentage = cooldown_percentage
         self.count_repeat_opponents = count_repeat_opponents
         self.matches_before_cooldown = matches_before_cooldown
+        self.scoring_mode = scoring_mode
+        self.elo_reset_days = elo_reset_days
+        self.elo_last_reset_at = self._utc(elo_last_reset_at) if elo_last_reset_at else datetime.now(timezone.utc)
+
+    def sort_players_by_standings(self):
+        if self.scoring_mode == "elo":
+            self.players.sort(
+                key=lambda player: (player.elo_rating, player.calculate_match_points()), reverse=True
+            )
+        else:
+            sort_players_by_standings(self.players)
+
+    @staticmethod
+    def validate_elo_settings(scoring_mode, elo_reset_days):
+        if scoring_mode not in ("points", "elo"):
+            raise ValueError("Bitte ein gültiges Wertungssystem auswählen.")
+        if type(elo_reset_days) is not int or not 0 <= elo_reset_days <= 36500:
+            raise ValueError("Das Elo-Reset-Intervall muss 0 (deaktiviert) oder zwischen 1 und 36500 Tagen liegen.")
+
+    @classmethod
+    def elo_change(cls, rating: float, opponent_rating: float, score: float) -> float:
+        expected = 1 / (1 + 10 ** ((opponent_rating - rating) / 400))
+        return cls.ELO_K_FACTOR * (score - expected)
+
+    def apply_soft_reset(self, now: datetime | None = None) -> int:
+        if self.scoring_mode != "elo" or self.elo_reset_days == 0:
+            return 0
+        now = self._utc(now or datetime.now(timezone.utc))
+        if self.elo_last_reset_at is None:
+            self.elo_last_reset_at = now
+            return 0
+        interval = timedelta(days=self.elo_reset_days)
+        reset_count = 0
+        while now - self.elo_last_reset_at >= interval:
+            for player in self.players:
+                player.elo_rating = self.ELO_BASELINE + (player.elo_rating - self.ELO_BASELINE) * 0.5
+            self.elo_last_reset_at += interval
+            reset_count += 1
+        return reset_count
 
     @staticmethod
     def validate_cooldown_settings(cooldown_percentage, count_repeat_opponents, matches_before_cooldown=1):
@@ -559,17 +619,31 @@ class LeagueTournament(SwissTournament):
             super().serialize(), cooldown_percentage=self.cooldown_percentage,
             count_repeat_opponents=self.count_repeat_opponents,
             matches_before_cooldown=self.matches_before_cooldown,
+            scoring_mode=self.scoring_mode, elo_reset_days=self.elo_reset_days,
+            elo_last_reset_at=self.elo_last_reset_at.isoformat() if self.elo_last_reset_at else None,
         )
 
     @classmethod
     def deserialize(cls, data):
-        tournament = super().deserialize(data)
-        tournament.cooldown_percentage = data.get("cooldown_percentage", 50)
-        tournament.count_repeat_opponents = data.get("count_repeat_opponents", True)
-        tournament.matches_before_cooldown = data.get("matches_before_cooldown", 1)
-        cls.validate_cooldown_settings(
-            tournament.cooldown_percentage, tournament.count_repeat_opponents, tournament.matches_before_cooldown
+        players = [Player.deserialize(player) for player in data["players"]]
+        tournament = cls(
+            players,
+            cooldown_percentage=data.get("cooldown_percentage", 50),
+            count_repeat_opponents=data.get("count_repeat_opponents", True),
+            matches_before_cooldown=data.get("matches_before_cooldown", 1),
+            scoring_mode=data.get("scoring_mode", "points"),
+            elo_reset_days=data.get("elo_reset_days", 30),
+            elo_last_reset_at=datetime.fromisoformat(data["elo_last_reset_at"]) if data.get("elo_last_reset_at") else None,
         )
+        if data.get("rounds"):
+            player_map = {player.player_id: player for player in players}
+            tournament.rounds = [
+                Round.deserialize(round_data, player_map, allow_rematch=True)
+                for round_data in data["rounds"]
+            ]
+        winner_data = data.get("winner")
+        if isinstance(winner_data, dict):
+            tournament.winner = tournament.player_by_id(int(winner_data["player_id"]))
         return tournament
 
     def pair_players(self):
@@ -627,11 +701,19 @@ class LeagueTournament(SwissTournament):
                 f"Rematch-Cooldown: <@{player1_id}> braucht noch {remaining1}, "
                 f"<@{player2_id}> noch {remaining2} {counting_unit}."
             )
+        if self.scoring_mode == "elo":
+            self.apply_soft_reset()
         match_round = Round(len(self.rounds) + 1)
         match = Match(player1, player2, match_round.round_number, allow_rematch=True)
         match.set_result(player1_wins, player2_wins, draws)
         match_round.add_match(match)
         self.rounds.append(match_round)
+        if self.scoring_mode == "elo":
+            winner = match.get_winner()
+            score1 = 0.5 if winner is None else (1.0 if winner is player1 else 0.0)
+            rating1, rating2 = player1.elo_rating, player2.elo_rating
+            player1.elo_rating = rating1 + self.elo_change(rating1, rating2, score1)
+            player2.elo_rating = rating2 + self.elo_change(rating2, rating1, 1 - score1)
         return match
 
 

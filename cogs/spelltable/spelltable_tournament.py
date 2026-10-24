@@ -146,7 +146,7 @@ class ParticipationView(discord.ui.View):
                 return
             try:
                 self.tournament.validate_configuration()
-                if self.tournament.league_has_ended:
+                if self.tournament.end_time and self.tournament.league_has_ended:
                     raise ValueError("Die Endzeit der Liga liegt bereits in der Vergangenheit.")
                 participants = self.tournament.get_users_by_state(ParticipationState.PARTICIPATE)
                 if len(participants) < 2:
@@ -159,7 +159,11 @@ class ParticipationView(discord.ui.View):
                 cooldown_percentage=self.tournament.league_cooldown_percentage,
                 count_repeat_opponents=self.tournament.league_count_repeat_opponents,
                 matches_before_cooldown=self.tournament.league_matches_before_cooldown,
+                scoring_mode=self.tournament.league_scoring_mode,
+                elo_reset_days=self.tournament.league_elo_reset_days,
+                elo_last_reset_at=datetime.now(timezone.utc),
             )
+            self.tournament.league_elo_last_reset_at = self.tournament.swiss_tournament.elo_last_reset_at
             try:
                 await self.tournament.save_tournament_swiss()
             except Exception:
@@ -282,6 +286,18 @@ class LeagueRulesModal(discord.ui.DesignerModal):
             value=str(tournament.league_matches_before_cooldown), required=True, min_length=1, max_length=4,
         )
         self.add_item(discord.ui.Label("Matches vor Cooldown (mindestens 1)", self.matches_input))
+        self.scoring_select = discord.ui.StringSelect(
+            options=[
+                discord.SelectOption(label="Matchpunkte", value="points", default=tournament.league_scoring_mode == "points"),
+                discord.SelectOption(label="Elo-System", value="elo", default=tournament.league_scoring_mode == "elo"),
+            ],
+            min_values=1, max_values=1, required=True,
+        )
+        self.add_item(discord.ui.Label("Wertungssystem", self.scoring_select))
+        self.elo_reset_input = discord.ui.InputText(
+            value=str(tournament.league_elo_reset_days), required=True, min_length=1, max_length=5,
+        )
+        self.add_item(discord.ui.Label("Elo-Soft-Reset alle Tage (0 = aus)", self.elo_reset_input))
         self.counting_select = discord.ui.StringSelect(
             options=[
                 discord.SelectOption(label="Jedes Match zählt", value="matches", default=tournament.league_count_repeat_opponents),
@@ -298,16 +314,23 @@ class LeagueRulesModal(discord.ui.DesignerModal):
         try:
             percentage = int(self.percentage_input.value or "")
             matches_before_cooldown = int(self.matches_input.value or "")
+            elo_reset_days = int(self.elo_reset_input.value or "")
+            if not self.scoring_select.values or self.scoring_select.values[0] not in ("points", "elo"):
+                raise ValueError("Bitte ein Wertungssystem auswählen.")
+            scoring_mode = self.scoring_select.values[0]
             if not self.counting_select.values or self.counting_select.values[0] not in ("matches", "distinct"):
                 raise ValueError("Bitte eine Zählweise auswählen.")
             count_repeats = self.counting_select.values[0] == "matches"
             swiss_mtg.LeagueTournament.validate_cooldown_settings(percentage, count_repeats, matches_before_cooldown)
+            swiss_mtg.LeagueTournament.validate_elo_settings(scoring_mode, elo_reset_days)
         except ValueError as error:
             await interaction.response.send_message(f"Ungültige Rematch-Regeln: {error}", ephemeral=True)
             return
         self.tournament.league_cooldown_percentage = percentage
         self.tournament.league_count_repeat_opponents = count_repeats
         self.tournament.league_matches_before_cooldown = matches_before_cooldown
+        self.tournament.league_scoring_mode = scoring_mode
+        self.tournament.league_elo_reset_days = elo_reset_days
         self.view._refresh_mandatory_field_labels()
         await interaction.response.edit_message(embed=await self.tournament.to_embed(), view=self.view)
 
@@ -332,7 +355,7 @@ class EditTournamentView(discord.ui.View):
         status = "✅" if self.tournament.time else "⚠️"
         self.time_callback.label = f"Startzeit/-datum* {status}"
         self.end_time_callback.disabled = not self.tournament.is_league
-        self.end_time_callback.label = f"Endzeit/-datum* {'OK' if self.tournament.end_time else 'Pflicht'}"
+        self.end_time_callback.label = f"Endzeit/-datum {'gesetzt' if self.tournament.end_time else '(optional)'}"
         self.round_count_callback.disabled = self.tournament.is_league
         self.days_per_match_callback.disabled = self.tournament.is_league
         self.league_rules_callback.disabled = not self.tournament.is_league or bool(self.tournament.swiss_tournament)
@@ -393,7 +416,7 @@ class EditTournamentView(discord.ui.View):
         input = discord.ui.InputText(
             label="Endzeit/-datum der Liga",
             placeholder="z.B. am 31.12.2026 um 23:59 Uhr",
-            required=True,
+            required=False,
             value=str(self.tournament.end_time) if self.tournament.end_time else "",
         )
         await interaction.response.send_modal(EnterTextModal(
@@ -460,7 +483,7 @@ class EditTournamentView(discord.ui.View):
     async def submit_button(self, button: discord.ui.Button, interaction: discord.Interaction):
         try:
             self.tournament.validate_configuration()
-            if self.tournament.is_league and self.tournament.league_has_ended:
+            if self.tournament.is_league and self.tournament.end_time and self.tournament.league_has_ended:
                 raise ValueError("Die Endzeit der Liga liegt bereits in der Vergangenheit.")
         except ValueError as error:
             await interaction.response.send_message(str(error), ephemeral=True)
@@ -1161,8 +1184,11 @@ class SpelltableTournamentManager(Cog):
             ):
                 continue
             try:
+                if tournament.swiss_tournament.winner:
+                    continue
+                await common_views.expire_league_readiness(tournament)
+                await common_views.apply_elo_soft_reset(tournament)
                 if not tournament.league_has_ended:
-                    await common_views.expire_league_readiness(tournament)
                     continue
                 if tournament._league_end_announced:
                     continue

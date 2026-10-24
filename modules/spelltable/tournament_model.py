@@ -103,6 +103,7 @@ def _build_swiss_json(db, swiss_t_row: SwissTournamentRecord) -> dict:
         player_dict: dict = {"player_id": int(p_row.player_id), "deck": deck_dict}
         player_dict["ready_to_play"] = bool(p_row.ready_to_play)
         player_dict["ready_until"] = p_row.ready_until.replace(tzinfo=dt_timezone.utc).isoformat() if p_row.ready_until else None
+        player_dict["elo_rating"] = p_row.elo_rating
         if p_row.dropped:
             player_dict["dropped"] = True
         players.append(player_dict)
@@ -170,6 +171,12 @@ def _build_swiss_json(db, swiss_t_row: SwissTournamentRecord) -> dict:
         "cooldown_percentage": swiss_t_row.tournament.league_cooldown_percentage,
         "count_repeat_opponents": bool(swiss_t_row.tournament.league_count_repeat_opponents),
         "matches_before_cooldown": swiss_t_row.tournament.league_matches_before_cooldown,
+        "scoring_mode": swiss_t_row.tournament.league_scoring_mode or "points",
+        "elo_reset_days": swiss_t_row.tournament.league_elo_reset_days if swiss_t_row.tournament.league_elo_reset_days is not None else 30,
+        "elo_last_reset_at": (
+            swiss_t_row.tournament.league_elo_last_reset_at.replace(tzinfo=dt_timezone.utc).isoformat()
+            if swiss_t_row.tournament.league_elo_last_reset_at else None
+        ),
     }
 
 
@@ -213,6 +220,12 @@ async def load_tournaments(bot) -> dict[str, "SpelltableTournament"]:
                 tournament.league_cooldown_percentage = t_row.league_cooldown_percentage
                 tournament.league_count_repeat_opponents = bool(t_row.league_count_repeat_opponents)
                 tournament.league_matches_before_cooldown = t_row.league_matches_before_cooldown
+                tournament.league_scoring_mode = t_row.league_scoring_mode or "points"
+                tournament.league_elo_reset_days = t_row.league_elo_reset_days if t_row.league_elo_reset_days is not None else 30
+                tournament.league_elo_last_reset_at = (
+                    t_row.league_elo_last_reset_at.replace(tzinfo=dt_timezone.utc)
+                    if t_row.league_elo_last_reset_at else None
+                )
                 tournament.message_id = int(t_row.message_id)
                 tournament.channel_id = int(t_row.channel_id)
                 tournament.max_participants = t_row.max_participants
@@ -637,6 +650,9 @@ class SpelltableTournament(Serializable):
         self.league_cooldown_percentage = 50
         self.league_count_repeat_opponents = True
         self.league_matches_before_cooldown = 1
+        self.league_scoring_mode = "points"
+        self.league_elo_reset_days = 30
+        self.league_elo_last_reset_at: datetime | None = None
         self.organizer_id = organizer_id
         self.users:dict[int,ParticipationState] = {} 
         self.message_id:int = None
@@ -664,6 +680,7 @@ class SpelltableTournament(Serializable):
         self.league_lock = asyncio.Lock()
         self._league_end_announced = False
         self._readiness_refresh_pending = False
+        self._elo_refresh_pending = False
 
     @property
     def is_league(self):
@@ -683,8 +700,9 @@ class SpelltableTournament(Serializable):
                 self.league_cooldown_percentage, self.league_count_repeat_opponents, self.league_matches_before_cooldown
             )
             end_time = _normalize_tournament_datetime(self.end_time)
-            if end_time is None or end_time <= start_time:
-                raise ValueError("Die Liga braucht eine feste Endzeit nach der Startzeit.")
+            if end_time is not None and end_time <= start_time:
+                raise ValueError("Die Endzeit der Liga muss nach der Startzeit liegen.")
+            swiss_mtg.LeagueTournament.validate_elo_settings(self.league_scoring_mode, self.league_elo_reset_days)
 
     def report_league_match(self, player1_id, player2_id, player1_wins, player2_wins, draws=0):
         self.validate_configuration()
@@ -806,6 +824,10 @@ class SpelltableTournament(Serializable):
         tournament.league_cooldown_percentage = data.get("league_cooldown_percentage", 50)
         tournament.league_count_repeat_opponents = data.get("league_count_repeat_opponents", True)
         tournament.league_matches_before_cooldown = data.get("league_matches_before_cooldown", 1)
+        tournament.league_scoring_mode = data.get("league_scoring_mode", "points")
+        tournament.league_elo_reset_days = data.get("league_elo_reset_days", 30)
+        if data.get("league_elo_last_reset_at"):
+            tournament.league_elo_last_reset_at = datetime.fromisoformat(data["league_elo_last_reset_at"])
         if data.get("end_time"):
             tournament.end_time = _normalize_tournament_datetime(datetime.fromisoformat(data["end_time"]))
         if "time" in data and data["time"]:
@@ -829,6 +851,9 @@ class SpelltableTournament(Serializable):
                     swiss_tournament_data, cooldown_percentage=tournament.league_cooldown_percentage,
                     count_repeat_opponents=tournament.league_count_repeat_opponents,
                     matches_before_cooldown=tournament.league_matches_before_cooldown,
+                    scoring_mode=tournament.league_scoring_mode,
+                    elo_reset_days=tournament.league_elo_reset_days,
+                    elo_last_reset_at=tournament.league_elo_last_reset_at,
                 )
             competition_type = swiss_mtg.LeagueTournament if tournament.is_league else swiss_mtg.SwissTournament
             tournament.swiss_tournament = competition_type.deserialize(swiss_tournament_data)
@@ -850,6 +875,9 @@ class SpelltableTournament(Serializable):
             "league_cooldown_percentage": self.league_cooldown_percentage,
             "league_count_repeat_opponents": self.league_count_repeat_opponents,
             "league_matches_before_cooldown": self.league_matches_before_cooldown,
+            "league_scoring_mode": self.league_scoring_mode,
+            "league_elo_reset_days": self.league_elo_reset_days,
+            "league_elo_last_reset_at": self.league_elo_last_reset_at.isoformat() if self.league_elo_last_reset_at else None,
             "users": self.users,
             "waitlist": self.waitlist,
             "guild_id": message.guild.id,
@@ -1186,6 +1214,20 @@ class SpelltableTournament(Serializable):
                 value=f"{self.league_matches_before_cooldown} Matches pro Paar vor dem Cooldown\n{self.league_cooldown_percentage}% der anderen aktiven Spieler (aufgerundet)\n{counting}",
                 inline=False,
             )
+            if self.league_scoring_mode == "elo":
+                elo_description = (
+                    "Elo: Startwert 1000, K-Faktor 32. Erwartung = 1 / (1 + 10^((Gegner-Elo − eigene Elo) / 400)); "
+                    "Änderung = 32 × (Ergebnis − Erwartung). Sieg = 1, Unentschieden = 0,5, Niederlage = 0."
+                )
+                description_parts = [part for part in (self.description, elo_description) if part]
+                embed.description = "\n\n".join(description_parts)[:4096]
+                reset_text = (
+                    f"Alle {self.league_elo_reset_days} Tage: halber Abstand zurück zu 1000"
+                    if self.league_elo_reset_days else "Kein Soft-Reset"
+                )
+                embed.add_field(
+                    name="Elo-Soft-Reset", value=reset_text, inline=False,
+                )
         else:
             round_count, text = self.calc_round_count_and_text()
             embed.add_field(name="Anzahl Runden", value=text, inline=True)
@@ -1322,6 +1364,12 @@ class SpelltableTournament(Serializable):
                 t_row.league_cooldown_percentage = self.league_cooldown_percentage
                 t_row.league_count_repeat_opponents = self.league_count_repeat_opponents
                 t_row.league_matches_before_cooldown = self.league_matches_before_cooldown
+                t_row.league_scoring_mode = self.league_scoring_mode
+                t_row.league_elo_reset_days = self.league_elo_reset_days
+                t_row.league_elo_last_reset_at = (
+                    self.league_elo_last_reset_at.astimezone(dt_timezone.utc).replace(tzinfo=None)
+                    if self.league_elo_last_reset_at else None
+                )
                 t_row.guild_id = self.guild.id
                 t_row.channel_id = self.channel_id
                 t_row.message_id = self.message_id
@@ -1418,6 +1466,14 @@ class SpelltableTournament(Serializable):
                     db.add(swiss_t_row)
 
                 winner = self.swiss_tournament.winner
+                if self.is_league and isinstance(self.swiss_tournament, swiss_mtg.LeagueTournament):
+                    self.league_elo_last_reset_at = self.swiss_tournament.elo_last_reset_at
+                    t_row.league_scoring_mode = self.swiss_tournament.scoring_mode
+                    t_row.league_elo_reset_days = self.swiss_tournament.elo_reset_days
+                    t_row.league_elo_last_reset_at = (
+                        self.league_elo_last_reset_at.astimezone(dt_timezone.utc).replace(tzinfo=None)
+                        if self.league_elo_last_reset_at else None
+                    )
                 swiss_t_row.rounds_count = self.swiss_tournament.rounds_count
                 swiss_t_row.winner_player_id = winner.player_id if winner else None
                 db.flush()
@@ -1459,6 +1515,7 @@ class SpelltableTournament(Serializable):
                         dropped=player.dropped,
                         ready_to_play=player.ready_to_play,
                         ready_until=player.ready_until.astimezone(dt_timezone.utc).replace(tzinfo=None) if player.ready_until else None,
+                        elo_rating=player.elo_rating,
                         deck_link=deck.link if deck else None,
                         deck_archetype=deck.archetype if deck else None,
                     ))
@@ -1540,12 +1597,24 @@ class SpelltableTournament(Serializable):
         if round is None:
             round = self.swiss_tournament.current_round()
         players = self.swiss_tournament.players
-        swiss_mtg.sort_players_by_standings(players)
+        elo_standings = isinstance(self.swiss_tournament, swiss_mtg.LeagueTournament) and self.swiss_tournament.scoring_mode == "elo"
+        if elo_standings:
+            self.swiss_tournament.sort_players_by_standings()
+        else:
+            swiss_mtg.sort_players_by_standings(players)
 
         rows = []
         for rank, player in enumerate(players):
             member = await self.get_member(player.player_id)
             player_display_name = member.display_name if member else f"User({player.player_id})"
+            if elo_standings:
+                rows.append([
+                    rank+1,
+                    (player_display_name, player.dropped),
+                    f"{player.elo_rating:.0f}",
+                    player.get_match_results(),
+                ])
+                continue
             rows.append([
                 rank+1,
                 (player_display_name, player.dropped),
@@ -1557,7 +1626,7 @@ class SpelltableTournament(Serializable):
             ])
 
         data = {
-            "headers": ["Rang", "Name", "Punkte", "Matches", "OMW", "GW", "OGW"],
+            "headers": ["Rang", "Name", "Elo", "Bilanz"] if elo_standings else ["Rang", "Name", "Punkte", "Matches", "OMW", "GW", "OGW"],
             "rows": rows
         }
         if include_metagame:

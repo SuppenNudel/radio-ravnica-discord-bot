@@ -45,6 +45,86 @@ class LeagueScoringTests(unittest.TestCase):
         restored.ready_until = datetime.now(timezone.utc) - timedelta(seconds=1)
         self.assertFalse(restored.ready_to_play)
 
+    def test_elo_change_uses_expected_score_and_k_factor(self):
+        calculate = swiss_mtg.LeagueTournament.elo_change
+        self.assertEqual(calculate(1000, 1000, 1), 16)
+        self.assertEqual(calculate(1000, 1000, 0), -16)
+        self.assertEqual(calculate(1000, 1000, 0.5), 0)
+        self.assertGreater(calculate(1000, 1400, 1), 16)
+        self.assertLess(calculate(1000, 600, 1), 16)
+
+    def test_elo_mode_updates_both_ratings_simultaneously(self):
+        league = swiss_mtg.LeagueTournament(
+            [swiss_mtg.Player(1), swiss_mtg.Player(2)], scoring_mode="elo"
+        )
+        league.report_match(1, 2, 2, 0)
+        self.assertEqual(league.player_by_id(1).elo_rating, 1016)
+        self.assertEqual(league.player_by_id(2).elo_rating, 984)
+        league.report_match(2, 1, 1, 1)
+        self.assertLess(league.player_by_id(1).elo_rating, 1016)
+        self.assertGreater(league.player_by_id(2).elo_rating, 984)
+        self.assertAlmostEqual(league.player_by_id(1).elo_rating + league.player_by_id(2).elo_rating, 2000)
+
+    def test_elo_soft_reset_halves_distance_to_baseline_per_interval(self):
+        start = datetime.now(timezone.utc) - timedelta(days=1)
+        league = swiss_mtg.LeagueTournament(
+            [swiss_mtg.Player(1), swiss_mtg.Player(2)], scoring_mode="elo", elo_reset_days=30,
+            elo_last_reset_at=start,
+        )
+        league.player_by_id(1).elo_rating = 1200
+        league.player_by_id(2).elo_rating = 800
+        reset_count = league.apply_soft_reset(start + timedelta(days=60))
+        self.assertEqual(reset_count, 2)
+        self.assertEqual(league.player_by_id(1).elo_rating, 1050)
+        self.assertEqual(league.player_by_id(2).elo_rating, 950)
+        self.assertEqual(league.elo_last_reset_at, start + timedelta(days=60))
+
+    def test_elo_soft_reset_can_be_disabled(self):
+        start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        league = swiss_mtg.LeagueTournament(
+            [swiss_mtg.Player(1)], scoring_mode="elo", elo_reset_days=0, elo_last_reset_at=start,
+        )
+        league.players[0].elo_rating = 1200
+        self.assertEqual(league.apply_soft_reset(start + timedelta(days=365)), 0)
+        self.assertEqual(league.players[0].elo_rating, 1200)
+
+    def test_rejected_elo_rematch_does_not_apply_a_due_soft_reset(self):
+        reset_at = datetime.now(timezone.utc) - timedelta(days=30)
+        league = swiss_mtg.LeagueTournament(
+            [swiss_mtg.Player(player_id) for player_id in range(1, 5)],
+            scoring_mode="elo", elo_reset_days=30, elo_last_reset_at=reset_at,
+        )
+        league.report_match(1, 2, 2, 0)
+        league.player_by_id(1).elo_rating = 1200
+        league.report_match(1, 3, 2, 0)
+        league.player_by_id(1).elo_rating = 1200
+        league.player_by_id(2).elo_rating = 800
+        reset_cursor = league.elo_last_reset_at
+        with self.assertRaises(ValueError):
+            league.report_match(1, 2, 2, 0)
+        self.assertEqual(league.player_by_id(1).elo_rating, 1200)
+        self.assertEqual(league.player_by_id(2).elo_rating, 800)
+        self.assertEqual(league.elo_last_reset_at, reset_cursor)
+
+    def test_points_mode_does_not_change_elo_rating(self):
+        league = swiss_mtg.LeagueTournament([swiss_mtg.Player(1), swiss_mtg.Player(2)])
+        league.report_match(1, 2, 2, 0)
+        self.assertEqual([player.elo_rating for player in league.players], [1000, 1000])
+
+    def test_elo_ratings_and_reset_time_survive_serialization(self):
+        start = datetime.now(timezone.utc) - timedelta(days=1)
+        league = swiss_mtg.LeagueTournament(
+            [swiss_mtg.Player(1), swiss_mtg.Player(2)], scoring_mode="elo", elo_reset_days=14,
+            elo_last_reset_at=start,
+        )
+        league.report_match(1, 2, 2, 0)
+        data = json.loads(json.dumps(league, default=lambda value: value.serialize()))
+        restored = swiss_mtg.LeagueTournament.deserialize(data)
+        self.assertEqual(restored.scoring_mode, "elo")
+        self.assertEqual(restored.elo_reset_days, 14)
+        self.assertEqual(restored.elo_last_reset_at, start)
+        self.assertEqual([player.elo_rating for player in restored.players], [1016, 984])
+
     def test_legacy_readiness_without_deadline_still_loads(self):
         player = swiss_mtg.Player.deserialize({"player_id": 1, "ready_to_play": True})
         self.assertTrue(player.ready_to_play)
@@ -242,6 +322,51 @@ class LeagueTournamentTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(restored.swiss_tournament.player_by_id(2).ready_to_play)
         self.assertEqual(restored.swiss_tournament.players[0].ready_until, ready_until)
 
+    async def test_elo_league_settings_ratings_and_reset_cursor_survive_database_roundtrip(self):
+        reset_at = datetime.now(timezone.utc) - timedelta(days=2)
+        self.tournament.league_scoring_mode = "elo"
+        self.tournament.league_elo_reset_days = 14
+        self.tournament.league_elo_last_reset_at = reset_at
+        self.tournament.swiss_tournament = swiss_mtg.LeagueTournament(
+            [swiss_mtg.Player(1), swiss_mtg.Player(2)],
+            scoring_mode="elo", elo_reset_days=14, elo_last_reset_at=reset_at,
+        )
+        self.tournament.report_league_match(1, 2, 2, 0)
+        await self.tournament.save_tournament()
+        loaded = await model.load_tournaments(self.bot)
+        restored = loaded["123/789/456"]
+        competition = restored.swiss_tournament
+        self.assertIsInstance(competition, swiss_mtg.LeagueTournament)
+        self.assertEqual(restored.league_scoring_mode, "elo")
+        self.assertEqual(restored.league_elo_reset_days, 14)
+        self.assertEqual(competition.scoring_mode, "elo")
+        self.assertEqual(competition.elo_reset_days, 14)
+        self.assertEqual(competition.elo_last_reset_at, reset_at)
+        self.assertEqual([player.elo_rating for player in competition.players], [1016, 984])
+
+    async def test_elo_configuration_and_player_ratings_survive_database_roundtrip(self):
+        reset_at = datetime.now(timezone.utc) - timedelta(days=2)
+        self.tournament.end_time = None
+        self.tournament.league_scoring_mode = "elo"
+        self.tournament.league_elo_reset_days = 14
+        self.tournament.league_elo_last_reset_at = reset_at
+        competition = swiss_mtg.LeagueTournament(
+            [swiss_mtg.Player(1), swiss_mtg.Player(2)],
+            scoring_mode="elo", elo_reset_days=14, elo_last_reset_at=reset_at,
+        )
+        competition.player_by_id(1).elo_rating = 1240.5
+        competition.player_by_id(2).elo_rating = 759.5
+        self.tournament.swiss_tournament = competition
+        await self.tournament.save_tournament()
+        restored = (await model.load_tournaments(self.bot))["123/789/456"]
+        restored_competition = restored.swiss_tournament
+        self.assertIsInstance(restored_competition, swiss_mtg.LeagueTournament)
+        self.assertIsNone(restored.end_time)
+        self.assertEqual(restored_competition.scoring_mode, "elo")
+        self.assertEqual(restored_competition.elo_reset_days, 14)
+        self.assertEqual(restored_competition.elo_last_reset_at, reset_at)
+        self.assertEqual([player.elo_rating for player in restored_competition.players], [1240.5, 759.5])
+
     async def test_expired_creation_logs_traceback_and_acknowledgement_timing(self):
         error = discord.NotFound(
             SimpleNamespace(status=404, reason="Not Found"), {"code": 10062, "message": "Unknown interaction"}
@@ -277,8 +402,8 @@ class LeagueTournamentTests(unittest.IsolatedAsyncioTestCase):
             db._migrate_add_player_readiness_column()
             db._migrate_add_player_readiness_column()
         with self.engine.connect() as connection:
-            ready = connection.execute(text("SELECT ready_to_play FROM swiss_players")).scalar_one()
-        self.assertEqual(ready, 0)
+            row = connection.execute(text("SELECT ready_to_play, elo_rating FROM swiss_players")).one()
+        self.assertEqual(tuple(row), (0, 1000.0))
 
     async def test_custom_league_rules_survive_database_roundtrip(self):
         self.tournament.league_cooldown_percentage = 75
@@ -428,8 +553,10 @@ class LeagueTournamentTests(unittest.IsolatedAsyncioTestCase):
             self.tournament.report_league_match(1, 2, 2, 0)
         self.assertEqual(self.tournament.swiss_tournament.rounds, [])
 
-    async def test_end_time_is_mandatory_and_after_start(self):
-        for end_time in (None, self.tournament.time, self.tournament.time - timedelta(seconds=1)):
+    async def test_end_time_is_optional_but_must_follow_start_when_set(self):
+        self.tournament.end_time = None
+        self.tournament.validate_configuration()
+        for end_time in (self.tournament.time, self.tournament.time - timedelta(seconds=1)):
             self.tournament.end_time = end_time
             with self.assertRaises(ValueError):
                 self.tournament.validate_configuration()
@@ -449,20 +576,32 @@ class LeagueTournamentTests(unittest.IsolatedAsyncioTestCase):
             db._migrate_add_league_columns()
         with self.engine.connect() as connection:
             row = connection.execute(text("SELECT tournament_style, end_time FROM tournaments")).one()
-            rules = connection.execute(text("SELECT league_cooldown_percentage, league_count_repeat_opponents, league_matches_before_cooldown FROM tournaments")).one()
+            rules = connection.execute(text("SELECT league_cooldown_percentage, league_count_repeat_opponents, league_matches_before_cooldown, league_scoring_mode, league_elo_reset_days, league_elo_last_reset_at FROM tournaments")).one()
         self.assertEqual(tuple(row), ("swiss", None))
-        self.assertEqual(tuple(rules), (50, 1, 1))
+        self.assertEqual(tuple(rules), (50, 1, 1, "points", 30, None))
 
-    async def test_creation_requires_league_end_time(self):
+    async def test_league_end_time_is_optional_but_start_is_required(self):
         self.tournament.end_time = None
         view = await cog.EditTournamentView.create(self.tournament, Mock(spec=discord.TextChannel))
-        self.assertTrue(view.submit_button.disabled)
+        self.assertFalse(view.submit_button.disabled)
         self.assertFalse(view.end_time_callback.disabled)
+        self.assertIn("optional", view.end_time_callback.label)
         self.assertTrue(view.round_count_callback.disabled)
         self.assertTrue(view.days_per_match_callback.disabled)
-        self.tournament.end_time = self.tournament.time + timedelta(days=10)
+        self.tournament.time = None
         view._refresh_mandatory_field_labels()
-        self.assertFalse(view.submit_button.disabled)
+        self.assertTrue(view.submit_button.disabled)
+
+    async def test_end_time_modal_is_optional_and_title_remains_required(self):
+        view = await cog.EditTournamentView.create(self.tournament, Mock(spec=discord.TextChannel))
+        interaction = Mock(spec=discord.Interaction)
+        interaction.response = SimpleNamespace(send_modal=AsyncMock())
+        await view.end_time_callback.callback(interaction)
+        end_modal = interaction.response.send_modal.await_args.args[0]
+        self.assertFalse(end_modal.input.required)
+        await view.title_callback.callback(interaction)
+        title_modal = interaction.response.send_modal.await_args.args[0]
+        self.assertTrue(title_modal.input.required)
 
     def make_start_interaction(self):
         member = object.__new__(discord.Member)
@@ -484,13 +623,19 @@ class LeagueTournamentTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(modal, cog.LeagueRulesModal)
         self.assertEqual(modal.percentage_input.value, "50")
         self.assertEqual([option.value for option in modal.counting_select.options if option.default], ["matches"])
+        self.assertEqual([option.value for option in modal.scoring_select.options if option.default], ["points"])
+        self.assertEqual(modal.elo_reset_input.value, "30")
         modal.percentage_input = Mock(spec=discord.ui.InputText, value="75")
         self.assertEqual(modal.matches_input.value, "1")
         modal.matches_input = Mock(spec=discord.ui.InputText, value="2")
+        modal.scoring_select = Mock(spec=discord.ui.StringSelect, values=["elo"])
+        modal.elo_reset_input = Mock(spec=discord.ui.InputText, value="14")
         modal.counting_select = Mock(spec=discord.ui.StringSelect, values=["distinct"])
         await modal.callback(interaction)
         self.assertEqual(self.tournament.league_cooldown_percentage, 75)
         self.assertEqual(self.tournament.league_matches_before_cooldown, 2)
+        self.assertEqual(self.tournament.league_scoring_mode, "elo")
+        self.assertEqual(self.tournament.league_elo_reset_days, 14)
         self.assertFalse(self.tournament.league_count_repeat_opponents)
         interaction.response.edit_message.assert_awaited_once_with(embed=self.tournament.to_embed.return_value, view=view)
 
@@ -528,6 +673,135 @@ class LeagueTournamentTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("75%", rules)
         self.assertIn("unterschiedliche Gegner", rules)
 
+    async def test_elo_league_description_explains_formula_and_soft_reset(self):
+        self.tournament._organizer = SimpleNamespace(display_name="Organizer", avatar=None)
+        self.tournament.league_scoring_mode = "elo"
+        self.tournament.league_elo_reset_days = 14
+        embed = await self.tournament.to_embed()
+        explanation = embed.description
+        self.assertIn("Startwert 1000", explanation)
+        self.assertIn("K-Faktor 32", explanation)
+        self.assertIn("Sieg = 1", explanation)
+        self.assertIn("Unentschieden = 0,5", explanation)
+        reset = next(field.value for field in embed.fields if field.name == "Elo-Soft-Reset")
+        self.assertIn("Alle 14 Tage", reset)
+
+    async def test_elo_standings_sort_and_render_ratings(self):
+        competition = swiss_mtg.LeagueTournament(
+            [swiss_mtg.Player(player_id) for player_id in (1, 2, 3)], scoring_mode="elo"
+        )
+        competition.player_by_id(1).elo_rating = 900
+        competition.player_by_id(2).elo_rating = 1250
+        competition.player_by_id(3).elo_rating = 1100
+        self.tournament.swiss_tournament = competition
+        self.tournament.get_id = AsyncMock(return_value="123/789/456")
+        self.tournament.get_member = AsyncMock(side_effect=lambda player_id: SimpleNamespace(display_name=f"Player {player_id}"))
+        with patch.object(model.table_to_image, "generate_image") as generate:
+            await self.tournament.standings_to_image()
+        table = generate.call_args.args[0]
+        self.assertEqual(table["headers"], ["Rang", "Name", "Elo", "Bilanz"])
+        self.assertEqual([row[2] for row in table["rows"]], ["1250", "1100", "900"])
+
+    async def test_league_standings_image_has_no_deck_column(self):
+        self.tournament.get_id = AsyncMock(return_value="123/789/456")
+        with patch.object(model.table_to_image, "generate_image") as generate:
+            await self.tournament.standings_to_image(include_metagame=False)
+        self.assertNotIn("Deck", generate.call_args.args[0]["headers"])
+        self.assertEqual(len(generate.call_args.args[0]["headers"]), 7)
+
+    async def test_league_view_has_no_deck_submission_button(self):
+        view = common_views.LeagueView(self.tournament)
+        self.assertFalse(any(getattr(item, "custom_id", None) == "league:deck" for item in view.children))
+        self.assertFalse(any(getattr(item, "label", None) == "Deckliste einreichen" for item in view.children))
+
+    async def test_soft_reset_saves_ratings_and_refreshes_standings(self):
+        reset_at = datetime.now(timezone.utc) - timedelta(days=30)
+        competition = swiss_mtg.LeagueTournament(
+            [swiss_mtg.Player(1), swiss_mtg.Player(2)],
+            scoring_mode="elo", elo_reset_days=30, elo_last_reset_at=reset_at,
+        )
+        competition.player_by_id(1).elo_rating = 1200
+        competition.player_by_id(2).elo_rating = 800
+        self.tournament.swiss_tournament = competition
+        self.tournament.save_tournament_swiss = AsyncMock()
+        with patch.object(common_views, "update_league_message", AsyncMock()) as refresh:
+            changed = await common_views.apply_elo_soft_reset(self.tournament)
+            no_second_reset = await common_views.apply_elo_soft_reset(self.tournament)
+        self.assertTrue(changed)
+        self.assertFalse(no_second_reset)
+        self.assertEqual([player.elo_rating for player in competition.players], [1100, 900])
+        self.assertEqual(self.tournament.league_elo_last_reset_at, competition.elo_last_reset_at)
+        self.tournament.save_tournament_swiss.assert_awaited_once()
+        refresh.assert_awaited_once_with(self.tournament, refresh_standings=True)
+
+    async def test_background_task_applies_elo_reset_without_end_date(self):
+        reset_at = datetime.now(timezone.utc) - timedelta(days=30)
+        competition = swiss_mtg.LeagueTournament(
+            [swiss_mtg.Player(1), swiss_mtg.Player(2)], scoring_mode="elo",
+            elo_reset_days=30, elo_last_reset_at=reset_at,
+        )
+        competition.players[0].elo_rating = 1200
+        competition.players[1].elo_rating = 800
+        self.tournament.end_time = None
+        self.tournament.swiss_tournament = competition
+        self.tournament.save_tournament_swiss = AsyncMock()
+        manager = Mock(spec=cog.SpelltableTournamentManager, bot=self.bot, _tournaments_loaded=True)
+        with (
+            patch.object(cog, "active_tournaments", {"open-elo": self.tournament}),
+            patch.object(common_views, "update_league_message", AsyncMock()) as refresh,
+            patch.object(cog, "update_tournament_message", AsyncMock()) as overview,
+        ):
+            await cog.SpelltableTournamentManager.schedule_league_end.coro(manager)
+        self.assertEqual([player.elo_rating for player in competition.players], [1100, 900])
+        self.tournament.save_tournament_swiss.assert_awaited_once()
+        refresh.assert_awaited_once_with(self.tournament, refresh_standings=True)
+        overview.assert_not_awaited()
+
+    async def test_elo_rules_modal_accepts_soft_reset_disabled(self):
+        self.tournament.swiss_tournament = None
+        view = await cog.EditTournamentView.create(self.tournament, Mock(spec=discord.TextChannel))
+        modal = cog.LeagueRulesModal(self.tournament, view)
+        modal.scoring_select = Mock(spec=discord.ui.StringSelect, values=["elo"])
+        modal.elo_reset_input = Mock(spec=discord.ui.InputText, value="0")
+        modal.counting_select = Mock(spec=discord.ui.StringSelect, values=["matches"])
+        interaction = Mock(spec=discord.Interaction)
+        interaction.response = SimpleNamespace(send_message=AsyncMock(), edit_message=AsyncMock())
+        await modal.callback(interaction)
+        self.assertEqual(self.tournament.league_scoring_mode, "elo")
+        self.assertEqual(self.tournament.league_elo_reset_days, 0)
+        interaction.response.edit_message.assert_awaited_once()
+
+    async def test_elo_rules_modal_rejects_invalid_soft_reset_interval(self):
+        self.tournament.swiss_tournament = None
+        view = await cog.EditTournamentView.create(self.tournament, Mock(spec=discord.TextChannel))
+        for value in ("-1", "36501", "abc"):
+            with self.subTest(value=value):
+                modal = cog.LeagueRulesModal(self.tournament, view)
+                modal.scoring_select = Mock(spec=discord.ui.StringSelect, values=["elo"])
+                modal.elo_reset_input = Mock(spec=discord.ui.InputText, value=value)
+                modal.counting_select = Mock(spec=discord.ui.StringSelect, values=["matches"])
+                interaction = Mock(spec=discord.Interaction)
+                interaction.response = SimpleNamespace(send_message=AsyncMock(), edit_message=AsyncMock())
+                await modal.callback(interaction)
+                self.assertEqual(self.tournament.league_elo_reset_days, 30)
+                interaction.response.send_message.assert_awaited_once()
+                interaction.response.edit_message.assert_not_awaited()
+
+    async def test_failed_soft_reset_save_rolls_back_ratings_and_cursor(self):
+        reset_at = datetime.now(timezone.utc) - timedelta(days=30)
+        competition = swiss_mtg.LeagueTournament(
+            [swiss_mtg.Player(1)], scoring_mode="elo", elo_reset_days=30, elo_last_reset_at=reset_at,
+        )
+        competition.players[0].elo_rating = 1200
+        self.tournament.swiss_tournament = competition
+        self.tournament.league_elo_last_reset_at = reset_at
+        self.tournament.save_tournament_swiss = AsyncMock(side_effect=RuntimeError("database unavailable"))
+        with self.assertRaises(RuntimeError):
+            await common_views.apply_elo_soft_reset(self.tournament)
+        self.assertEqual(competition.players[0].elo_rating, 1200)
+        self.assertEqual(competition.elo_last_reset_at, reset_at)
+        self.assertEqual(self.tournament.league_elo_last_reset_at, reset_at)
+
     async def test_rules_button_is_disabled_for_swiss(self):
         self.tournament.tournament_style = model.TournamentStyle.SWISS
         self.tournament.swiss_tournament = None
@@ -538,6 +812,8 @@ class LeagueTournamentTests(unittest.IsolatedAsyncioTestCase):
         self.tournament.swiss_tournament = None
         self.tournament.league_cooldown_percentage = 100
         self.tournament.league_count_repeat_opponents = False
+        self.tournament.league_scoring_mode = "elo"
+        self.tournament.league_elo_reset_days = 14
         self.tournament.save_tournament_swiss = AsyncMock()
         interaction = self.make_start_interaction()
         with patch.object(common_views, "update_league_message", AsyncMock()):
@@ -547,6 +823,8 @@ class LeagueTournamentTests(unittest.IsolatedAsyncioTestCase):
         assert isinstance(competition, swiss_mtg.LeagueTournament)
         self.assertEqual(competition.cooldown_percentage, 100)
         self.assertFalse(competition.count_repeat_opponents)
+        self.assertEqual(competition.scoring_mode, "elo")
+        self.assertEqual(competition.elo_reset_days, 14)
 
     async def test_league_start_acknowledges_before_saving_and_rendering(self):
         self.tournament.swiss_tournament = None
@@ -589,14 +867,16 @@ class LeagueTournamentTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.tournament.swiss_tournament)
         interaction.edit_original_response.assert_awaited_once_with(content="Die Liga konnte nicht gestartet werden.")
 
-    async def test_league_start_validation_replaces_progress_message(self):
+    async def test_league_without_end_date_can_start(self):
         self.tournament.swiss_tournament = None
         self.tournament.end_time = None
+        self.tournament.save_tournament_swiss = AsyncMock()
         interaction = self.make_start_interaction()
         view = await cog.ParticipationView.create(self.tournament)
-        await view.start_button.callback(interaction)
-        interaction.edit_original_response.assert_awaited_once()
-        self.assertIn("Endzeit", interaction.edit_original_response.await_args.kwargs["content"])
+        with patch.object(common_views, "update_league_message", AsyncMock()):
+            await view.start_button.callback(interaction)
+        self.assertIsInstance(self.tournament.swiss_tournament, swiss_mtg.LeagueTournament)
+        interaction.edit_original_response.assert_awaited_once_with(content="Die Liga wurde gestartet.")
 
     async def test_creation_requires_style_selection(self):
         option = next(option for option in cog.SpelltableTournamentManager.turnier_erstellen.options if option.name == "turnierart")
@@ -774,6 +1054,23 @@ class LeagueTournamentTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(modal.submitted)
         self.assertEqual(self.tournament.swiss_tournament.rounds, [])
         self.assertTrue(all(not player.match_history for player in self.tournament.swiss_tournament.players))
+
+    async def test_failed_elo_result_save_rolls_back_ratings_and_match(self):
+        competition = swiss_mtg.LeagueTournament(
+            [swiss_mtg.Player(player_id) for player_id in (1, 2, 3)], scoring_mode="elo"
+        )
+        competition.player_by_id(1).elo_rating = 1200
+        competition.player_by_id(2).elo_rating = 800
+        self.tournament.swiss_tournament = competition
+        self.tournament.league_scoring_mode = "elo"
+        modal, interaction = self.make_report()
+        self.tournament.save_tournament_swiss.side_effect = RuntimeError("Database unavailable")
+        previous_ratings = [player.elo_rating for player in competition.players]
+        with patch.object(common_views.link_log, "exception"):
+            await modal.callback(interaction)
+        self.assertEqual([player.elo_rating for player in competition.players], previous_ratings)
+        self.assertEqual(competition.rounds, [])
+        self.assertTrue(all(not player.match_history for player in competition.players))
 
     async def test_expired_modal_cannot_submit(self):
         modal, interaction = self.make_report()

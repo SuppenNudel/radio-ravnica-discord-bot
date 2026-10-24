@@ -202,7 +202,10 @@ class HallOfFame:
                         else swiss_mtg.SwissTournament
                     )
                     swiss_tournament = competition_type.deserialize(swiss_json)
-                    swiss_mtg.sort_players_by_standings(swiss_tournament.players)
+                    if isinstance(swiss_tournament, swiss_mtg.LeagueTournament):
+                        swiss_tournament.sort_players_by_standings()
+                    else:
+                        swiss_mtg.sort_players_by_standings(swiss_tournament.players)
                 except Exception as exc:
                     log.warning(
                         f"Skipping hall of fame reconstruction for tournament_id={tournament_row.id}: {exc}"

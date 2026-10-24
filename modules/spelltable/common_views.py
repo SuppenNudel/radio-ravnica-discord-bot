@@ -237,7 +237,10 @@ async def update_league_message(tournament: SpelltableTournament, *, participant
     competition = tournament.swiss_tournament
     if tournament.league_has_ended and not tournament._league_end_announced:
         if competition.winner is None:
-            swiss_mtg.sort_players_by_standings(competition.players)
+            if isinstance(competition, swiss_mtg.LeagueTournament):
+                competition.sort_players_by_standings()
+            else:
+                swiss_mtg.sort_players_by_standings(competition.players)
             competition.winner = next(
                 (player for player in competition.players if not player.dropped and player.match_history), None
             )
@@ -259,7 +262,7 @@ async def update_league_message(tournament: SpelltableTournament, *, participant
         "allowed_mentions": discord.AllowedMentions.none(),
     }
     if refresh_standings:
-        image = await tournament.standings_to_image(include_metagame=True)
+        image = await tournament.standings_to_image(include_metagame=False)
         with closing(discord.File(image, filename="league_standings.png")) as standings_file:
             await message.edit(**edit_kwargs, attachments=[], file=standings_file)
     else:
@@ -292,6 +295,36 @@ async def expire_league_readiness(tournament: SpelltableTournament):
         if tournament._readiness_refresh_pending:
             await update_league_message(tournament, refresh_standings=False)
             tournament._readiness_refresh_pending = False
+
+
+async def apply_elo_soft_reset(tournament: SpelltableTournament) -> bool:
+    async with tournament.league_lock:
+        competition = tournament.swiss_tournament
+        if not isinstance(competition, swiss_mtg.LeagueTournament) or competition.scoring_mode != "elo":
+            return False
+        previous_ratings = [player.elo_rating for player in competition.players]
+        previous_reset_at = competition.elo_last_reset_at
+        if not competition.apply_soft_reset():
+            if not tournament._elo_refresh_pending:
+                return False
+        else:
+            tournament.league_elo_last_reset_at = competition.elo_last_reset_at
+            tournament._elo_refresh_pending = True
+            previous_suppression = tournament.suppress_overview_update
+            tournament.suppress_overview_update = True
+            try:
+                await tournament.save_tournament_swiss()
+            except Exception:
+                for player, rating in zip(competition.players, previous_ratings):
+                    player.elo_rating = rating
+                competition.elo_last_reset_at = previous_reset_at
+                tournament.league_elo_last_reset_at = previous_reset_at
+                raise
+            finally:
+                tournament.suppress_overview_update = previous_suppression
+        await update_league_message(tournament, refresh_standings=True)
+        tournament._elo_refresh_pending = False
+        return True
 
 
 def _league_opponent_options(tournament: SpelltableTournament, reporter_id: int):
@@ -357,6 +390,10 @@ class LeagueReportModal(discord.ui.DesignerModal):
                     raise ValueError("Bitte Gegner und Ergebnis auswählen.")
                 opponent_id = int(self.opponent_select.values[0])
                 scores = [int(select.values[0]) for select in self.score_selects]
+                competition = self.tournament.swiss_tournament
+                previous_ratings = [player.elo_rating for player in competition.players]
+                previous_reset_at = competition.elo_last_reset_at if isinstance(competition, swiss_mtg.LeagueTournament) else None
+                previous_tournament_reset_at = self.tournament.league_elo_last_reset_at
                 match = self.tournament.report_league_match(self.reporter_id, opponent_id, *scores)
                 previous_suppression = self.tournament.suppress_overview_update
                 self.tournament.suppress_overview_update = True
@@ -366,6 +403,11 @@ class LeagueReportModal(discord.ui.DesignerModal):
                     self.tournament.swiss_tournament.rounds.pop()
                     match.player1.match_history.remove(match)
                     match.player2.match_history.remove(match)
+                    if isinstance(competition, swiss_mtg.LeagueTournament):
+                        for player, rating in zip(competition.players, previous_ratings):
+                            player.elo_rating = rating
+                        competition.elo_last_reset_at = previous_reset_at
+                        self.tournament.league_elo_last_reset_at = previous_tournament_reset_at
                     raise
                 finally:
                     self.tournament.suppress_overview_update = previous_suppression
@@ -592,10 +634,6 @@ class LeagueView(discord.ui.View):
             )
             return
         await interaction.response.send_modal(LeagueReportModal(self.tournament, user.id, options))
-
-    @discord.ui.button(label="Deckliste einreichen", style=discord.ButtonStyle.primary, custom_id="league:deck")
-    async def submit_deck_button(self, button: discord.ui.Button, interaction: discord.Interaction):
-        await _open_submit_deck_modal(self.tournament, interaction)
 
     @discord.ui.button(label="Liga abbrechen", style=discord.ButtonStyle.danger, custom_id="league:cancel")
     async def cancel_button(self, button: discord.ui.Button, interaction: discord.Interaction):

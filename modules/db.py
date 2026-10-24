@@ -2,7 +2,7 @@
 SQLAlchemy database models for tournament persistence.
 """
 import sqlite3
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, Boolean, ForeignKey, Text, text, UniqueConstraint
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, Boolean, ForeignKey, Text, Float, text, UniqueConstraint
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime
@@ -51,6 +51,9 @@ class Tournament(Base):
     league_cooldown_percentage = Column(Integer, nullable=False, default=50, server_default="50")
     league_count_repeat_opponents = Column(Boolean, nullable=False, default=True, server_default="1")
     league_matches_before_cooldown = Column(Integer, nullable=False, default=1, server_default="1")
+    league_scoring_mode = Column(String, nullable=False, default="points", server_default="points")
+    league_elo_reset_days = Column(Integer, nullable=False, default=30, server_default="30")
+    league_elo_last_reset_at = Column(DateTime, nullable=True)
     
     # Status
     cancelled = Column(Boolean, default=False)
@@ -113,6 +116,7 @@ class SwissPlayer(Base):
     dropped = Column(Boolean, default=False)
     ready_to_play = Column(Boolean, nullable=False, default=False, server_default="0")
     ready_until = Column(DateTime, nullable=True)
+    elo_rating = Column(Float, nullable=False, default=1000.0, server_default="1000")
     deck_link = Column(Text, nullable=True)
     deck_archetype = Column(String, nullable=True)
 
@@ -421,6 +425,12 @@ def _migrate_add_league_columns():
             connection.execute(text("ALTER TABLE tournaments ADD COLUMN league_count_repeat_opponents BOOLEAN NOT NULL DEFAULT 1"))
         if "league_matches_before_cooldown" not in col_types:
             connection.execute(text("ALTER TABLE tournaments ADD COLUMN league_matches_before_cooldown INTEGER NOT NULL DEFAULT 1"))
+        if "league_scoring_mode" not in col_types:
+            connection.execute(text("ALTER TABLE tournaments ADD COLUMN league_scoring_mode VARCHAR NOT NULL DEFAULT 'points'"))
+        if "league_elo_reset_days" not in col_types:
+            connection.execute(text("ALTER TABLE tournaments ADD COLUMN league_elo_reset_days INTEGER NOT NULL DEFAULT 30"))
+        if "league_elo_last_reset_at" not in col_types:
+            connection.execute(text("ALTER TABLE tournaments ADD COLUMN league_elo_last_reset_at DATETIME"))
 
 
 def _migrate_add_player_readiness_column():
@@ -430,6 +440,8 @@ def _migrate_add_player_readiness_column():
             connection.execute(text("ALTER TABLE swiss_players ADD COLUMN ready_to_play BOOLEAN NOT NULL DEFAULT 0"))
         if "ready_until" not in columns:
             connection.execute(text("ALTER TABLE swiss_players ADD COLUMN ready_until DATETIME"))
+        if "elo_rating" not in columns:
+            connection.execute(text("ALTER TABLE swiss_players ADD COLUMN elo_rating FLOAT NOT NULL DEFAULT 1000"))
 
 
 def _ensure_banned_users_table():
