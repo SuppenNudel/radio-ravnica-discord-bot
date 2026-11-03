@@ -53,6 +53,24 @@ class InstagramMonitor(commands.Cog):
             for post in posts
         ]
 
+    def _split_message(self, content: str, limit: int = 2000) -> list[str]:
+        chunks = []
+        while len(content) > limit:
+            split_at = content.rfind("\n", 0, limit + 1)
+            if split_at <= 0:
+                split_at = limit
+            else:
+                split_at += 1
+            chunks.append(content[:split_at])
+            content = content[split_at:]
+        if content:
+            chunks.append(content)
+        return chunks
+
+    async def _send_message(self, content: str):
+        for chunk in self._split_message(content):
+            await self.discord_channel.send(content=chunk)
+
     @commands.slash_command(
         name="share_instagram_post",
         description="Share an Instagram post by ID or URL",
@@ -100,7 +118,7 @@ class InstagramMonitor(commands.Cog):
         log.info(self.__class__.__name__ + " is ready")
 
     async def post_content(self, ig_channel:InstagramProfile, new_post):
-        caption = new_post.get("caption")
+        caption = new_post.get("caption") or ""
         log.info(f"Poste neuen Instagram Inhalt:\n{caption}")
         url = new_post.get("url")
         pinned = new_post.get("isPinned")
@@ -112,21 +130,21 @@ class InstagramMonitor(commands.Cog):
         quoted_caption = '\n'.join([f"{line}" for line in caption.split('\n')])
         header = f"📷 Neuer Instagram Post von **<@{ig_channel.dc_user_id}>**\n<{url}>\n{quoted_caption}"
         if type == "Video":
-            await self.discord_channel.send(content=f"{header}\n[Video]({video_url})")
+            await self._send_message(f"{header}\n[Video]({video_url})")
             # await self.discord_channel.send(content=f"{video_url}")
         elif type == "Sidecar":
             images = new_post.get("images")
             if len(images) == 1: 
-                await self.discord_channel.send(content=f"{header}\n{images[0]}")
+                await self._send_message(f"{header}\n{images[0]}")
             else:
-                await self.discord_channel.send(content=f"{header}")
+                await self._send_message(header)
                 for image in images:
-                    await self.discord_channel.send(content=f"{image}")
+                    await self._send_message(image)
         elif type == "Image":
             display_url = new_post.get("displayUrl")
             display_url = display_url.replace("https://instagram.fosu2-1.fna.fbcdn.net", "https://scontent-dus1-1.cdninstagram.com")
-            await self.discord_channel.send(content=f"{header}")#\n[Bild]({display_url})")
-            await self.discord_channel.send(content=f"{display_url}")
+            await self._send_message(header)
+            await self._send_message(display_url)
 
     async def get_latest_posts(self, channel:InstagramProfile):
         latest_posts = None
