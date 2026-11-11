@@ -105,12 +105,31 @@ class YoutubeCogTestCase(unittest.IsolatedAsyncioTestCase):
         channel = YoutubeChannel("GameRii", 99, "UC123")
 
         with patch.object(self.cog, "ensure_channel_id", AsyncMock(return_value=True)), \
-             patch.object(self.cog, "fetch_recent_videos_from_feed", side_effect=Exception("bad xml")):
-            contents, fetch_failed, not_modified = await self.cog.get_latest_content(channel, ContentType.VIDEOS)
+             patch.object(self.cog, "fetch_recent_videos_from_feed", side_effect=Exception("bad xml")), \
+             patch("discord_bot_shared.youtube_feed.log") as log:
+            contents, fetch_failed, not_modified = await self.cog.get_latest_content(
+                channel, ContentType.VIDEOS
+            )
 
         self.assertIsNone(contents)
         self.assertTrue(fetch_failed)
         self.assertFalse(not_modified)
+        log.warning.assert_called_once()
+        warning_args = log.warning.call_args
+        self.assertEqual(warning_args.args[:2], ("Error fetching YouTube RSS for @%s: %s", "GameRii"))
+        self.assertEqual(str(warning_args.args[2]), "bad xml")
+        self.assertEqual(warning_args.kwargs, {"extra": {"skip_discord": True}})
+
+    async def test_check_channels_marks_fetch_failure_warning_as_local_only(self):
+        with patch.object(self.cog, "get_latest_content", AsyncMock(return_value=(None, True, False))), \
+             patch("discord_bot_shared.youtube_feed.log") as log:
+            await Youtube.check_channels.coro(self.cog)
+
+        log.warning.assert_called_once_with(
+            "Skipping YouTube check for @%s in this cycle after a fetch failure.",
+            "GameRii",
+            extra={"skip_discord": True},
+        )
 
     async def test_get_latest_content_marks_not_modified(self):
         channel = YoutubeChannel("GameRii", 99, "UC123")

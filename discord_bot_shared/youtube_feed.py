@@ -347,7 +347,12 @@ class BaseYoutube(commands.Cog):
                     )
                     await asyncio.sleep(wait)
                 else:
-                    log.error(f"Error fetching YouTube RSS for @{channel.handle}: {error}")
+                    log.warning(
+                        "Error fetching YouTube RSS for @%s: %s",
+                        channel.handle,
+                        error,
+                        extra={"skip_discord": True},
+                    )
                     return None, True, False
 
     def update_latest_content(self, channel: YoutubeChannel, newest_content: dict):
@@ -360,7 +365,9 @@ class BaseYoutube(commands.Cog):
             recent_contents, fetch_failed, not_modified = await self.get_latest_content(yt_channel)
             if fetch_failed:
                 log.warning(
-                    f"Skipping YouTube check for @{yt_channel.handle} in this cycle after a fetch failure."
+                    "Skipping YouTube check for @%s in this cycle after a fetch failure.",
+                    yt_channel.handle,
+                    extra={"skip_discord": True},
                 )
                 continue
             if not_modified:

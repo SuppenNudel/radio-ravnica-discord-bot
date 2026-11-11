@@ -57,6 +57,16 @@ class DiscordLoggingTestCase(unittest.IsolatedAsyncioTestCase):
                         self.assertEqual(kwargs["content"], "```ansi\nmessage```")
                         self.assertFalse(mentions.users)
 
+    async def test_local_only_log_is_not_sent_to_discord(self):
+        record = logging.LogRecord("youtube_feed", logging.WARNING, "", 0, "message", (), None)
+        record.skip_discord = True
+
+        await discord_logging._send_discord_log(
+            "https://example.com/webhook", record, "message"
+        )
+
+        self.webhook.send.assert_not_awaited()
+
     async def test_notification_user_comes_from_environment(self):
         with patch.dict(os.environ, {"ERROR_NOTIFY_USER_ID": "123456789012345678"}):
             await discord_logging._send_webhook("https://example.com/webhook", notify=True)

@@ -47,6 +47,9 @@ async def _send_webhook(webhook_url, *, notify, **kwargs):
 
 
 async def _send_discord_log(webhook_url, record, msg):
+    if getattr(record, "skip_discord", False):
+        return
+
     name = "EzCord" if record.name == ezcord.logs.DEFAULT_LOG else record.name
     await _send_webhook(
         webhook_url,
